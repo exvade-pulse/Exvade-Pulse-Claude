@@ -12,6 +12,7 @@ export function testDb() {
 
 const TABLES = [
   schema.auditLog,
+  schema.decisions,
   schema.suggestions,
   schema.sources,
   schema.tasks,

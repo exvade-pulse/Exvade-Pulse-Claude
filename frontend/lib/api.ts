@@ -99,3 +99,74 @@ export async function editSuggestion(id: string, proposedDiff: Record<string, un
   const body = (await res.json()) as { suggestion: Suggestion };
   return body.suggestion;
 }
+
+export interface Decision {
+  id: string;
+  title: string;
+  whyItMatters: string | null;
+  relevantContext: string | null;
+  suggestedNextStep: string | null;
+  decider: string;
+  stakeholders: string[];
+  status: "open" | "decided";
+  dueDate: string | null;
+  resolution: string | null;
+  decidedAt: string | null;
+  relatedTaskId: string | null;
+  relatedTaskTitle: string | null;
+  sourceId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// No status query param: the backend defaults to "open" -- decisions still
+// awaiting a call, same default-to-active-work pattern as suggestions.
+export async function fetchOpenDecisions(): Promise<Decision[]> {
+  const res = await fetch(`${API_URL}/api/decisions`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load decisions (${res.status})`);
+  }
+  const body = (await res.json()) as { decisions: Decision[] };
+  return body.decisions;
+}
+
+export interface CreateDecisionInput {
+  title: string;
+  decider: string;
+  stakeholders?: string[];
+  dueDate?: string | null;
+  whyItMatters?: string | null;
+  relevantContext?: string | null;
+  suggestedNextStep?: string | null;
+  relatedTaskId?: string | null;
+}
+
+export async function createDecision(input: CreateDecisionInput): Promise<Decision> {
+  const res = await fetch(`${API_URL}/api/decisions`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to create decision");
+  }
+  const body = (await res.json()) as { decision: Decision };
+  return body.decision;
+}
+
+export async function resolveDecision(id: string, resolution: string): Promise<Decision> {
+  const res = await fetch(`${API_URL}/api/decisions/${id}/resolve`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resolution }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to resolve decision");
+  }
+  const body = (await res.json()) as { decision: Decision };
+  return body.decision;
+}

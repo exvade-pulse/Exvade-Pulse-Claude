@@ -262,6 +262,47 @@ body {
   text-align: center;
 }
 
+.decision-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.decision-section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+  margin: 0 0 2px;
+}
+
+.decision-section-body {
+  font-size: 13px;
+  color: #333;
+  margin: 0;
+}
+
+.decision-meta {
+  font-size: 12px;
+  color: #666;
+  margin: 4px 0;
+}
+
+.due-overdue {
+  color: #a33;
+  font-weight: 600;
+}
+
+.stakeholder-chip {
+  font-size: 11px;
+  background: #f0f0ee;
+  color: #444;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 .error-banner {
   background: #fdecea;
   color: #7a2020;

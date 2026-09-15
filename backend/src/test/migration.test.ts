@@ -22,6 +22,7 @@ describe("migrations", () => {
     await expect(db.select().from(schema.tasks)).resolves.toEqual([]);
     await expect(db.select().from(schema.sources)).resolves.toEqual([]);
     await expect(db.select().from(schema.suggestions)).resolves.toEqual([]);
+    await expect(db.select().from(schema.decisions)).resolves.toEqual([]);
     await expect(db.select().from(schema.auditLog)).resolves.toEqual([]);
   });
 });

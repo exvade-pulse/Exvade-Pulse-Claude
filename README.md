@@ -103,7 +103,7 @@ Built:
 - Repo scaffold (npm workspaces), Drizzle migrations, GitHub Actions CI
   (typecheck/test/build gate before merge).
 - The full data model: `organizations`, `users`, `objectives`, `initiatives`,
-  `projects`, `tasks`, `sources`, `suggestions`, `audit_log`.
+  `projects`, `tasks`, `sources`, `suggestions`, `decisions`, `audit_log`.
 - Google OAuth restricted to one Workspace domain, JWT session cookie.
 - A real, Claude-driven interpretation pipeline:
   - [backend/src/interpretation/claudeClient.ts](backend/src/interpretation/claudeClient.ts) —
@@ -168,6 +168,33 @@ Built:
   minimal shared nav ([frontend/app/components/Nav.tsx](frontend/app/components/Nav.tsx))
   linking the two. No drill-down into initiatives/projects/tasks yet — objective-level
   cards only.
+- A decisions registry, for things that need an explicit human call rather than a
+  status update: `decisions` ([backend/src/db/schema.ts](backend/src/db/schema.ts))
+  carries a `title`, three optional narrative fields (`whyItMatters`,
+  `relevantContext`, `suggestedNextStep`) instead of one description blob, a
+  `decider` (free text — not a `users` FK, since decision-makers here are often
+  external: board members, advisors, investors), a `stakeholders` text array, a
+  `status` (`open`/`decided`), `dueDate`, and `resolution`/`decidedAt` once decided.
+  It optionally links to the specific `task` it arose from (`relatedTaskId`) and the
+  `source` it was cited from (`sourceId`) — both nullable, both validated to belong
+  to the caller's organization before being accepted, the same defensive-validation
+  spirit as the interpretation pipeline's `targetId` check. Logic lives in
+  [backend/src/decisions/manage.ts](backend/src/decisions/manage.ts)
+  (`createDecision`/`resolveDecision`, mirroring `suggestions/apply.ts`'s
+  thin-route/logic-module split), exposed via
+  [backend/src/routes/decisions.ts](backend/src/routes/decisions.ts):
+  `GET /api/decisions` (defaults to `status=open`, joins in the related task's
+  title, soonest `dueDate` first with nulls last), `POST /api/decisions`, and
+  `PATCH /api/decisions/:id/resolve` (rejects an already-decided decision). Both
+  writes append a `decision.created`/`decision.resolved` `audit_log` row. The
+  frontend ([frontend/app/decisions/page.tsx](frontend/app/decisions/page.tsx),
+  linked from the nav as "Decisions") lists open decisions with their stakeholder
+  chips, due date (overdue ones called out in red), the three narrative sections,
+  and the related task's title if set; a plain form creates one (title/decider/
+  stakeholders/due date/narrative fields — `relatedTaskId`/`sourceId` are only
+  settable via the API for now, no picker UI yet), and "Mark decided" resolves one
+  inline, dropping it out of the open list. Not wired into the Claude interpretation
+  pipeline yet — this pass is a human filling out a form, not AI-generated decisions.
 
 Explicitly **not** built yet (next sessions):
 - Real Gmail/Circleback ingestion (the pipeline exists and is exercised via

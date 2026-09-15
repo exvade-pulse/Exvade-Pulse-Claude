@@ -60,6 +60,8 @@ export const suggestionStatusEnum = pgEnum("suggestion_status", [
   "rejected",
 ]);
 
+export const decisionStatusEnum = pgEnum("decision_status", ["open", "decided"]);
+
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
@@ -180,6 +182,43 @@ export const suggestions = pgTable("suggestions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Decisions that need a human call -- distinct from suggestions (which propose
+// changes to the Objective/Initiative/Project/Task tree) and from a task's status:
+// a decision has a decider (who is on the hook to decide, often someone outside
+// the app entirely -- a board member, investor, advisor) and stakeholders (who
+// needs to be consulted/informed), tracked until resolved.
+export const decisions = pgTable("decisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  // Three separate narrative fields instead of one description blob, so a
+  // decision card can render "why it matters / relevant context / suggested
+  // next step" as distinct, scannable sections. A human filling this in by
+  // hand need not fill in all three.
+  whyItMatters: text("why_it_matters"),
+  relevantContext: text("relevant_context"),
+  suggestedNextStep: text("suggested_next_step"),
+  // Free text, not a users FK: decision-makers here are often external (board
+  // members, advisors, investors) who aren't app users.
+  decider: text("decider").notNull(),
+  stakeholders: text("stakeholders").array().notNull().default([]),
+  status: decisionStatusEnum("status").notNull().default("open"),
+  dueDate: timestamp("due_date", { withTimezone: true }),
+  resolution: text("resolution"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  // The specific task this decision arose from, if any -- broader objective
+  // context is reachable by walking task -> project -> initiative -> objective
+  // if ever needed, not looked up here.
+  relatedTaskId: uuid("related_task_id").references(() => tasks.id),
+  // Optional citation back to the source (email/transcript) this decision came
+  // from, mirroring suggestions.sourceId.
+  sourceId: uuid("source_id").references(() => sources.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Append-only: rows are never updated or deleted by application code.
 export const auditLog = pgTable("audit_log", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -224,4 +263,10 @@ export const sourcesRelations = relations(sources, ({ many }) => ({
 export const suggestionsRelations = relations(suggestions, ({ one }) => ({
   source: one(sources, { fields: [suggestions.sourceId], references: [sources.id] }),
   reviewer: one(users, { fields: [suggestions.reviewedBy], references: [users.id] }),
+}));
+
+export const decisionsRelations = relations(decisions, ({ one }) => ({
+  organization: one(organizations, { fields: [decisions.organizationId], references: [organizations.id] }),
+  relatedTask: one(tasks, { fields: [decisions.relatedTaskId], references: [tasks.id] }),
+  source: one(sources, { fields: [decisions.sourceId], references: [sources.id] }),
 }));

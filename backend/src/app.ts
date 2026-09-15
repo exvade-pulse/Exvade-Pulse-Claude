@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { authRoutes } from "./routes/auth.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { suggestionRoutes } from "./routes/suggestions.js";
+import { decisionRoutes } from "./routes/decisions.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -20,6 +21,7 @@ export async function buildApp() {
   await app.register(authRoutes);
   await app.register(suggestionRoutes);
   await app.register(dashboardRoutes);
+  await app.register(decisionRoutes);
 
   return app;
 }
