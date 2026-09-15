@@ -62,6 +62,9 @@ export const suggestionStatusEnum = pgEnum("suggestion_status", [
 
 export const decisionStatusEnum = pgEnum("decision_status", ["open", "decided"]);
 
+export const userRoleEnum = pgEnum("user_role", ["member", "admin"]);
+export type UserRole = (typeof userRoleEnum.enumValues)[number];
+
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
@@ -79,6 +82,25 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// The allowlist: someone can be authorized before they've ever signed in (no
+// users row yet), and role lives solely here -- looked up fresh on each
+// authenticated request in requireAuth -- rather than duplicated onto `users`
+// where it could go stale after a revoke/role-change.
+export const authorizedUsers = pgTable(
+  "authorized_users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: userRoleEnum("role").notNull().default("member"),
+    invitedBy: uuid("invited_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("authorized_users_org_email_unique").on(table.organizationId, table.email)],
+);
 
 export const objectives = pgTable("objectives", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -236,6 +258,12 @@ export const auditLog = pgTable("audit_log", {
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   users: many(users),
   objectives: many(objectives),
+  authorizedUsers: many(authorizedUsers),
+}));
+
+export const authorizedUsersRelations = relations(authorizedUsers, ({ one }) => ({
+  organization: one(organizations, { fields: [authorizedUsers.organizationId], references: [organizations.id] }),
+  invitedByUser: one(users, { fields: [authorizedUsers.invitedBy], references: [users.id] }),
 }));
 
 export const objectivesRelations = relations(objectives, ({ many }) => ({

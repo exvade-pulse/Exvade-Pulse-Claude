@@ -86,7 +86,7 @@ export default function DashboardPage() {
 
   return (
     <main className="page">
-      <Nav />
+      <Nav user={user} />
       <div className="header">
         <h1>Strategy map</h1>
         <span className="muted">{user.email}</span>

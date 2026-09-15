@@ -1,10 +1,17 @@
 import { SignJWT, jwtVerify } from "jose";
 import { config } from "../config.js";
 
+export type UserRole = "member" | "admin";
+
 export interface SessionClaims {
   userId: string;
   organizationId: string;
   email: string;
+  // A hint for the UI (/auth/me, avoiding an extra round trip) -- NOT trusted
+  // for authorization decisions. requireAuth re-reads the current role from
+  // authorized_users on every request, since a 7-day-lived cookie must not
+  // keep working with a role that's since been revoked or demoted.
+  role: UserRole;
 }
 
 function secretKey() {
@@ -25,9 +32,15 @@ export async function verifySession(token: string): Promise<SessionClaims | null
     if (
       typeof payload.userId === "string" &&
       typeof payload.organizationId === "string" &&
-      typeof payload.email === "string"
+      typeof payload.email === "string" &&
+      (payload.role === "member" || payload.role === "admin")
     ) {
-      return { userId: payload.userId, organizationId: payload.organizationId, email: payload.email };
+      return {
+        userId: payload.userId,
+        organizationId: payload.organizationId,
+        email: payload.email,
+        role: payload.role,
+      };
     }
     return null;
   } catch {

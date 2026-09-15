@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { buildGoogleAuthUrl, exchangeCodeForUserInfo, emailDomain } from "../auth/google.js";
-import { findOrCreateUserForGoogleIdentity } from "../auth/identity.js";
+import { findOrCreateUserForGoogleIdentity, SignInRejectedError } from "../auth/identity.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 import { requireAuth } from "../auth/middleware.js";
 import { config } from "../config.js";
@@ -41,13 +41,22 @@ export async function authRoutes(app: FastifyInstance) {
         return;
       }
 
-      const { org, user } = await findOrCreateUserForGoogleIdentity(db, {
-        googleId: userInfo.sub,
-        email: userInfo.email,
-        name: userInfo.name,
-      });
+      let org, user, role;
+      try {
+        ({ org, user, role } = await findOrCreateUserForGoogleIdentity(db, {
+          googleId: userInfo.sub,
+          email: userInfo.email,
+          name: userInfo.name,
+        }));
+      } catch (err) {
+        if (err instanceof SignInRejectedError) {
+          reply.code(403).send({ error: err.message });
+          return;
+        }
+        throw err;
+      }
 
-      const token = await signSession({ userId: user.id, organizationId: org.id, email: user.email });
+      const token = await signSession({ userId: user.id, organizationId: org.id, email: user.email, role });
 
       reply.setCookie(SESSION_COOKIE_NAME, token, {
         httpOnly: true,

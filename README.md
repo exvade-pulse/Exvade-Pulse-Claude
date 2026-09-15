@@ -50,6 +50,12 @@ it over the standard Postgres wire protocol, not just Neon's HTTP driver).
      (Web application type; authorized redirect URI
      `http://localhost:3001/auth/google/callback` for local dev). Not required
      to run the backend, only to sign in.
+   - Sign-in is allowlisted, not open: the **first** person to sign in from a
+     given Google Workspace domain bootstraps that domain's organization and is
+     made `admin` automatically (nothing to configure — this is how you get in
+     on a fresh setup). Anyone after that must already have an `authorized_users`
+     row for their email, added by an existing admin via the `/users` page (or
+     `POST /api/users`), or their sign-in is rejected.
    - `ANTHROPIC_API_KEY` — from [console.anthropic.com](https://console.anthropic.com)
      (Settings → API Keys). Not required to run the backend or test suite, only
      to run the real interpretation pipeline (`npm run interpret:real -w backend`)
@@ -102,9 +108,35 @@ not mocks.
 Built:
 - Repo scaffold (npm workspaces), Drizzle migrations, GitHub Actions CI
   (typecheck/test/build gate before merge).
-- The full data model: `organizations`, `users`, `objectives`, `initiatives`,
-  `projects`, `tasks`, `sources`, `suggestions`, `decisions`, `audit_log`.
+- The full data model: `organizations`, `users`, `authorized_users`, `objectives`,
+  `initiatives`, `projects`, `tasks`, `sources`, `suggestions`, `decisions`,
+  `audit_log`.
 - Google OAuth restricted to one Workspace domain, JWT session cookie.
+- An allowlist + roles gate on top of that OAuth flow, replacing "any account on
+  the domain auto-provisions": `authorized_users`
+  ([backend/src/db/schema.ts](backend/src/db/schema.ts)) is a separate table from
+  `users` (someone can be authorized before they've ever signed in) carrying a
+  `user_role` (`member`/`admin`) per `(organizationId, email)`. The OAuth callback
+  ([backend/src/auth/identity.ts](backend/src/auth/identity.ts)'s
+  `findOrCreateUserForGoogleIdentity`) bootstraps a brand-new organization's first
+  sign-in as `admin`, and otherwise requires an `authorized_users` row to exist or
+  rejects the sign-in outright (no `users` row created). `role` is embedded in the
+  session JWT only as a UI hint;
+  [backend/src/auth/middleware.ts](backend/src/auth/middleware.ts)'s `requireAuth`
+  re-reads `authorized_users` fresh on every request and 401s if the row is gone —
+  the actual enforcement boundary, so a revoked person's session dies immediately
+  rather than lingering for the cookie's 7-day life — and a `requireAdmin`
+  preHandler 403s non-admins on admin-only routes. Admin CRUD lives in
+  [backend/src/users/manage.ts](backend/src/users/manage.ts) /
+  [backend/src/routes/users.ts](backend/src/routes/users.ts) (`GET`/`POST /api/users`,
+  `PATCH /api/users/:email/role`, `DELETE /api/users/:email`), each writing an
+  `audit_log` row; both the role-change and revoke routes refuse to target the
+  caller's own email (the database transaction rejects it, not just the UI). The
+  frontend ([frontend/app/users/page.tsx](frontend/app/users/page.tsx), linked from
+  the nav only for admins) lists everyone authorized for the org — email, display
+  name once they've signed in, a role `<select>`, and a Revoke button — with an
+  "authorize someone" form, and disables the role/revoke controls on the viewer's
+  own row (server-side check is the real guard).
 - A real, Claude-driven interpretation pipeline:
   - [backend/src/interpretation/claudeClient.ts](backend/src/interpretation/claudeClient.ts) —
     a single interface wrapping the Anthropic SDK, so the model call is

@@ -19,6 +19,7 @@ const TABLES = [
   schema.projects,
   schema.initiatives,
   schema.objectives,
+  schema.authorizedUsers,
   schema.users,
   schema.organizations,
 ];

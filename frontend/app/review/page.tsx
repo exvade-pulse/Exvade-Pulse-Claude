@@ -123,7 +123,7 @@ export default function ReviewPage() {
 
   return (
     <main className="page">
-      <Nav />
+      <Nav user={user} />
       <div className="header">
         <h1>Pending suggestions</h1>
         <span className="muted">{user.email}</span>

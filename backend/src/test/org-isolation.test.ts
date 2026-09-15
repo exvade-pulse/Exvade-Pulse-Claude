@@ -116,6 +116,7 @@ describe("organization isolation", () => {
       userId: orgA.user.id,
       organizationId: orgA.org.id,
       email: orgA.user.email,
+      role: orgA.authorization.role,
     });
 
     const list = await app.inject({

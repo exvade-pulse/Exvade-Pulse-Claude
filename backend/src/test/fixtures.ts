@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "../db/client.js";
-import { initiatives, objectives, organizations, projects, sources, users } from "../db/schema.js";
+import {
+  authorizedUsers,
+  initiatives,
+  objectives,
+  organizations,
+  projects,
+  sources,
+  users,
+  type UserRole,
+} from "../db/schema.js";
 
-export async function createFixtureOrg(db: Database, opts: { domain: string }) {
+export async function createFixtureOrg(db: Database, opts: { domain: string; role?: UserRole }) {
   const [org] = await db.insert(organizations).values({ name: opts.domain, domain: opts.domain }).returning();
 
   const [user] = await db
@@ -12,6 +21,16 @@ export async function createFixtureOrg(db: Database, opts: { domain: string }) {
       googleId: `google-${opts.domain}`,
       email: `reviewer@${opts.domain}`,
       name: "Test Reviewer",
+    })
+    .returning();
+
+  const [authorization] = await db
+    .insert(authorizedUsers)
+    .values({
+      organizationId: org.id,
+      email: user.email,
+      role: opts.role ?? "admin",
+      invitedBy: null,
     })
     .returning();
 
@@ -41,5 +60,5 @@ export async function createFixtureOrg(db: Database, opts: { domain: string }) {
     })
     .returning();
 
-  return { org, user, objective, initiative, project, source };
+  return { org, user, objective, initiative, project, source, authorization };
 }

@@ -1,9 +1,12 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
+export type UserRole = "member" | "admin";
+
 export interface SessionUser {
   userId: string;
   organizationId: string;
   email: string;
+  role: UserRole;
 }
 
 export interface Suggestion {
@@ -169,4 +172,62 @@ export async function resolveDecision(id: string, resolution: string): Promise<D
   }
   const body = (await res.json()) as { decision: Decision };
   return body.decision;
+}
+
+export interface AuthorizedUser {
+  email: string;
+  role: UserRole;
+  createdAt: string;
+  name: string | null;
+  hasSignedIn: boolean;
+}
+
+// A 403 here (non-admin hitting an admin-only route) is expected and handled
+// by the caller -- not thrown as an error -- so the /users page can render a
+// clean "not authorized" state instead of a raw error dump.
+export async function fetchAuthorizedUsers(): Promise<AuthorizedUser[] | "forbidden"> {
+  const res = await fetch(`${API_URL}/api/users`, { credentials: "include" });
+  if (res.status === 403) return "forbidden";
+  if (!res.ok) {
+    throw new Error(`Failed to load users (${res.status})`);
+  }
+  const body = (await res.json()) as { users: AuthorizedUser[] };
+  return body.users;
+}
+
+export async function authorizeUser(email: string, role: UserRole): Promise<void> {
+  const res = await fetch(`${API_URL}/api/users`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, role }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to authorize user");
+  }
+}
+
+export async function changeUserRole(email: string, role: UserRole): Promise<void> {
+  const res = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}/role`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to change role");
+  }
+}
+
+export async function revokeUser(email: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to revoke user");
+  }
 }

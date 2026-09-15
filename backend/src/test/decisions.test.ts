@@ -202,6 +202,7 @@ describe("GET/POST /api/decisions", () => {
       userId: fixture.user.id,
       organizationId: fixture.org.id,
       email: fixture.user.email,
+      role: fixture.authorization.role,
     });
     const response = await app.inject({
       method: "GET",
@@ -233,6 +234,7 @@ describe("GET/POST /api/decisions", () => {
       userId: fixture.user.id,
       organizationId: fixture.org.id,
       email: fixture.user.email,
+      role: fixture.authorization.role,
     });
     const response = await app.inject({
       method: "GET",
@@ -268,6 +270,7 @@ describe("GET/POST /api/decisions", () => {
       userId: orgA.user.id,
       organizationId: orgA.org.id,
       email: orgA.user.email,
+      role: orgA.authorization.role,
     });
 
     const list = await app.inject({
@@ -302,6 +305,7 @@ describe("GET/POST /api/decisions", () => {
       userId: orgA.user.id,
       organizationId: orgA.org.id,
       email: orgA.user.email,
+      role: orgA.authorization.role,
     });
 
     const created = await app.inject({

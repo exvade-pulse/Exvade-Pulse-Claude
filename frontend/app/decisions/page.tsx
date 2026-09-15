@@ -139,7 +139,7 @@ export default function DecisionsPage() {
 
   return (
     <main className="page">
-      <Nav />
+      <Nav user={user} />
       <div className="header">
         <h1>Decisions</h1>
         <span className="muted">{user.email}</span>

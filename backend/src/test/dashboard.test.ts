@@ -32,6 +32,7 @@ describe("GET /api/dashboard/objectives", () => {
       userId: fixture.user.id,
       organizationId: fixture.org.id,
       email: fixture.user.email,
+      role: fixture.authorization.role,
     });
     const response = await app.inject({
       method: "GET",
