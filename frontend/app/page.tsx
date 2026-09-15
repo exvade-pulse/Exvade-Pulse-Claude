@@ -17,8 +17,14 @@ const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   task: "Task",
 };
 
+// Foreign keys (objectiveId, projectId, ...) are implementation detail, not
+// something a reviewer needs to read — "where it belongs" is already conveyed by
+// the "Proposes new X" / "Updates existing X" line above the diff.
+const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId"]);
+
 function formatDiff(diff: Record<string, unknown>): string {
   return Object.entries(diff)
+    .filter(([key]) => !HIDDEN_DIFF_KEYS.has(key))
     .map(([key, value]) => `${key}: ${String(value)}`)
     .join("\n");
 }
