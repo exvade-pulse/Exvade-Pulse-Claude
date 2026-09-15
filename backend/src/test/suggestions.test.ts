@@ -3,17 +3,17 @@ import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
 import { auditLog, suggestions, tasks } from "../db/schema.js";
-import { approveSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
+import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 
 const { db, client } = testDb();
+
+afterAll(async () => {
+  await client.end();
+});
 
 describe("suggestion approval", () => {
   beforeEach(async () => {
     await truncateAll(db);
-  });
-
-  afterAll(async () => {
-    await client.end();
   });
 
   it("approving a new_task suggestion creates the task and writes an audit_log entry", async () => {
@@ -162,5 +162,180 @@ describe("suggestion approval", () => {
         reviewerId: fixture.user.id,
       }),
     ).rejects.toBeInstanceOf(SuggestionApplyError);
+  });
+});
+
+describe("suggestion editing", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("editing a pending suggestion merges into proposedDiff, sets status to edited, and writes an audit_log entry", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "edit-flow.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: {
+          projectId: fixture.project.id,
+          title: "Check wiring harness on rig #3",
+          nextAction: "Inspect wiring before next run",
+        },
+        reasoning: "No existing open task matches this report.",
+        confidence: 0.6,
+      })
+      .returning();
+
+    const updated = await editSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      actorId: fixture.user.id,
+      diff: { nextAction: "Corrected: inspect wiring and connectors before next run" },
+    });
+
+    expect(updated.status).toBe("edited");
+    expect(updated.proposedDiff).toMatchObject({
+      projectId: fixture.project.id,
+      title: "Check wiring harness on rig #3",
+      nextAction: "Corrected: inspect wiring and connectors before next run",
+    });
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.action, "suggestion.edited"));
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].actorId).toBe(fixture.user.id);
+    expect((auditRows[0].details as Record<string, unknown>).suggestionId).toBe(suggestion.id);
+  });
+
+  it("drops a field outside the target type's whitelist from the edit, same as apply.ts does for the AI's own output", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "edit-whitelist.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { projectId: fixture.project.id, title: "Original title" },
+        reasoning: "test",
+        confidence: 0.5,
+      })
+      .returning();
+
+    const updated = await editSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      actorId: fixture.user.id,
+      diff: { title: "Edited title", organizationId: "should-not-appear", notAField: "nope" },
+    });
+
+    expect(updated.proposedDiff).toMatchObject({ title: "Edited title" });
+    expect(updated.proposedDiff).not.toHaveProperty("organizationId");
+    expect(updated.proposedDiff).not.toHaveProperty("notAField");
+  });
+
+  it("cannot edit an already-approved or already-rejected suggestion", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "edit-terminal.test" });
+
+    const [approved] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { projectId: fixture.project.id, title: "Once" },
+        reasoning: "test",
+        confidence: 0.5,
+      })
+      .returning();
+
+    await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: approved.id,
+      reviewerId: fixture.user.id,
+    });
+
+    await expect(
+      editSuggestion(db, {
+        organizationId: fixture.org.id,
+        suggestionId: approved.id,
+        actorId: fixture.user.id,
+        diff: { title: "Too late" },
+      }),
+    ).rejects.toBeInstanceOf(SuggestionApplyError);
+
+    const [rejected] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { projectId: fixture.project.id, title: "Also once" },
+        reasoning: "test",
+        confidence: 0.5,
+      })
+      .returning();
+
+    await rejectSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: rejected.id,
+      reviewerId: fixture.user.id,
+    });
+
+    await expect(
+      editSuggestion(db, {
+        organizationId: fixture.org.id,
+        suggestionId: rejected.id,
+        actorId: fixture.user.id,
+        diff: { title: "Too late again" },
+      }),
+    ).rejects.toBeInstanceOf(SuggestionApplyError);
+  });
+
+  it("approving a previously-edited suggestion applies the edited diff, not the original", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "edit-then-approve.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { projectId: fixture.project.id, title: "Original title", nextAction: "Original action" },
+        reasoning: "test",
+        confidence: 0.5,
+      })
+      .returning();
+
+    await editSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      actorId: fixture.user.id,
+      diff: { title: "Edited title" },
+    });
+
+    const approved = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+
+    expect(approved.status).toBe("approved");
+
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, approved.targetId!));
+    expect(task.title).toBe("Edited title");
+    expect(task.nextAction).toBe("Original action");
   });
 });

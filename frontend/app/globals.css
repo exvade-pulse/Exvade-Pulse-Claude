@@ -64,9 +64,55 @@ body {
   color: #a33;
 }
 
+.decision-btn.edit {
+  border-color: #888;
+  color: #444;
+}
+
+.decision-btn.save {
+  border-color: #2b7a3b;
+  color: #2b7a3b;
+}
+
+.decision-btn.cancel {
+  border-color: #888;
+  color: #444;
+}
+
 .decision-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.edit-field-label {
+  font-size: 11px;
+  color: #666;
+}
+
+.edit-input {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.edit-input:focus {
+  outline: 2px solid #3730a3;
+  outline-offset: -1px;
 }
 
 .card {
@@ -85,6 +131,13 @@ body {
   margin-bottom: 8px;
 }
 
+.card-badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .badge {
   font-size: 11px;
   text-transform: uppercase;
@@ -94,6 +147,11 @@ body {
   padding: 3px 8px;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+.badge-edited {
+  background: #fff4e0;
+  color: #8a5a00;
 }
 
 .card-title {

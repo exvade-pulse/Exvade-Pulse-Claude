@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   API_URL,
   decideSuggestion,
+  editSuggestion,
   fetchCurrentUser,
   fetchPendingSuggestions,
   type SessionUser,
@@ -35,6 +36,9 @@ export default function ReviewPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<Record<string, string>>({});
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -58,6 +62,37 @@ export default function ReviewPage() {
       setActionError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setPendingActionId(null);
+    }
+  }
+
+  function startEdit(s: Suggestion) {
+    const draft: Record<string, string> = {};
+    for (const [key, value] of Object.entries(s.proposedDiff)) {
+      if (HIDDEN_DIFF_KEYS.has(key)) continue;
+      draft[key] = String(value ?? "");
+    }
+    setActionError(null);
+    setEditDraft(draft);
+    setEditingId(s.id);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditDraft({});
+  }
+
+  async function saveEdit(id: string) {
+    setSavingEdit(true);
+    setActionError(null);
+    try {
+      const updated = await editSuggestion(id, editDraft);
+      setSuggestions((prev) => prev.map((s) => (s.id === id ? updated : s)));
+      setEditingId(null);
+      setEditDraft({});
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -99,46 +134,88 @@ export default function ReviewPage() {
         </p>
       )}
 
-      {suggestions.map((s) => (
-        <article className="card" key={s.id}>
-          <div className="card-top">
-            <div>
-              <p className="card-title">
-                {String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`)}
-              </p>
-              <span className="muted">
-                {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
-              </span>
+      {suggestions.map((s) => {
+        const isEditing = editingId === s.id;
+        return (
+          <article className="card" key={s.id}>
+            <div className="card-top">
+              <div>
+                <p className="card-title">
+                  {String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`)}
+                </p>
+                <span className="muted">
+                  {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
+                </span>
+              </div>
+              <div className="card-badges">
+                {s.status === "edited" && <span className="badge badge-edited">edited</span>}
+                <span className="badge">{s.changeType.replace("_", " ")}</span>
+              </div>
             </div>
-            <span className="badge">{s.changeType.replace("_", " ")}</span>
-          </div>
 
-          <p className="card-diff">{formatDiff(s.proposedDiff)}</p>
-          <p className="card-reasoning">{s.reasoning}</p>
+            {isEditing ? (
+              <div className="edit-form">
+                {Object.keys(editDraft).map((key) => (
+                  <label className="edit-field" key={key}>
+                    <span className="edit-field-label">{key}</span>
+                    <input
+                      className="edit-input"
+                      value={editDraft[key]}
+                      onChange={(e) => setEditDraft((prev) => ({ ...prev, [key]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <p className="card-diff">{formatDiff(s.proposedDiff)}</p>
+            )}
 
-          <p className="card-source">
-            Source: {s.source.type} &middot; received {new Date(s.source.receivedAt).toLocaleString()} &middot;
-            confidence {Math.round(s.confidence * 100)}%
-          </p>
+            <p className="card-reasoning">{s.reasoning}</p>
 
-          <div className="card-actions">
-            <button
-              className="decision-btn approve"
-              disabled={pendingActionId === s.id}
-              onClick={() => handleDecision(s.id, "approve")}
-            >
-              Approve
-            </button>
-            <button
-              className="decision-btn reject"
-              disabled={pendingActionId === s.id}
-              onClick={() => handleDecision(s.id, "reject")}
-            >
-              Reject
-            </button>
-          </div>
-        </article>
-      ))}
+            <p className="card-source">
+              Source: {s.source.type} &middot; received {new Date(s.source.receivedAt).toLocaleString()} &middot;
+              confidence {Math.round(s.confidence * 100)}%
+            </p>
+
+            <div className="card-actions">
+              {isEditing ? (
+                <>
+                  <button className="decision-btn save" disabled={savingEdit} onClick={() => saveEdit(s.id)}>
+                    Save
+                  </button>
+                  <button className="decision-btn cancel" disabled={savingEdit} onClick={cancelEdit}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="decision-btn approve"
+                    disabled={pendingActionId === s.id}
+                    onClick={() => handleDecision(s.id, "approve")}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="decision-btn reject"
+                    disabled={pendingActionId === s.id}
+                    onClick={() => handleDecision(s.id, "reject")}
+                  >
+                    Reject
+                  </button>
+                  <button
+                    className="decision-btn edit"
+                    disabled={pendingActionId === s.id}
+                    onClick={() => startEdit(s)}
+                  >
+                    Edit
+                  </button>
+                </>
+              )}
+            </div>
+          </article>
+        );
+      })}
     </main>
   );
 }

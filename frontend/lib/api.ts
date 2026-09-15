@@ -30,8 +30,11 @@ export async function fetchCurrentUser(): Promise<SessionUser | null> {
   return body.user;
 }
 
+// No status query param: the backend's default set is "pending" + "edited" --
+// suggestions still awaiting a review decision, whether or not they've been
+// hand-edited since being proposed.
 export async function fetchPendingSuggestions(): Promise<Suggestion[]> {
-  const res = await fetch(`${API_URL}/api/suggestions?status=pending`, { credentials: "include" });
+  const res = await fetch(`${API_URL}/api/suggestions`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to load suggestions (${res.status})`);
   }
@@ -48,4 +51,19 @@ export async function decideSuggestion(id: string, decision: "approve" | "reject
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? `Failed to ${decision} suggestion`);
   }
+}
+
+export async function editSuggestion(id: string, proposedDiff: Record<string, unknown>): Promise<Suggestion> {
+  const res = await fetch(`${API_URL}/api/suggestions/${id}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ proposedDiff }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to save edit");
+  }
+  const body = (await res.json()) as { suggestion: Suggestion };
+  return body.suggestion;
 }

@@ -1,16 +1,20 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { sources, suggestions } from "../db/schema.js";
-import { approveSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
+import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 
 export async function suggestionRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
 
   app.get<{ Querystring: { status?: string } }>("/api/suggestions", async (request, reply) => {
     const organizationId = request.user!.organizationId;
-    const status = request.query.status ?? "pending";
+    // No explicit status means "awaiting a review decision" -- an edited
+    // suggestion hasn't been approved/rejected yet, so it belongs in that set too.
+    const statusFilter = request.query.status
+      ? eq(suggestions.status, request.query.status as never)
+      : inArray(suggestions.status, ["pending", "edited"]);
 
     const rows = await db
       .select({
@@ -31,7 +35,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
       })
       .from(suggestions)
       .innerJoin(sources, eq(sources.id, suggestions.sourceId))
-      .where(and(eq(suggestions.organizationId, organizationId), eq(suggestions.status, status as never)))
+      .where(and(eq(suggestions.organizationId, organizationId), statusFilter))
       .orderBy(desc(suggestions.createdAt));
 
     reply.send({ suggestions: rows });
@@ -53,6 +57,32 @@ export async function suggestionRoutes(app: FastifyInstance) {
       throw err;
     }
   });
+
+  app.patch<{ Params: { id: string }; Body: { proposedDiff?: Record<string, unknown> } }>(
+    "/api/suggestions/:id",
+    async (request, reply) => {
+      const diff = request.body?.proposedDiff;
+      if (!diff || typeof diff !== "object" || Array.isArray(diff)) {
+        reply.code(400).send({ error: "proposedDiff is required" });
+        return;
+      }
+      try {
+        const updated = await editSuggestion(db, {
+          organizationId: request.user!.organizationId,
+          suggestionId: request.params.id,
+          actorId: request.user!.userId,
+          diff,
+        });
+        reply.send({ suggestion: updated });
+      } catch (err) {
+        if (err instanceof SuggestionApplyError) {
+          reply.code(409).send({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
 
   app.post<{ Params: { id: string } }>("/api/suggestions/:id/reject", async (request, reply) => {
     try {

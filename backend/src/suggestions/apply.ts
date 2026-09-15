@@ -103,6 +103,54 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
   });
 }
 
+interface EditParams {
+  organizationId: string;
+  suggestionId: string;
+  actorId: string;
+  diff: Record<string, unknown>;
+}
+
+// Merges a reviewer's partial edit into the existing proposed_diff (the reviewer
+// need not resend the whole thing) and re-runs it through pickAllowedFields, so an
+// edit is exactly as constrained as the AI's own output was. Does not touch
+// reviewedBy/reviewedAt -- an edit is a draft change, not a review decision.
+export async function editSuggestion(db: Database, params: EditParams) {
+  return db.transaction(async (tx) => {
+    const [suggestion] = await tx
+      .select()
+      .from(suggestions)
+      .where(and(eq(suggestions.id, params.suggestionId), eq(suggestions.organizationId, params.organizationId)));
+
+    if (!suggestion) {
+      throw new SuggestionApplyError("Suggestion not found");
+    }
+    if (suggestion.status !== "pending" && suggestion.status !== "edited") {
+      throw new SuggestionApplyError(`Suggestion is already ${suggestion.status}`);
+    }
+
+    const targetType = suggestion.targetType as keyof typeof TABLE_BY_TARGET_TYPE;
+    const merged = { ...(suggestion.proposedDiff as Record<string, unknown>), ...params.diff };
+    const sanitized = pickAllowedFields(targetType, merged);
+
+    const [updatedSuggestion] = await tx
+      .update(suggestions)
+      .set({ status: "edited", proposedDiff: sanitized })
+      .where(eq(suggestions.id, suggestion.id))
+      .returning();
+
+    await tx.insert(auditLog).values({
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      action: "suggestion.edited",
+      entityType: targetType,
+      entityId: suggestion.targetId,
+      details: { suggestionId: suggestion.id, editedFields: params.diff },
+    });
+
+    return updatedSuggestion;
+  });
+}
+
 export async function rejectSuggestion(db: Database, params: ApplyParams) {
   return db.transaction(async (tx) => {
     const [suggestion] = await tx

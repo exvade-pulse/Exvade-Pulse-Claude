@@ -137,6 +137,16 @@ Built:
 - A minimal review UI: list pending suggestions with what/where/why/source,
   approve/reject. Approving applies the proposed diff to the target table inside
   a transaction and writes an `audit_log` row.
+- Editing a suggestion's proposed diff before approving: `PATCH /api/suggestions/:id`
+  ([backend/src/routes/suggestions.ts](backend/src/routes/suggestions.ts) →
+  [backend/src/suggestions/apply.ts](backend/src/suggestions/apply.ts)'s
+  `editSuggestion`) merges a reviewer's partial edit into the existing
+  `proposedDiff`, re-runs it through the same `pickAllowedFields` whitelist the AI
+  output is held to, and sets status to `edited` (writing a `suggestion.edited`
+  `audit_log` row) without touching `reviewedBy`/`reviewedAt`. The review UI
+  ([frontend/app/page.tsx](frontend/app/page.tsx)) exposes this as an Edit/Save/Cancel
+  affordance on each card; an `edited` suggestion still shows Approve/Reject, and
+  approving it applies the edited diff.
 - Every core table carries `organization_id` directly, and every query is scoped
   to `request.user.organizationId` in the backend query layer — enforced in code,
   not relied on as a database-only property — even though there's one
@@ -148,8 +158,6 @@ Explicitly **not** built yet (next sessions):
   Gmail/Circleback source automatically).
 - The dashboard / Company Map view.
 - Styling polish beyond "readable and scannable."
-- Editing a suggestion's proposed diff before approving (schema supports an
-  `edited` status; no UI for it yet).
 
 ## Security notes
 
