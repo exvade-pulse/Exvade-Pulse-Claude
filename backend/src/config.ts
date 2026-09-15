@@ -26,6 +26,10 @@ export const config = {
     clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
     callbackUrl: process.env.GOOGLE_CALLBACK_URL ?? "http://localhost:3001/auth/google/callback",
   },
+  // Optional at import time: the app must still boot and tests must still pass
+  // without a real key (CI has none). Only code paths that actually call the
+  // Claude API require this to be set, and they fail at call time, not at import.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   requireDatabaseUrl(): string {
     return required("DATABASE_URL");
   },

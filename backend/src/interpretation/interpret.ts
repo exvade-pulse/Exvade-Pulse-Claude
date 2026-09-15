@@ -1,0 +1,214 @@
+import type Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { getClaudeClient, type ClaudeClient } from "./claudeClient.js";
+import { ALLOWED_FIELDS, pickAllowedFields } from "../suggestions/apply.js";
+import type { SuggestionDraft } from "./fakeInterpret.js";
+
+export const INTERPRETATION_MODEL = "claude-sonnet-5";
+
+export class InterpretationError extends Error {}
+
+export interface InterpretSourceInput {
+  subject: string;
+  from: string;
+  body: string;
+  receivedAt: Date;
+}
+
+export interface ContextEntity {
+  id: string;
+  title: string;
+  status: string;
+}
+
+export interface CompanyContext {
+  objectives: ContextEntity[];
+  initiatives: ContextEntity[];
+  projects: ContextEntity[];
+  tasks: ContextEntity[];
+}
+
+const changeTypeSchema = z.enum([
+  "operational_update",
+  "context",
+  "new_task",
+  "decision",
+  "deadline",
+  "resolved",
+]);
+const targetTypeSchema = z.enum(["objective", "initiative", "project", "task"]);
+
+// Only checks shape/types -- membership of targetId in the context we actually
+// handed the model, and whitelisting of proposedDiff's keys, happen afterward.
+// Never trust proposedDiff blindly: it feeds directly into a DB write in
+// suggestions/apply.ts.
+const suggestionToolInputSchema = z.object({
+  changeType: changeTypeSchema,
+  targetType: targetTypeSchema,
+  targetId: z.string().uuid().nullable(),
+  proposedDiff: z.record(z.string(), z.unknown()),
+  reasoning: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+});
+
+const PROPOSE_SUGGESTION_TOOL: Anthropic.Tool = {
+  name: "propose_suggestion",
+  description:
+    "Propose exactly one change to the company's objective/initiative/project/task hierarchy, based on the source content and the existing context you were given.",
+  input_schema: {
+    type: "object",
+    properties: {
+      changeType: {
+        type: "string",
+        enum: changeTypeSchema.options,
+        description: "The kind of change this represents.",
+      },
+      targetType: {
+        type: "string",
+        enum: targetTypeSchema.options,
+        description: "Which level of the hierarchy this change applies to.",
+      },
+      targetId: {
+        type: ["string", "null"],
+        description:
+          "The exact id of an existing entity from the context provided above, copied verbatim, if this updates something that already exists. null if and only if this proposes creating a brand new row.",
+      },
+      proposedDiff: {
+        type: "object",
+        description:
+          "The fields to set on the target row. Include only fields that are actually changing or being set; do not restate unrelated existing fields.",
+      },
+      reasoning: {
+        type: "string",
+        description:
+          "A short, specific explanation a human reviewer can scan in a few seconds: what in the source drove this, why this particular target (or why nothing existing matched), and anything the reviewer should double check. Avoid generic filler like 'this seems relevant'.",
+      },
+      confidence: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        description: "Your confidence that this is the right change to propose, from 0 to 1.",
+      },
+    },
+    required: ["changeType", "targetType", "targetId", "proposedDiff", "reasoning", "confidence"],
+  },
+};
+
+function describeAllowedFields(): string {
+  return (Object.keys(ALLOWED_FIELDS) as Array<keyof typeof ALLOWED_FIELDS>)
+    .map((targetType) => `- ${targetType}: ${ALLOWED_FIELDS[targetType].join(", ")}`)
+    .join("\n");
+}
+
+function buildContextSection(context: CompanyContext): string {
+  const section = (label: string, items: ContextEntity[]) =>
+    items.length === 0
+      ? `${label}: (none)`
+      : `${label}:\n${items.map((item) => `- id=${item.id} status=${item.status} title="${item.title}"`).join("\n")}`;
+
+  return [
+    section("Existing objectives", context.objectives),
+    section("Existing initiatives", context.initiatives),
+    section("Existing projects", context.projects),
+    section("Existing open tasks", context.tasks),
+  ].join("\n\n");
+}
+
+const SYSTEM_PROMPT = `You are the interpretation engine for Exvade Pulse, an internal ops tool for a clinical-stage medical device company. Exvade Pulse ingests operational communications (emails, meeting transcripts) and turns them into proposed changes to a structured hierarchy: Objectives -> Initiatives -> Projects -> Tasks. Every change you propose is reviewed by a human before it takes effect -- you are drafting a suggestion, not making the change yourself.
+
+You will be given the company's current open objectives/initiatives/projects/tasks (each with its real id, title, and status) and one new raw source (an email or transcript excerpt). Decide the single most useful change to propose in response to that source, then call the propose_suggestion tool exactly once with your answer.
+
+The hardest and most important part of this job: deciding whether the source is about something already being tracked, or is genuinely new.
+
+Strongly prefer matching the source to an EXISTING objective, initiative, project, or task over proposing a new one. Most incoming communication is a status update, a blocker, a decision, or new context on work that is already tracked -- not something brand new. Read the existing titles carefully and look for the same underlying subject matter, even if the wording differs (e.g. "rig #3 sensor issue" and "bench testing sensor dropout" are very likely the same task). If a plausible match exists, propose an update to it (targetId set to that entity's real id) rather than creating a duplicate.
+
+Only propose creating something new (targetId: null) when nothing existing plausibly matches -- every unnecessary new_task/new project/etc. fragments the picture the company relies on and creates duplicate-tracking work for the human reviewer. When genuinely uncertain between "update this existing item" and "this is new", prefer the existing item and lower your confidence rather than defaulting to new.
+
+targetId rules:
+- If you are proposing an update to something that already exists, targetId MUST be the exact id string of that entity as given to you in the context above. Never invent, guess, or reformat an id.
+- If you are proposing something new, targetId MUST be null.
+
+proposedDiff rules -- each targetType only accepts these fields, anything else is discarded before it ever reaches the database:
+${describeAllowedFields()}
+When creating a new project/initiative/task, proposedDiff must include the appropriate parent id field (initiativeId for a project, objectiveId for an initiative, projectId for a task) pointing at an existing parent from the context, plus a title. When updating an existing entity, only include the fields that are actually changing.
+
+reasoning must be genuinely useful for a fast human scan: name what changed, cite the specific evidence from the source, and say why you picked this target (or why you concluded nothing existing matched). Do not write generic filler.
+
+confidence should reflect how sure you are that this specific target and diff are correct, from 0 (low) to 1 (high).`;
+
+function buildUserMessage(source: InterpretSourceInput, context: CompanyContext): string {
+  return `${buildContextSection(context)}
+
+---
+
+New source to interpret:
+Subject: ${source.subject}
+From: ${source.from}
+Received: ${source.receivedAt.toISOString()}
+
+${source.body}`;
+}
+
+function isKnownEntityId(
+  targetType: z.infer<typeof targetTypeSchema>,
+  id: string,
+  context: CompanyContext,
+): boolean {
+  const pool: ContextEntity[] = {
+    objective: context.objectives,
+    initiative: context.initiatives,
+    project: context.projects,
+    task: context.tasks,
+  }[targetType];
+  return pool.some((entity) => entity.id === id);
+}
+
+export async function interpretSource(
+  source: InterpretSourceInput,
+  context: CompanyContext,
+  claudeClient: ClaudeClient = getClaudeClient(),
+): Promise<SuggestionDraft> {
+  const response = await claudeClient.createMessage({
+    model: INTERPRETATION_MODEL,
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
+    tool_choice: { type: "tool", name: PROPOSE_SUGGESTION_TOOL.name },
+    tools: [PROPOSE_SUGGESTION_TOOL],
+    messages: [{ role: "user", content: buildUserMessage(source, context) }],
+  });
+
+  const toolUse = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  );
+  if (!toolUse) {
+    throw new InterpretationError("Claude did not return a structured suggestion (no tool_use block in response).");
+  }
+
+  const parsed = suggestionToolInputSchema.safeParse(toolUse.input);
+  if (!parsed.success) {
+    throw new InterpretationError(`Claude's suggestion failed schema validation: ${parsed.error.message}`);
+  }
+  const draft = parsed.data;
+
+  // Defensive: never trust that targetId actually refers to a real row we
+  // showed the model, even though it passed schema validation as a UUID.
+  if (draft.targetId !== null && !isKnownEntityId(draft.targetType, draft.targetId, context)) {
+    throw new InterpretationError(
+      `Claude proposed targetId "${draft.targetId}" for targetType "${draft.targetType}", which was not among the ids provided in context.`,
+    );
+  }
+
+  // Re-sanitize proposedDiff through the same whitelist apply.ts enforces, so
+  // a malformed or adversarial tool response can't smuggle extra fields
+  // through even before it gets anywhere near a DB write.
+  const sanitizedDiff = pickAllowedFields(draft.targetType, draft.proposedDiff);
+
+  return {
+    changeType: draft.changeType,
+    targetType: draft.targetType,
+    targetId: draft.targetId,
+    proposedDiff: sanitizedDiff,
+    reasoning: draft.reasoning,
+    confidence: draft.confidence,
+  };
+}

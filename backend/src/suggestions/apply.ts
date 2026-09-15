@@ -14,14 +14,17 @@ const TABLE_BY_TARGET_TYPE = {
 // Whitelists what a proposed_diff may set on each target type, so an AI-authored
 // (or hand-edited) diff can never smuggle in organization_id or other fields the
 // review flow doesn't own.
-const ALLOWED_FIELDS: Record<keyof typeof TABLE_BY_TARGET_TYPE, string[]> = {
+export const ALLOWED_FIELDS: Record<keyof typeof TABLE_BY_TARGET_TYPE, string[]> = {
   objective: ["title", "description", "status", "priority"],
   initiative: ["objectiveId", "title", "description", "status", "priority"],
   project: ["initiativeId", "title", "description", "status"],
   task: ["projectId", "title", "description", "status", "latestUpdate", "nextAction"],
 };
 
-function pickAllowedFields(targetType: keyof typeof TABLE_BY_TARGET_TYPE, diff: Record<string, unknown>) {
+// Exported so the interpretation pipeline can sanitize a model-authored diff
+// against the same whitelist this module enforces at apply time -- one source
+// of truth for what each target type may set.
+export function pickAllowedFields(targetType: keyof typeof TABLE_BY_TARGET_TYPE, diff: Record<string, unknown>) {
   const allowed = ALLOWED_FIELDS[targetType];
   const result: Record<string, unknown> = {};
   for (const key of allowed) {
