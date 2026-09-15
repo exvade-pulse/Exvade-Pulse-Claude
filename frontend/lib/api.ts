@@ -53,6 +53,38 @@ export async function decideSuggestion(id: string, decision: "approve" | "reject
   }
 }
 
+export type TaskStatus =
+  | "active"
+  | "waiting"
+  | "needs_attention"
+  | "completed"
+  | "superseded"
+  | "resolved"
+  | "blocked";
+
+export type TaskCounts = Record<TaskStatus, number>;
+
+export interface DashboardObjective {
+  id: string;
+  title: string;
+  description: string | null;
+  status: "active" | "paused" | "completed" | "cancelled";
+  priority: "low" | "medium" | "high" | "critical";
+  createdAt: string;
+  updatedAt: string;
+  initiativeCount: number;
+  taskCounts: TaskCounts;
+}
+
+export async function fetchDashboardObjectives(): Promise<DashboardObjective[]> {
+  const res = await fetch(`${API_URL}/api/dashboard/objectives`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load dashboard (${res.status})`);
+  }
+  const body = (await res.json()) as { objectives: DashboardObjective[] };
+  return body.objectives;
+}
+
 export async function editSuggestion(id: string, proposedDiff: Record<string, unknown>): Promise<Suggestion> {
   const res = await fetch(`${API_URL}/api/suggestions/${id}`, {
     method: "PATCH",

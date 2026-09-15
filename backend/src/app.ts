@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import { config } from "./config.js";
 import { authRoutes } from "./routes/auth.js";
+import { dashboardRoutes } from "./routes/dashboard.js";
 import { suggestionRoutes } from "./routes/suggestions.js";
 
 export async function buildApp() {
@@ -18,6 +19,7 @@ export async function buildApp() {
 
   await app.register(authRoutes);
   await app.register(suggestionRoutes);
+  await app.register(dashboardRoutes);
 
   return app;
 }

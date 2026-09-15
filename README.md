@@ -151,12 +151,29 @@ Built:
   to `request.user.organizationId` in the backend query layer — enforced in code,
   not relied on as a database-only property — even though there's one
   organization today.
+- A strategy-map dashboard, one card per Objective, for a leadership-level,
+  zoomed-out view of company work: `GET /api/dashboard/objectives`
+  ([backend/src/routes/dashboard.ts](backend/src/routes/dashboard.ts)) returns
+  every objective in the caller's org with `initiativeCount` and a `taskCounts`
+  breakdown by every `task_status` value, aggregated with real SQL `groupBy`/`count`
+  down the full Objective → Initiative → Project → Task hierarchy (not fetched and
+  reduced in JS), ordered critical → high → medium → low priority then title. An
+  objective with no initiatives/tasks still appears, with all counts at zero.
+  The frontend ([frontend/app/page.tsx](frontend/app/page.tsx)) is now the landing
+  page ("/"): a card per objective with status/priority badges, a chip per non-zero
+  task status (status-board-style breakdown), a one-line "N initiatives · M needs
+  attention" summary (needs_attention + blocked), and a completed/non-superseded
+  progress bar. The suggestions review UI moved to
+  [frontend/app/review/page.tsx](frontend/app/review/page.tsx) (`/review`), with a
+  minimal shared nav ([frontend/app/components/Nav.tsx](frontend/app/components/Nav.tsx))
+  linking the two. No drill-down into initiatives/projects/tasks yet — objective-level
+  cards only.
 
 Explicitly **not** built yet (next sessions):
 - Real Gmail/Circleback ingestion (the pipeline exists and is exercised via
   `npm run interpret:real -w backend`, but nothing yet calls it from a real
   Gmail/Circleback source automatically).
-- The dashboard / Company Map view.
+- Drill-down from the dashboard into an objective's initiatives/projects/tasks.
 - Styling polish beyond "readable and scannable."
 
 ## Security notes

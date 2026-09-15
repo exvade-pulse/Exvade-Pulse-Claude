@@ -3,42 +3,50 @@
 import { useEffect, useState } from "react";
 import {
   API_URL,
-  decideSuggestion,
-  editSuggestion,
   fetchCurrentUser,
-  fetchPendingSuggestions,
+  fetchDashboardObjectives,
+  type DashboardObjective,
   type SessionUser,
-  type Suggestion,
+  type TaskStatus,
 } from "../lib/api";
+import { Nav } from "./components/Nav";
 
-const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
-  objective: "Objective",
-  initiative: "Initiative",
-  project: "Project",
-  task: "Task",
+// Workflow order, not alphabetical -- what needs eyes on it (active work, then
+// trouble) reads before what's settled (resolved/completed/superseded).
+const STATUS_ORDER: TaskStatus[] = [
+  "active",
+  "needs_attention",
+  "blocked",
+  "waiting",
+  "resolved",
+  "completed",
+  "superseded",
+];
+
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  active: "active",
+  waiting: "waiting",
+  needs_attention: "needs attention",
+  completed: "completed",
+  superseded: "superseded",
+  resolved: "resolved",
+  blocked: "blocked",
 };
 
-// Foreign keys (objectiveId, projectId, ...) are implementation detail, not
-// something a reviewer needs to read — "where it belongs" is already conveyed by
-// the "Proposes new X" / "Updates existing X" line above the diff.
-const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId"]);
-
-function formatDiff(diff: Record<string, unknown>): string {
-  return Object.entries(diff)
-    .filter(([key]) => !HIDDEN_DIFF_KEYS.has(key))
-    .map(([key, value]) => `${key}: ${String(value)}`)
-    .join("\n");
+function totalTasks(counts: DashboardObjective["taskCounts"]): number {
+  return Object.values(counts).reduce((sum, n) => sum + n, 0);
 }
 
-export default function ReviewPage() {
+function chipClass(status: TaskStatus): string {
+  if (status === "needs_attention" || status === "blocked") return "chip chip-attention";
+  if (status === "completed") return "chip chip-done";
+  return "chip";
+}
+
+export default function DashboardPage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [objectives, setObjectives] = useState<DashboardObjective[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<Record<string, string>>({});
-  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -46,59 +54,16 @@ export default function ReviewPage() {
 
   useEffect(() => {
     if (user && user !== "loading") {
-      fetchPendingSuggestions()
-        .then(setSuggestions)
+      fetchDashboardObjectives()
+        .then(setObjectives)
         .catch((err) => setLoadError(err.message));
     }
   }, [user]);
 
-  async function handleDecision(id: string, decision: "approve" | "reject") {
-    setPendingActionId(id);
-    setActionError(null);
-    try {
-      await decideSuggestion(id, decision);
-      setSuggestions((prev) => prev.filter((s) => s.id !== id));
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setPendingActionId(null);
-    }
-  }
-
-  function startEdit(s: Suggestion) {
-    const draft: Record<string, string> = {};
-    for (const [key, value] of Object.entries(s.proposedDiff)) {
-      if (HIDDEN_DIFF_KEYS.has(key)) continue;
-      draft[key] = String(value ?? "");
-    }
-    setActionError(null);
-    setEditDraft(draft);
-    setEditingId(s.id);
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setEditDraft({});
-  }
-
-  async function saveEdit(id: string) {
-    setSavingEdit(true);
-    setActionError(null);
-    try {
-      const updated = await editSuggestion(id, editDraft);
-      setSuggestions((prev) => prev.map((s) => (s.id === id ? updated : s)));
-      setEditingId(null);
-      setEditDraft({});
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setSavingEdit(false);
-    }
-  }
-
   if (user === "loading") {
     return (
       <main className="page">
+        <Nav />
         <p className="muted">Loading&hellip;</p>
       </main>
     );
@@ -107,10 +72,11 @@ export default function ReviewPage() {
   if (!user) {
     return (
       <main className="page">
+        <Nav />
         <div className="header">
           <h1>Exvade Pulse</h1>
         </div>
-        <p>Sign in with your Exvade Google account to review pending suggestions.</p>
+        <p>Sign in with your Exvade Google account to see the strategy map.</p>
         <a className="signin-btn" href={`${API_URL}/auth/google`}>
           Sign in with Google
         </a>
@@ -120,99 +86,60 @@ export default function ReviewPage() {
 
   return (
     <main className="page">
+      <Nav />
       <div className="header">
-        <h1>Pending suggestions</h1>
+        <h1>Strategy map</h1>
         <span className="muted">{user.email}</span>
       </div>
 
       {loadError && <div className="error-banner">{loadError}</div>}
-      {actionError && <div className="error-banner">{actionError}</div>}
 
-      {suggestions.length === 0 && !loadError && (
-        <p className="empty-state">
-          Nothing pending review. Run <code>npm run seed:fake -w backend</code> to generate a demo suggestion.
-        </p>
+      {objectives.length === 0 && !loadError && (
+        <p className="empty-state">No objectives yet.</p>
       )}
 
-      {suggestions.map((s) => {
-        const isEditing = editingId === s.id;
+      {objectives.map((o) => {
+        const total = totalTasks(o.taskCounts);
+        const nonSuperseded = total - o.taskCounts.superseded;
+        const completedPct = nonSuperseded > 0 ? Math.round((o.taskCounts.completed / nonSuperseded) * 100) : null;
+        const needsAttention = o.taskCounts.needs_attention + o.taskCounts.blocked;
+        const activeStatuses = STATUS_ORDER.filter((status) => o.taskCounts[status] > 0);
+
         return (
-          <article className="card" key={s.id}>
+          <article className="card" key={o.id}>
             <div className="card-top">
               <div>
-                <p className="card-title">
-                  {String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`)}
-                </p>
-                <span className="muted">
-                  {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
-                </span>
+                <p className="card-title">{o.title}</p>
+                {o.description && <span className="muted">{o.description}</span>}
               </div>
               <div className="card-badges">
-                {s.status === "edited" && <span className="badge badge-edited">edited</span>}
-                <span className="badge">{s.changeType.replace("_", " ")}</span>
+                <span className={`badge badge-priority-${o.priority}`}>{o.priority}</span>
+                <span className="badge">{o.status}</span>
               </div>
             </div>
 
-            {isEditing ? (
-              <div className="edit-form">
-                {Object.keys(editDraft).map((key) => (
-                  <label className="edit-field" key={key}>
-                    <span className="edit-field-label">{key}</span>
-                    <input
-                      className="edit-input"
-                      value={editDraft[key]}
-                      onChange={(e) => setEditDraft((prev) => ({ ...prev, [key]: e.target.value }))}
-                    />
-                  </label>
+            <p className="card-summary">
+              {o.initiativeCount} initiative{o.initiativeCount === 1 ? "" : "s"} &middot; {needsAttention} needs
+              attention
+            </p>
+
+            {activeStatuses.length > 0 ? (
+              <div className="chip-row">
+                {activeStatuses.map((status) => (
+                  <span className={chipClass(status)} key={status}>
+                    {o.taskCounts[status]} {STATUS_LABEL[status]}
+                  </span>
                 ))}
               </div>
             ) : (
-              <p className="card-diff">{formatDiff(s.proposedDiff)}</p>
+              <p className="muted">No tasks yet.</p>
             )}
 
-            <p className="card-reasoning">{s.reasoning}</p>
-
-            <p className="card-source">
-              Source: {s.source.type} &middot; received {new Date(s.source.receivedAt).toLocaleString()} &middot;
-              confidence {Math.round(s.confidence * 100)}%
-            </p>
-
-            <div className="card-actions">
-              {isEditing ? (
-                <>
-                  <button className="decision-btn save" disabled={savingEdit} onClick={() => saveEdit(s.id)}>
-                    Save
-                  </button>
-                  <button className="decision-btn cancel" disabled={savingEdit} onClick={cancelEdit}>
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    className="decision-btn approve"
-                    disabled={pendingActionId === s.id}
-                    onClick={() => handleDecision(s.id, "approve")}
-                  >
-                    Approve
-                  </button>
-                  <button
-                    className="decision-btn reject"
-                    disabled={pendingActionId === s.id}
-                    onClick={() => handleDecision(s.id, "reject")}
-                  >
-                    Reject
-                  </button>
-                  <button
-                    className="decision-btn edit"
-                    disabled={pendingActionId === s.id}
-                    onClick={() => startEdit(s)}
-                  >
-                    Edit
-                  </button>
-                </>
-              )}
-            </div>
+            {completedPct !== null && (
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${completedPct}%` }} />
+              </div>
+            )}
           </article>
         );
       })}

@@ -19,6 +19,22 @@ body {
   padding: 24px 16px 64px;
 }
 
+.nav {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
+.nav a {
+  color: #3730a3;
+  text-decoration: none;
+}
+
+.nav a:hover {
+  text-decoration: underline;
+}
+
 .header {
   display: flex;
   align-items: baseline;
@@ -152,6 +168,60 @@ body {
 .badge-edited {
   background: #fff4e0;
   color: #8a5a00;
+}
+
+.badge-priority-critical {
+  background: #fdecea;
+  color: #a33;
+}
+
+.badge-priority-high {
+  background: #fff4e0;
+  color: #8a5a00;
+}
+
+.card-summary {
+  font-size: 13px;
+  color: #555;
+  margin: 4px 0 10px;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.chip {
+  font-size: 12px;
+  background: #f0f0ee;
+  color: #444;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.chip-attention {
+  background: #fdecea;
+  color: #a33;
+}
+
+.chip-done {
+  background: #eaf5ec;
+  color: #2b7a3b;
+}
+
+.progress-track {
+  background: #eee;
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  background: #2b7a3b;
+  height: 100%;
 }
 
 .card-title {
