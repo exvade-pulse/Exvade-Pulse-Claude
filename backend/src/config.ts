@@ -20,6 +20,11 @@ export const config = {
     "",
   sessionSecret: process.env.SESSION_SECRET ?? "dev-insecure-session-secret-change-me",
   frontendUrl: process.env.FRONTEND_URL ?? "http://localhost:3000",
+  // The backend's own publicly reachable base URL -- used only to compose the
+  // full webhook URL shown to an admin after generating an integration token
+  // (e.g. https://api.example.com/api/public/webhooks/circleback?token=...).
+  // Nothing else depends on this, so it's safe to default for local dev.
+  backendUrl: process.env.BACKEND_URL ?? "http://localhost:3001",
   allowedDomain: process.env.ALLOWED_GOOGLE_DOMAIN ?? "exvadebio.com",
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID ?? "",

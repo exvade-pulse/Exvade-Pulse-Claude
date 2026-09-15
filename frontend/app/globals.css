@@ -347,3 +347,27 @@ body {
   margin-bottom: 16px;
   font-size: 14px;
 }
+
+.token-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f4f4f4;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 13px;
+  word-break: break-all;
+  margin: 6px 0;
+}
+
+.token-warning {
+  background: #fff8e1;
+  color: #6b5300;
+  border: 1px solid #f0d98c;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 10px 0;
+  font-size: 14px;
+}

@@ -14,6 +14,7 @@ const TABLES = [
   schema.auditLog,
   schema.decisions,
   schema.suggestions,
+  schema.webhookIntegrations,
   schema.sources,
   schema.tasks,
   schema.projects,

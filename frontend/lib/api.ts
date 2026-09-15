@@ -221,6 +221,46 @@ export async function changeUserRole(email: string, role: UserRole): Promise<voi
   }
 }
 
+export type IntegrationType = "circleback";
+
+export interface IntegrationStatus {
+  type: IntegrationType;
+  configured: boolean;
+  createdAt: string | null;
+  lastReceivedAt: string | null;
+}
+
+export interface GeneratedIntegrationToken {
+  type: IntegrationType;
+  token: string;
+  webhookUrl: string;
+  rotated: boolean;
+  createdAt: string;
+  lastReceivedAt: string | null;
+}
+
+export async function fetchIntegrations(): Promise<IntegrationStatus[] | "forbidden"> {
+  const res = await fetch(`${API_URL}/api/integrations`, { credentials: "include" });
+  if (res.status === 403) return "forbidden";
+  if (!res.ok) {
+    throw new Error(`Failed to load integrations (${res.status})`);
+  }
+  const body = (await res.json()) as { integrations: IntegrationStatus[] };
+  return body.integrations;
+}
+
+export async function generateIntegrationToken(type: IntegrationType): Promise<GeneratedIntegrationToken> {
+  const res = await fetch(`${API_URL}/api/integrations/${type}/token`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to generate token");
+  }
+  return res.json();
+}
+
 export async function revokeUser(email: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}`, {
     method: "DELETE",

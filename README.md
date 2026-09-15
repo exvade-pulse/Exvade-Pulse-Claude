@@ -110,7 +110,7 @@ Built:
   (typecheck/test/build gate before merge).
 - The full data model: `organizations`, `users`, `authorized_users`, `objectives`,
   `initiatives`, `projects`, `tasks`, `sources`, `suggestions`, `decisions`,
-  `audit_log`.
+  `audit_log`, `webhook_integrations`.
 - Google OAuth restricted to one Workspace domain, JWT session cookie.
 - An allowlist + roles gate on top of that OAuth flow, replacing "any account on
   the domain auto-provisions": `authorized_users`
@@ -228,10 +228,76 @@ Built:
   inline, dropping it out of the open list. Not wired into the Claude interpretation
   pipeline yet — this pass is a human filling out a form, not AI-generated decisions.
 
+- Real Circleback (meeting-transcript) ingestion via a signed, per-org webhook
+  token, feeding the existing interpretation pipeline for real:
+  - `webhook_integrations` ([backend/src/db/schema.ts](backend/src/db/schema.ts))
+    is one row per `(organizationId, integration_type)` — `integration_type` is
+    a separate enum from `source_type`, currently just `circleback`, deliberately
+    easy to extend for a second transcript/communication source later without a
+    rewrite. Only a sha256 hash of the token is stored (`tokenHash`); the raw
+    token is returned exactly once, at generation time, and is not retrievable
+    again. Rotating a token updates the row in place rather than creating a new
+    one, so a stale row never lingers as a second valid credential.
+  - Admin token management —
+    [backend/src/integrations/manage.ts](backend/src/integrations/manage.ts) /
+    [backend/src/routes/integrations.ts](backend/src/routes/integrations.ts) —
+    behind `requireAuth` + `requireAdmin`, org-scoped, mirroring
+    `users/manage.ts`'s thin-route/logic-module split and `audit_log` writes:
+    `GET /api/integrations` (status per type: configured, `lastReceivedAt`,
+    `createdAt` — never the token) and `POST /api/integrations/:type/token`
+    (generate or rotate; returns the raw token and the full composed webhook
+    URL once). The webhook URL is built from a new `BACKEND_URL` config value
+    ([backend/src/config.ts](backend/src/config.ts), defaulting to
+    `http://localhost:3001` — optional, nothing else depends on it).
+  - The public ingestion endpoint —
+    [backend/src/routes/webhooks.ts](backend/src/routes/webhooks.ts) →
+    [backend/src/integrations/webhookIngest.ts](backend/src/integrations/webhookIngest.ts) —
+    `POST /api/public/webhooks/circleback?token=...` is deliberately **not**
+    behind `requireAuth`: Circleback has no Exvade Pulse user session, so a
+    per-org token in the query string is the only credential. A missing or
+    unrecognized token 401s (identically either way, so nothing about *why* a
+    token failed is leaked) before anything is looked at, let alone ingested.
+    A valid token resolves straight to an organization (the token itself picks
+    the org — Circleback never sends one). Payload field names are guessed
+    defensively across plausible variants (`title`/`name`/`meetingTitle`,
+    `id`/`meetingId`/`externalId`, `occurredAt`/`date`/`startTime`, etc. — see
+    [backend/src/integrations/circlebackPayload.ts](backend/src/integrations/circlebackPayload.ts))
+    to populate the `sources` row's title/external id/received-at, falling back
+    to a hash of the raw body for the id if nothing recognizable is present —
+    **we do not have real Circleback payload docs for this**, so these field
+    names are a best guess and should be verified against a real payload the
+    first time a live Circleback automation is connected. The full raw JSON
+    body is always stored verbatim as `sources.rawBody`, regardless of what the
+    field-name guessing finds, so nothing is ever lost to a parsing miss. From
+    there it's a straight handoff into the existing, source-type-agnostic
+    `runInterpretationPipeline` ([backend/src/interpretation/pipeline.ts](backend/src/interpretation/pipeline.ts)) —
+    no pipeline changes were needed. Runs synchronously in-request (no job
+    queue exists in this codebase yet); a comment in `webhookIngest.ts` flags
+    this as the thing to change if/when ingestion volume grows. A repeat
+    delivery of the same `(organizationId, externalId)` — Circleback retries on
+    a non-200 response or timeout — hits the `sources` table's existing unique
+    index and is caught and answered 200 idempotently rather than erroring; a
+    genuine downstream failure (e.g. the Claude API call) leaves the already-
+    inserted `sources` row in place and answers 5xx so Circleback retries.
+  - Frontend: [frontend/app/integrations/page.tsx](frontend/app/integrations/page.tsx)
+    (admin-only, linked from the nav like `/users`) shows each integration
+    type's status and last-received time, a Generate/Rotate token button
+    (rotating asks for confirmation first, since it invalidates the existing
+    token), and on generation, the full webhook URL with a copy-to-clipboard
+    button and a one-time-shown-token warning.
+  - **To connect a real Circleback account:** an admin generates a token on
+    `/integrations`, copies the webhook URL, and pastes it into a Circleback
+    automation configured to send meeting notes and action items (transcript
+    optional) — no code changes needed. Given the lack of real payload docs,
+    the first live delivery is the point to double-check the field-name
+    guessing above actually matches.
+
 Explicitly **not** built yet (next sessions):
-- Real Gmail/Circleback ingestion (the pipeline exists and is exercised via
+- Real Gmail ingestion (the pipeline exists and is exercised via
   `npm run interpret:real -w backend`, but nothing yet calls it from a real
-  Gmail/Circleback source automatically).
+  Gmail source automatically).
+- An async job queue for webhook ingestion (Circleback webhooks currently run
+  the interpretation pipeline synchronously in-request).
 - Drill-down from the dashboard into an objective's initiatives/projects/tasks.
 - Styling polish beyond "readable and scannable."
 

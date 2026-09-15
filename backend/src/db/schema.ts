@@ -65,6 +65,12 @@ export const decisionStatusEnum = pgEnum("decision_status", ["open", "decided"])
 export const userRoleEnum = pgEnum("user_role", ["member", "admin"]);
 export type UserRole = (typeof userRoleEnum.enumValues)[number];
 
+// Kept distinct from sourceTypeEnum: a webhook integration is a configured
+// credential (one per org per type), while source_type also covers ingestion
+// paths (like gmail) that may never get a webhook_integrations row at all.
+export const integrationTypeEnum = pgEnum("integration_type", ["circleback"]);
+export type IntegrationType = (typeof integrationTypeEnum.enumValues)[number];
+
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
@@ -183,6 +189,25 @@ export const sources = pgTable(
   (table) => [uniqueIndex("sources_org_external_id_unique").on(table.organizationId, table.externalId)],
 );
 
+// One row per (organizationId, type): rotating a token updates this row in
+// place rather than creating a new one, so a stale row never lingers as a
+// second valid credential. Only tokenHash is stored -- the raw token is
+// returned once, at generation time, and never persisted or retrievable again.
+export const webhookIntegrations = pgTable(
+  "webhook_integrations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    type: integrationTypeEnum("type").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastReceivedAt: timestamp("last_received_at", { withTimezone: true }),
+  },
+  (table) => [uniqueIndex("webhook_integrations_org_type_unique").on(table.organizationId, table.type)],
+);
+
 export const suggestions = pgTable("suggestions", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
@@ -259,6 +284,7 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   users: many(users),
   objectives: many(objectives),
   authorizedUsers: many(authorizedUsers),
+  webhookIntegrations: many(webhookIntegrations),
 }));
 
 export const authorizedUsersRelations = relations(authorizedUsers, ({ one }) => ({
