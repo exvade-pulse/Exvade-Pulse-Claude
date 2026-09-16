@@ -532,13 +532,35 @@ export interface ActivityEntry {
   actorEmail: string | null;
 }
 
-export async function fetchActivity(): Promise<ActivityEntry[]> {
+export interface ActivitySummaryDecision {
+  id: string;
+  title: string;
+}
+
+// Structured counts, not a pre-formatted sentence -- wording is a frontend
+// concern (see activity/page.tsx's buildSummarySentence), this is just data.
+export interface ActivitySummary {
+  statusMoves: number;
+  completions: number;
+  newDecisions: number;
+  openDecisionsCount: number;
+  mostUrgentOpenDecision: ActivitySummaryDecision | null;
+}
+
+export interface ActivityResponse {
+  entries: ActivityEntry[];
+  // The caller's lastActivityViewAt as it stood BEFORE this request (which
+  // itself just advanced it to now) -- null on a user's first-ever visit.
+  previousLastActivityViewAt: string | null;
+  summary: ActivitySummary;
+}
+
+export async function fetchActivity(): Promise<ActivityResponse> {
   const res = await fetch(`${API_URL}/api/activity`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to load activity (${res.status})`);
   }
-  const body = (await res.json()) as { entries: ActivityEntry[] };
-  return body.entries;
+  return res.json();
 }
 
 export interface CompanyMapTask {

@@ -94,6 +94,11 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Per-user, not per-org: the Activity page's "what changed since your last
+  // visit" is deliberately scoped to each viewer's own last look, so two
+  // users in the same org watching the same audit_log see different "new
+  // since" windows. Null until their first-ever visit.
+  lastActivityViewAt: timestamp("last_activity_view_at", { withTimezone: true }),
 });
 
 // The allowlist: someone can be authorized before they've ever signed in (no

@@ -544,24 +544,38 @@ Built:
     changes needed. Given the lack of real payload docs, the first live
     delivery is the point to double-check the field-name guessing above
     actually matches.
-- An activity feed, making the `audit_log` table (written by nearly every
-  mutating action — suggestion review, decision review, user management,
-  integration token management) actually viewable instead of write-only:
-  `GET /api/activity` ([backend/src/routes/activity.ts](backend/src/routes/activity.ts)),
+- A "What changed" activity feed, making the `audit_log` table (written by
+  nearly every mutating action — suggestion review, decision review, user
+  management, integration token management) actually viewable instead of
+  write-only, and framed around each user's own last visit rather than just a
+  flat chronological dump: `GET /api/activity`
+  ([backend/src/routes/activity.ts](backend/src/routes/activity.ts)),
   `requireAuth`-gated and org-scoped, left-joins `users` on `actorId` for the
   actor's name/email (handling a null `actorId` gracefully rather than
   assuming every write site sets one) and returns the most recent 100 entries
-  newest-first — no pagination yet, a fine limitation to leave for later.
-  The frontend ([frontend/app/activity/page.tsx](frontend/app/activity/page.tsx)),
-  linked from the nav for everyone (a read-only audit trail, not a privileged
-  action, unlike `/users`/`/integrations`), renders a row-based list rather
-  than one card per entry — lighter-weight for a feed that can run to 100
-  rows — showing the actor (name, falling back to email, falling back to
-  "System"), a small formatter mapping each known `action` string to plain
-  English (`suggestion.approved` → "approved a suggestion", with a generic
-  fallback for anything unmapped), a "View [entityType]" link into the
-  Company Map detail pages when `entityType` is one of
-  objective/initiative/project/task, and a relative timestamp.
+  newest-first — no pagination yet, a fine limitation to leave for later. A
+  nullable `users.lastActivityViewAt` timestamp (per-user, not per-org, since
+  two people watching the same org's feed each have their own "since I last
+  looked") is read before this request and written to `now()` after, so the
+  response can report the caller's *previous* visit time alongside a
+  deterministic, templated executive summary computed from real counts —
+  status moves and completions (`suggestion.approved` entries whose
+  `details.appliedFields` includes a `status` key), new decisions
+  (`decision.created` entries) since that previous visit, plus the
+  present-tense count of currently-open decisions and the single most urgent
+  one (same soonest-due-date-first ordering as `GET /api/decisions`) — no
+  Claude call involved. The frontend
+  ([frontend/app/activity/page.tsx](frontend/app/activity/page.tsx)), linked
+  from the nav for everyone (a read-only audit trail, not a privileged action,
+  unlike `/users`/`/integrations`), renders that summary as a sentence above a
+  "Last visit [relative time]" subline, then the unchanged row-based list
+  below it — lighter-weight for a feed that can run to 100 rows — showing the
+  actor (name, falling back to email, falling back to "System"), a small
+  formatter mapping each known `action` string to plain English
+  (`suggestion.approved` → "approved a suggestion", with a generic fallback
+  for anything unmapped), a "View [entityType]" link into the Company Map
+  detail pages when `entityType` is one of objective/initiative/project/task,
+  and a relative timestamp.
 - Confidence tiering and a reviewed-history view on `/review`, closing two gaps
   in the review queue: every suggestion carried a `confidence` score but the
   queue rendered one flat list, and an approved/rejected suggestion vanished

@@ -453,6 +453,11 @@ body {
   margin: 6px 0;
 }
 
+.activity-summary {
+  font-size: 14px;
+  color: #333;
+}
+
 .activity-list {
   padding: 0;
 }

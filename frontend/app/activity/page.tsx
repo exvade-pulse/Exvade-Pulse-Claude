@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { API_URL, fetchActivity, fetchCurrentUser, type ActivityEntry, type SessionUser } from "../../lib/api";
+import {
+  API_URL,
+  fetchActivity,
+  fetchCurrentUser,
+  type ActivityEntry,
+  type ActivityResponse,
+  type SessionUser,
+} from "../../lib/api";
 import { relativeTime } from "../../lib/time";
 import { Nav } from "../components/Nav";
 
@@ -37,9 +44,41 @@ function actorLabel(entry: ActivityEntry): string {
   return entry.actorName ?? entry.actorEmail ?? "System";
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+// Templated from real counts, not an LLM call -- see backend/src/routes/activity.ts's
+// summary computation. Handles the zero/singular/plural cases so the sentence never
+// reads "1 status moves" or names a null "most urgent" decision.
+function buildSummarySentence(summary: ActivityResponse["summary"]): string {
+  const { statusMoves, completions, newDecisions, openDecisionsCount, mostUrgentOpenDecision } = summary;
+
+  const nothingSinceLastVisit = statusMoves === 0 && completions === 0 && newDecisions === 0;
+  const nothingNeedsAttention = openDecisionsCount === 0;
+  if (nothingSinceLastVisit && nothingNeedsAttention) {
+    return "Nothing new since your last visit.";
+  }
+
+  const recap = `${plural(statusMoves, "status move")}, ${plural(completions, "completion")}, and ${plural(
+    newDecisions,
+    "new decision",
+  )} were recorded since your last visit.`;
+
+  if (nothingNeedsAttention) {
+    return recap;
+  }
+
+  const attention = `${plural(openDecisionsCount, "decision")} still need${
+    openDecisionsCount === 1 ? "s" : ""
+  } attention${mostUrgentOpenDecision ? ` — the most urgent is '${mostUrgentOpenDecision.title}'.` : "."}`;
+
+  return `${recap} ${attention}`;
+}
+
 export default function ActivityPage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
-  const [entries, setEntries] = useState<ActivityEntry[] | "loading">("loading");
+  const [activity, setActivity] = useState<ActivityResponse | "loading">("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -49,7 +88,7 @@ export default function ActivityPage() {
   useEffect(() => {
     if (user && user !== "loading") {
       fetchActivity()
-        .then(setEntries)
+        .then(setActivity)
         .catch((err) => setLoadError(err.message));
     }
   }, [user]);
@@ -78,17 +117,28 @@ export default function ActivityPage() {
     );
   }
 
+  const entries = activity === "loading" ? "loading" : activity.entries;
+
   return (
     <main className="page">
       <Nav user={user} />
       <div className="header">
-        <h1>Activity</h1>
-        <span className="muted">{user.email}</span>
+        <h1>What changed</h1>
+        <span className="muted">
+          {activity !== "loading" &&
+            (activity.previousLastActivityViewAt
+              ? `Last visit ${relativeTime(activity.previousLastActivityViewAt)}`
+              : "First visit")}
+        </span>
       </div>
 
       {loadError && <div className="error-banner">{loadError}</div>}
 
-      {entries === "loading" && <p className="muted">Loading&hellip;</p>}
+      {activity === "loading" && <p className="muted">Loading&hellip;</p>}
+
+      {activity !== "loading" && (
+        <p className="card activity-summary">{buildSummarySentence(activity.summary)}</p>
+      )}
 
       {entries !== "loading" && entries.length === 0 && !loadError && (
         <p className="empty-state">No activity yet.</p>
