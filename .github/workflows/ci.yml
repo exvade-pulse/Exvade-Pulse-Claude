@@ -55,3 +55,8 @@ jobs:
 
       - name: Build frontend
         run: npm run build -w frontend
+
+      - name: Build backend Docker image
+        # Validates backend/Dockerfile actually builds -- it was written without
+        # Docker available in the dev environment, so this is its only real check.
+        run: docker build -f backend/Dockerfile -t exvade-pulse-backend:ci .
