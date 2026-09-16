@@ -6,6 +6,7 @@ import {
   InterpretationError,
   INTERPRETATION_MODEL,
   MAX_SUGGESTIONS_PER_SOURCE,
+  SYSTEM_PROMPT,
   type CompanyContext,
 } from "../interpretation/interpret.js";
 import type { ClaudeClient } from "../interpretation/claudeClient.js";
@@ -79,6 +80,27 @@ describe("interpretSource", () => {
     expect(userContent).toContain(taskId);
     expect(userContent).toContain("Rig #3 sensor dropout");
     expect(userContent).toContain(source.subject);
+  });
+
+  it("caches the system prompt with an ephemeral breakpoint, unchanged from SYSTEM_PROMPT", async () => {
+    const capture: { params?: Anthropic.MessageCreateParamsNonStreaming } = {};
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "new_task",
+        targetType: "task",
+        targetId: null,
+        proposedDiff: { projectId: randomUUID(), title: "x" },
+        reasoning: "x",
+        confidence: 0.5,
+      }),
+      capture,
+    );
+
+    await interpretSource(source, emptyContext(), client);
+
+    expect(capture.params?.system).toEqual([
+      { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+    ]);
   });
 
   it("maps a valid update response onto SuggestionDraft and keeps only whitelisted fields", async () => {

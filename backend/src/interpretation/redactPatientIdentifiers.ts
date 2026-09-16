@@ -45,7 +45,7 @@ const REDACT_TOOL: Anthropic.Tool = {
 // discussion that must survive untouched, and over-redacting it would make
 // the tool useless. The prompt is written to bias toward that distinction
 // explicitly rather than just toward "redact anything sensitive-sounding".
-const SYSTEM_PROMPT = `You are a redaction pre-pass for Exvade Pulse, an internal ops tool for a clinical-stage medical device company. You are given one raw piece of ingested content (an email or meeting transcript) that is about to be stored and then fed to an AI interpretation pipeline. Your only job is to remove anything that would let a reader identify a specific patient, before any of that content is persisted or processed further.
+export const SYSTEM_PROMPT = `You are a redaction pre-pass for Exvade Pulse, an internal ops tool for a clinical-stage medical device company. You are given one raw piece of ingested content (an email or meeting transcript) that is about to be stored and then fed to an AI interpretation pipeline. Your only job is to remove anything that would let a reader identify a specific patient, before any of that content is persisted or processed further.
 
 Call the redact_text tool exactly once with the full text, verbatim, except that every patient-identifying span is replaced with the exact literal placeholder "${PATIENT_IDENTIFIER_PLACEHOLDER}".
 
@@ -86,7 +86,9 @@ export async function redactPatientIdentifiers(
       // structured-output call like interpret.ts's -- a long transcript is
       // the expected case here, not the exception.
       max_tokens: 8192,
-      system: SYSTEM_PROMPT,
+      // Static and identical on every call; only the user-supplied text
+      // varies, so only the system prompt is worth caching here.
+      system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
       tool_choice: { type: "tool", name: REDACT_TOOL.name },
       tools: [REDACT_TOOL],
       messages: [{ role: "user", content: text }],

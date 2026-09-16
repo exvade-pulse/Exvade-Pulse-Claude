@@ -119,7 +119,7 @@ function buildContextSection(context: CompanyContext): string {
   ].join("\n\n");
 }
 
-const SYSTEM_PROMPT = `You are the interpretation engine for Exvade Pulse, an internal ops tool for a clinical-stage medical device company. Exvade Pulse ingests operational communications (emails, meeting transcripts) and turns them into proposed changes to a structured hierarchy: Objectives -> Initiatives -> Projects -> Tasks. Every change you propose is reviewed by a human before it takes effect -- you are drafting a suggestion, not making the change yourself.
+export const SYSTEM_PROMPT = `You are the interpretation engine for Exvade Pulse, an internal ops tool for a clinical-stage medical device company. Exvade Pulse ingests operational communications (emails, meeting transcripts) and turns them into proposed changes to a structured hierarchy: Objectives -> Initiatives -> Projects -> Tasks. Every change you propose is reviewed by a human before it takes effect -- you are drafting a suggestion, not making the change yourself.
 
 You will be given the company's current open objectives/initiatives/projects/tasks (each with its real id, title, and status) and one new raw source (an email or transcript excerpt). Decide the most useful change(s) to propose in response to that source, then call the propose_suggestion tool with your answer.
 
@@ -224,7 +224,10 @@ export async function interpretSource(
   const response = await claudeClient.createMessage({
     model: INTERPRETATION_MODEL,
     max_tokens: 4096,
-    system: SYSTEM_PROMPT,
+    // SYSTEM_PROMPT is static and identical on every call; the dynamic
+    // per-call content (company context + document body) lives entirely in
+    // buildUserMessage below and is deliberately left uncached.
+    system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
     tool_choice: { type: "any" },
     tools: [PROPOSE_SUGGESTION_TOOL],
     messages: [{ role: "user", content: buildUserMessage(source, context) }],

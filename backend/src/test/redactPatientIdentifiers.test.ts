@@ -5,6 +5,7 @@ import {
   RedactionError,
   REDACTION_MODEL,
   PATIENT_IDENTIFIER_PLACEHOLDER,
+  SYSTEM_PROMPT,
 } from "../interpretation/redactPatientIdentifiers.js";
 import type { ClaudeClient } from "../interpretation/claudeClient.js";
 
@@ -42,6 +43,16 @@ describe("redactPatientIdentifiers", () => {
 
     expect(lastParams?.model).toBe(REDACTION_MODEL);
     expect(lastParams?.tool_choice).toEqual({ type: "tool", name: "redact_text" });
+  });
+
+  it("caches the system prompt with an ephemeral breakpoint, unchanged from SYSTEM_PROMPT", async () => {
+    const client = stubClient(fakeToolUseMessage({ redactedText: "hello" }));
+
+    await redactPatientIdentifiers("hello", client);
+
+    expect(lastParams?.system).toEqual([
+      { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+    ]);
   });
 
   it("redacts a patient name, DOB, and specific identifying clinical detail while preserving operational text and employee names", async () => {
