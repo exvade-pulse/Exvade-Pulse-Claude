@@ -726,3 +726,27 @@ body {
   padding: 4px 8px 8px 32px;
   margin: 0;
 }
+
+/* Weekly report header: prev/next week navigation plus the date-range label
+   on one side, Copy report on the other -- wraps on narrow viewports rather
+   than the range/buttons ever overlapping. */
+.report-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.report-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.report-range-label {
+  font-size: 13px;
+  color: #444;
+}

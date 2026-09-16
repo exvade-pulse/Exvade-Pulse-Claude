@@ -4,6 +4,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, initiatives, objectives, projects, tasks } from "../db/schema.js";
 import { emptyTaskCounts, type TaskCounts } from "../tasks/rollup.js";
+import { taskParentChainQuery } from "../tasks/parentChain.js";
 
 // Shared by needs-attention's in-memory sort: critical/high/medium/low, an
 // objective-level-only field (see schema.ts's task table -- tasks have no
@@ -102,31 +103,21 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/api/dashboard/needs-attention", async (request, reply) => {
     const organizationId = request.user!.organizationId;
 
-    const rows = await db
-      .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
-        owner: tasks.owner,
-        latestUpdate: tasks.latestUpdate,
-        nextAction: tasks.nextAction,
-        updatedAt: tasks.updatedAt,
-        project: { id: projects.id, title: projects.title },
-        initiative: { id: initiatives.id, title: initiatives.title },
-        objective: { id: objectives.id, title: objectives.title },
-        // Sort-only -- resolved via the same task -> project -> initiative ->
-        // objective chain the parent-chain columns above already join through,
-        // not a second query path. Stripped back out below before sending.
-        objectivePriority: objectives.priority,
-      })
-      .from(tasks)
-      .innerJoin(projects, and(eq(projects.id, tasks.projectId), eq(projects.organizationId, organizationId)))
-      .innerJoin(
-        initiatives,
-        and(eq(initiatives.id, projects.initiativeId), eq(initiatives.organizationId, organizationId)),
-      )
-      .innerJoin(objectives, and(eq(objectives.id, initiatives.objectiveId), eq(objectives.organizationId, organizationId)))
-      .where(and(eq(tasks.organizationId, organizationId), inArray(tasks.status, ["blocked", "needs_attention"])));
+    const rows = await taskParentChainQuery(db, organizationId, inArray(tasks.status, ["blocked", "needs_attention"]));
+
+    // Sort-only priority lookup: a batched query keyed by objective id rather
+    // than pulling objectives.priority into the join above, so
+    // taskParentChainQuery's shared shape doesn't need a sort-only column
+    // bolted on for this one caller.
+    const objectiveIds = [...new Set(rows.map((row) => row.objective.id))];
+    const priorityRows =
+      objectiveIds.length === 0
+        ? []
+        : await db
+            .select({ id: objectives.id, priority: objectives.priority })
+            .from(objectives)
+            .where(and(eq(objectives.organizationId, organizationId), inArray(objectives.id, objectiveIds)));
+    const priorityByObjective = new Map(priorityRows.map((row) => [row.id, row.priority]));
 
     // Three-factor sort, done in memory rather than as a SQL ORDER BY: a
     // CASE-ranked priority pulled across a joined parent chain is more SQL
@@ -146,7 +137,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
       const severityDiff = severityRank[a.status] - severityRank[b.status];
       if (severityDiff !== 0) return severityDiff;
 
-      const priorityDiff = PRIORITY_RANK[a.objectivePriority] - PRIORITY_RANK[b.objectivePriority];
+      const priorityDiff =
+        PRIORITY_RANK[priorityByObjective.get(a.objective.id)!] - PRIORITY_RANK[priorityByObjective.get(b.objective.id)!];
       if (priorityDiff !== 0) return priorityDiff;
 
       return a.updatedAt.getTime() - b.updatedAt.getTime();
@@ -172,7 +164,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       openBlockingDecisions.map((d) => [d.relatedTaskId as string, { id: d.id, title: d.title }]),
     );
 
-    const result = rows.map(({ objectivePriority, ...task }) => ({
+    const result = rows.map((task) => ({
       ...task,
       blockingDecision: blockingDecisionByTaskId.get(task.id) ?? null,
     }));
@@ -188,27 +180,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/api/dashboard/recent-progress", async (request, reply) => {
     const organizationId = request.user!.organizationId;
 
-    const rows = await db
-      .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
-        owner: tasks.owner,
-        latestUpdate: tasks.latestUpdate,
-        nextAction: tasks.nextAction,
-        updatedAt: tasks.updatedAt,
-        project: { id: projects.id, title: projects.title },
-        initiative: { id: initiatives.id, title: initiatives.title },
-        objective: { id: objectives.id, title: objectives.title },
-      })
-      .from(tasks)
-      .innerJoin(projects, and(eq(projects.id, tasks.projectId), eq(projects.organizationId, organizationId)))
-      .innerJoin(
-        initiatives,
-        and(eq(initiatives.id, projects.initiativeId), eq(initiatives.organizationId, organizationId)),
-      )
-      .innerJoin(objectives, and(eq(objectives.id, initiatives.objectiveId), eq(objectives.organizationId, organizationId)))
-      .where(and(eq(tasks.organizationId, organizationId), inArray(tasks.status, ["completed", "resolved"])))
+    const rows = await taskParentChainQuery(db, organizationId, inArray(tasks.status, ["completed", "resolved"]))
       .orderBy(desc(tasks.updatedAt))
       .limit(10);
 

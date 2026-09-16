@@ -12,6 +12,7 @@ import { integrationRoutes } from "./routes/integrations.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { activityRoutes } from "./routes/activity.js";
 import { sourceRoutes } from "./routes/sources.js";
+import { reportRoutes } from "./routes/reports.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -34,6 +35,7 @@ export async function buildApp() {
   await app.register(webhookRoutes);
   await app.register(activityRoutes);
   await app.register(sourceRoutes);
+  await app.register(reportRoutes);
 
   return app;
 }

@@ -593,6 +593,72 @@ export async function fetchCompanyMap(): Promise<CompanyMapResponse> {
   return res.json();
 }
 
+export interface WeeklyReportDecision {
+  id: string;
+  title: string;
+  decider: string;
+  dueDate: string | null;
+}
+
+export interface WeeklyReportParentChainEntry {
+  id: string;
+  title: string;
+}
+
+export interface WeeklyReportBlocker {
+  id: string;
+  title: string;
+  owner: string | null;
+  project: WeeklyReportParentChainEntry;
+  initiative: WeeklyReportParentChainEntry;
+  objective: WeeklyReportParentChainEntry;
+}
+
+export interface WeeklyReportTask {
+  id: string;
+  title: string;
+  owner: string | null;
+  latestUpdate: string | null;
+  nextAction: string | null;
+  sourceCount: number;
+}
+
+export interface WeeklyReportWorkstream {
+  objectiveId: string;
+  objectiveTitle: string;
+  tasks: WeeklyReportTask[];
+}
+
+export interface WeeklyReportSource {
+  id: string;
+  type: string;
+  externalId: string;
+  receivedAt: string;
+}
+
+export interface WeeklyReport {
+  weekStart: string;
+  weekEnd: string;
+  decisionsNeeded: WeeklyReportDecision[];
+  blockers: WeeklyReportBlocker[];
+  workstreams: WeeklyReportWorkstream[];
+  sources: WeeklyReportSource[];
+  taskCount: number;
+}
+
+// weekOf is any date (YYYY-MM-DD) inside the target week -- the backend
+// resolves it to that week's Monday-Sunday range (see
+// backend/src/routes/reports.ts's computeWeekRange). Omitted, it defaults to
+// the current week.
+export async function fetchWeeklyReport(weekOf?: string): Promise<WeeklyReport> {
+  const url = weekOf ? `${API_URL}/api/reports/weekly?weekOf=${weekOf}` : `${API_URL}/api/reports/weekly`;
+  const res = await fetch(url, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load weekly report (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function revokeUser(email: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}`, {
     method: "DELETE",

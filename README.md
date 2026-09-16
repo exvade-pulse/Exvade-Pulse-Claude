@@ -679,6 +679,44 @@ Built:
   (`.owner-line` in `frontend/app/globals.css`) on the dashboard, every
   level of the company-map tree, and all four detail pages -- omitted
   entirely, not shown blank, when unset.
+- A Weekly Report page, a deterministic, structured roll-up of one week's
+  real data -- deliberately **not** an AI-generated summary (no Claude call,
+  no narrative paragraph; every figure is a direct read or an in-memory
+  group/count of rows that already exist, credits or no credits). `GET
+  /api/reports/weekly?weekOf=YYYY-MM-DD`
+  ([backend/src/routes/reports.ts](backend/src/routes/reports.ts)),
+  `requireAuth`-gated and org-scoped, resolves `weekOf` (any date inside the
+  target week, defaulting to the current week) to a Monday-start week
+  computed in UTC as the half-open range `[weekStart, weekStart + 7d)` -- a
+  task updated at exactly the following Monday belongs to next week, not
+  this one, tested at both edges. The response carries `weekStart`/`weekEnd`
+  (display dates, Monday/Sunday), `decisionsNeeded` (every open decision,
+  current-state rather than date-filtered, same shape/ordering as `GET
+  /api/decisions`), `blockers` (every currently blocked task org-wide with
+  its full parent chain, also current-state), `workstreams` (tasks whose
+  `updatedAt` actually falls inside the week, grouped by the objective they
+  roll up to -- only objectives with at least one in-range task appear, only
+  in-range tasks are listed), a `sources` appendix, and a `taskCount`. The
+  traceability chain for `workstreams`/`sources` walks from a week-updated
+  task to the approved suggestion(s) that produced the change
+  (`suggestions.targetType='task' AND targetId=<task> AND status='approved'
+  AND reviewedAt` inside the same week) to that suggestion's source, so every
+  task row's `sourceCount` and the appendix's source list are both real
+  citations, not every source in the org. The task -> project -> initiative
+  -> objective join chain (previously written twice, in dashboard.ts's
+  needs-attention and recent-progress) is now shared via
+  [backend/src/tasks/parentChain.ts](backend/src/tasks/parentChain.ts)'s
+  `taskParentChainQuery`, used by both those existing routes and by this
+  one's blockers/workstream queries, rather than becoming a third and fourth
+  copy. The frontend
+  ([frontend/app/reports/weekly/page.tsx](frontend/app/reports/weekly/page.tsx),
+  linked from the nav as "Weekly Report") renders the header (date range,
+  task count, Prev/Next week buttons that just adjust `weekOf` and refetch)
+  followed by Decisions Needed, Blockers, one card per workstream, and the
+  Sources appendix, each with a terse "None." empty state; a "Copy report"
+  button builds a plain-text (not HTML) rendering of the already-fetched JSON
+  client-side and copies it via `navigator.clipboard.writeText`, with a
+  transient "Copied" label on the button itself rather than a toast.
 
 Explicitly **not** built yet (next sessions):
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via

@@ -8,6 +8,7 @@ export function Nav({ user }: { user?: SessionUser | null }) {
       <Link href="/company-map">Company Map</Link>
       <Link href="/review">Review</Link>
       <Link href="/decisions">Decisions</Link>
+      <Link href="/reports/weekly">Weekly Report</Link>
       <Link href="/activity">Activity</Link>
       {user?.role === "admin" && <Link href="/users">Users</Link>}
       {user?.role === "admin" && <Link href="/integrations">Integrations</Link>}
