@@ -601,6 +601,27 @@ Built:
   here via `router.push`. Results render grouped by type with the same
   card/badge styling as the rest of the app, each linking into its real
   detail page (decisions link to `/decisions`, which has no per-id route yet).
+- A manual "Add update" entry point on `/review`, for typing a note directly
+  instead of routing it through email/Circleback/a document. It is not a
+  shortcut: `POST /api/sources/manual`
+  ([backend/src/routes/sources.ts](backend/src/routes/sources.ts)),
+  `requireAuth`-gated (any authenticated user, not admin-only — this is
+  everyday operational logging), feeds the note through the *exact same*
+  `runInterpretationPipeline` every other source uses — redaction, then the
+  noise filter, then interpretation — rather than writing a suggestion
+  straight from the typed text. There is no external delivery to dedup
+  against the way a webhook has an `externalId`, so each submission gets its
+  own `randomUUID()`; resubmitting the same words is a legitimate repeat
+  note, not a retry. A new `sourceTypeEnum` value, `"manual"`
+  ([backend/drizzle/0009_clumsy_reaper.sql](backend/drizzle/0009_clumsy_reaper.sql)),
+  distinguishes these in the audit trail from gmail/circleback/document
+  sources. The frontend form lives beside the suggestion queue itself
+  ([frontend/app/review/page.tsx](frontend/app/review/page.tsx)) rather than
+  on its own page, since the note's own resulting suggestion (if any) lands
+  in that same queue — submitting reports back either "N suggestions now
+  pending review below" or, honestly, "nothing operational was found in it"
+  when the noise filter (which still fails open, same as every other source)
+  screens it out.
 - Confidence tiering and a reviewed-history view on `/review`, closing two gaps
   in the review queue: every suggestion carried a `confidence` score but the
   queue rendered one flat list, and an approved/rejected suggestion vanished

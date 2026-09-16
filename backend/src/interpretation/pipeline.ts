@@ -11,7 +11,7 @@ import {
 import { getClaudeClient, type ClaudeClient } from "./claudeClient.js";
 
 export interface RawIncomingSource {
-  type: "gmail" | "circleback" | "document";
+  type: "gmail" | "circleback" | "document" | "manual";
   externalId: string;
   subject: string;
   from: string;

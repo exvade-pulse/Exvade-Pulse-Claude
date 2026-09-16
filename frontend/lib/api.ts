@@ -688,6 +688,30 @@ export async function fetchWeeklyReport(weekOf?: string): Promise<WeeklyReport> 
   return res.json();
 }
 
+export interface ManualUpdateResult {
+  sourceId: string;
+  suggestionIds: string[];
+  skippedAsNoise: boolean;
+}
+
+// Feeds a typed note through the exact same redaction -> noise-filter ->
+// interpretation pipeline as email/Circleback/document ingestion (see
+// backend/src/routes/sources.ts) -- a direct-entry alternative to those, not
+// a shortcut that skips review.
+export async function submitManualUpdate(note: string): Promise<ManualUpdateResult> {
+  const res = await fetch(`${API_URL}/api/sources/manual`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to submit update");
+  }
+  return res.json();
+}
+
 export interface SearchParentChainEntry {
   id: string;
   title: string;

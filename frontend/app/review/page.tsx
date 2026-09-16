@@ -8,6 +8,7 @@ import {
   fetchCurrentUser,
   fetchPendingSuggestions,
   fetchSuggestionsByStatus,
+  submitManualUpdate,
   type SessionUser,
   type Suggestion,
 } from "../../lib/api";
@@ -60,6 +61,12 @@ export default function ReviewPage() {
   const [editDraft, setEditDraft] = useState<Record<string, string>>({});
   const [savingEdit, setSavingEdit] = useState(false);
 
+  const [showAddUpdate, setShowAddUpdate] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [submittingNote, setSubmittingNote] = useState(false);
+  const [noteResult, setNoteResult] = useState<string | null>(null);
+  const [noteError, setNoteError] = useState<string | null>(null);
+
   useEffect(() => {
     fetchCurrentUser().then(setUser);
   }, []);
@@ -70,6 +77,7 @@ export default function ReviewPage() {
       setActionError(null);
       setEditingId(null);
       setEditDraft({});
+      setNoteResult(null);
       const load = tab === "pending" ? fetchPendingSuggestions() : fetchSuggestionsByStatus(tab);
       load.then(setSuggestions).catch((err) => setLoadError(err.message));
     }
@@ -116,6 +124,34 @@ export default function ReviewPage() {
       setActionError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setSavingEdit(false);
+    }
+  }
+
+  async function handleSubmitNote(e: React.FormEvent) {
+    e.preventDefault();
+    if (!noteDraft.trim()) {
+      setNoteError("Note text is required.");
+      return;
+    }
+    setSubmittingNote(true);
+    setNoteError(null);
+    setNoteResult(null);
+    try {
+      const result = await submitManualUpdate(noteDraft);
+      setNoteDraft("");
+      setShowAddUpdate(false);
+      setNoteResult(
+        result.skippedAsNoise
+          ? "Submitted, but nothing operational was found in it -- no suggestion was created."
+          : `Submitted. ${result.suggestionIds.length} suggestion${result.suggestionIds.length === 1 ? "" : "s"} now pending review below.`,
+      );
+      if (tab === "pending" && !result.skippedAsNoise) {
+        fetchPendingSuggestions().then(setSuggestions).catch((err) => setLoadError(err.message));
+      }
+    } catch (err) {
+      setNoteError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setSubmittingNote(false);
     }
   }
 
@@ -251,6 +287,43 @@ export default function ReviewPage() {
         <h1>Suggestions</h1>
         <span className="muted">{user.email}</span>
       </div>
+
+      <div className="card-actions" style={{ marginBottom: 16 }}>
+        <button
+          className="decision-btn"
+          onClick={() => {
+            setShowAddUpdate((v) => !v);
+            setNoteError(null);
+          }}
+        >
+          {showAddUpdate ? "Cancel" : "Add update"}
+        </button>
+      </div>
+
+      {showAddUpdate && (
+        <form className="card edit-form" onSubmit={handleSubmitNote}>
+          <label className="edit-field">
+            <span className="edit-field-label">
+              Note (goes through the same redaction, noise-filter, and interpretation pass as email/Circleback)
+            </span>
+            <textarea
+              className="edit-input"
+              rows={5}
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              placeholder="e.g. Vendor confirmed the replacement sensor harness ships Friday. Need someone to update the ops team once it arrives."
+            />
+          </label>
+          {noteError && <div className="error-banner">{noteError}</div>}
+          <div className="card-actions">
+            <button className="decision-btn save" type="submit" disabled={submittingNote}>
+              {submittingNote ? "Submitting…" : "Submit"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {noteResult && <p className="card activity-summary">{noteResult}</p>}
 
       <div className="tab-row">
         {(Object.keys(TAB_LABEL) as ReviewTab[]).map((t) => (
