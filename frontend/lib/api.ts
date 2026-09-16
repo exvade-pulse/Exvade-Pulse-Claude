@@ -688,6 +688,69 @@ export async function fetchWeeklyReport(weekOf?: string): Promise<WeeklyReport> 
   return res.json();
 }
 
+export interface SearchParentChainEntry {
+  id: string;
+  title: string;
+}
+
+export interface SearchObjectiveResult {
+  id: string;
+  title: string;
+  status: StrategyStatus;
+  owner: string | null;
+}
+
+export interface SearchInitiativeResult {
+  id: string;
+  title: string;
+  status: StrategyStatus;
+  owner: string | null;
+  objective: SearchParentChainEntry;
+}
+
+export interface SearchProjectResult {
+  id: string;
+  title: string;
+  status: StrategyStatus;
+  owner: string | null;
+  initiative: SearchParentChainEntry;
+}
+
+export interface SearchTaskResult {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  owner: string | null;
+  latestUpdate: string | null;
+  nextAction: string | null;
+  project: SearchParentChainEntry;
+  initiative: SearchParentChainEntry;
+  objective: SearchParentChainEntry;
+}
+
+export interface SearchDecisionResult {
+  id: string;
+  title: string;
+  status: "open" | "decided";
+  decider: string;
+}
+
+export interface SearchResponse {
+  objectives: SearchObjectiveResult[];
+  initiatives: SearchInitiativeResult[];
+  projects: SearchProjectResult[];
+  tasks: SearchTaskResult[];
+  decisions: SearchDecisionResult[];
+}
+
+export async function fetchSearch(q: string): Promise<SearchResponse> {
+  const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(q)}`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Search failed (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function revokeUser(email: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}`, {
     method: "DELETE",

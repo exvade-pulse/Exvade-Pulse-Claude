@@ -582,6 +582,25 @@ Built:
   for anything unmapped), a "View [entityType]" link into the Company Map
   detail pages when `entityType` is one of objective/initiative/project/task,
   and a relative timestamp.
+- A global search bar in the nav, covering the whole company map plus
+  decisions in one place rather than requiring five separate list pages.
+  `GET /api/search` ([backend/src/routes/search.ts](backend/src/routes/search.ts)),
+  `requireAuth`-gated and org-scoped, runs five parallel, capped (8 rows each)
+  `ILIKE '%q%'` queries — objectives/initiatives/projects on title +
+  description, tasks on title + description + `latestUpdate` + `nextAction`
+  (reusing `taskParentChainQuery` for the same breadcrumb shape the dashboard
+  already returns), decisions on title + all three narrative fields — and
+  returns all-empty results for a query under 2 characters rather than
+  scanning on every keystroke. The frontend
+  ([frontend/app/search/page.tsx](frontend/app/search/page.tsx)) is a
+  Suspense-wrapped client page (required for `useSearchParams` under app
+  router prerendering) that debounces its own input 300ms before calling the
+  API and mirrors the URL's `?q=` both ways — typing here updates the URL via
+  `router.replace`, and a query typed into the nav's own search box
+  ([frontend/app/components/Nav.tsx](frontend/app/components/Nav.tsx)) lands
+  here via `router.push`. Results render grouped by type with the same
+  card/badge styling as the rest of the app, each linking into its real
+  detail page (decisions link to `/decisions`, which has no per-id route yet).
 - Confidence tiering and a reviewed-history view on `/review`, closing two gaps
   in the review queue: every suggestion carried a `confidence` score but the
   queue rendered one flat list, and an approved/rejected suggestion vanished

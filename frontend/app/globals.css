@@ -35,6 +35,39 @@ body {
   text-decoration: underline;
 }
 
+.nav-search {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.nav-search-input {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 220px;
+}
+
+.nav-search-input:focus {
+  outline: 2px solid #3730a3;
+  outline-offset: -1px;
+}
+
+.nav-search-submit {
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: white;
+  font-size: 13px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.nav-search-submit:hover {
+  background: #f5f5f4;
+}
+
 .header {
   display: flex;
   align-items: baseline;
