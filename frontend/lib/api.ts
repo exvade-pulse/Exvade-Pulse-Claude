@@ -399,6 +399,26 @@ export async function generateIntegrationToken(type: IntegrationType): Promise<G
   return res.json();
 }
 
+export interface ActivityEntry {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  details: Record<string, unknown> | null;
+  createdAt: string;
+  actorName: string | null;
+  actorEmail: string | null;
+}
+
+export async function fetchActivity(): Promise<ActivityEntry[]> {
+  const res = await fetch(`${API_URL}/api/activity`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load activity (${res.status})`);
+  }
+  const body = (await res.json()) as { entries: ActivityEntry[] };
+  return body.entries;
+}
+
 export async function revokeUser(email: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}`, {
     method: "DELETE",

@@ -420,6 +420,44 @@ body {
   margin: 6px 0;
 }
 
+.activity-list {
+  padding: 0;
+}
+
+.activity-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+}
+
+.activity-row:not(:last-child) {
+  border-bottom: 1px solid #eee;
+}
+
+.activity-row-main {
+  font-size: 13px;
+}
+
+.activity-actor {
+  font-weight: 600;
+}
+
+.activity-entity-link {
+  color: #3730a3;
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.activity-entity-link:hover {
+  text-decoration: underline;
+}
+
+.activity-time {
+  white-space: nowrap;
+}
+
 .token-warning {
   background: #fff8e1;
   color: #6b5300;
