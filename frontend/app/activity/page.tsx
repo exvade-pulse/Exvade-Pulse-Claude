@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { API_URL, fetchActivity, fetchCurrentUser, type ActivityEntry, type SessionUser } from "../../lib/api";
+import { relativeTime } from "../../lib/time";
 import { Nav } from "../components/Nav";
 
 // Covers every action string current write sites actually produce (see
@@ -30,22 +31,6 @@ const LINKABLE_ENTITY_TYPES = new Set(["objective", "initiative", "project", "ta
 
 function entityHref(entityType: string, entityId: string): string {
   return `/${entityType}s/${entityId}`;
-}
-
-function relativeTime(dateStr: string): string {
-  const diffMs = Date.now() - new Date(dateStr).getTime();
-  const diffSec = Math.round(diffMs / 1000);
-  if (diffSec < 60) return "just now";
-  const diffMin = Math.round(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.round(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.round(diffHr / 24);
-  if (diffDay < 30) return `${diffDay}d ago`;
-  const diffMonth = Math.round(diffDay / 30);
-  if (diffMonth < 12) return `${diffMonth}mo ago`;
-  const diffYear = Math.round(diffDay / 365);
-  return `${diffYear}y ago`;
 }
 
 function actorLabel(entry: ActivityEntry): string {

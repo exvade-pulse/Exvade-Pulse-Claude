@@ -12,7 +12,10 @@ const STATUS_ORDER: TaskStatus[] = [
   "superseded",
 ];
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
+// Exported for reuse by anything rendering a single task's status outside the
+// full chip-row breakdown (the dashboard's Needs Attention/Recent Progress
+// rows), so the wording/coloring for a given status stays in one place.
+export const STATUS_LABEL: Record<TaskStatus, string> = {
   active: "active",
   waiting: "waiting",
   needs_attention: "needs attention",
@@ -22,7 +25,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   blocked: "blocked",
 };
 
-function chipClass(status: TaskStatus): string {
+export function chipClass(status: TaskStatus): string {
   if (status === "needs_attention" || status === "blocked") return "chip chip-attention";
   if (status === "completed") return "chip chip-done";
   return "chip";

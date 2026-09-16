@@ -270,10 +270,28 @@ Built:
   reduced in JS), ordered critical → high → medium → low priority then title. An
   objective with no initiatives/tasks still appears, with all counts at zero.
   The frontend ([frontend/app/page.tsx](frontend/app/page.tsx)) is now the landing
-  page ("/"): a card per objective with status/priority badges, a chip per non-zero
-  task status (status-board-style breakdown), a one-line "N initiatives · M needs
-  attention" summary (needs_attention + blocked), and a completed/non-superseded
-  progress bar. The suggestions review UI moved to
+  page ("/"), restructured to lead with "what needs attention today" rather than
+  the objective-level rollup alone: a Decisions Needed panel (the soonest 1-3 open
+  decisions, reusing `fetchOpenDecisions`/`/api/decisions`'s own due-date ordering,
+  with a link through to `/decisions`); a company-wide status-count strip (three
+  new endpoints below); a flat, urgency-sorted Needs Attention task list (blocked
+  before needs_attention, each row showing owner, the objective/initiative/project
+  it belongs to, a latest-update/next-action snippet, and a relative "updated"
+  time); and a Recent Progress list of the 10 most recently completed/resolved
+  tasks. The original objective-card strategy overview — status/priority badges, a
+  chip per non-zero task status, a one-line "N initiatives · M needs attention"
+  summary, and a completed/non-superseded progress bar — is kept as-is, unchanged
+  and undeleted, under a "Strategy map" heading further down the same page. Three
+  new endpoints in [backend/src/routes/dashboard.ts](backend/src/routes/dashboard.ts)
+  back this: `GET /api/dashboard/status-summary` (org-wide task-status counts via
+  `backend/src/tasks/rollup.ts`'s shared helpers), `GET /api/dashboard/needs-attention`
+  (every blocked/needs_attention task org-wide with its full parent chain, assembled
+  via inner joins scoped at every level rather than N+1 per task), and
+  `GET /api/dashboard/recent-progress` (the 10 most recent completed/resolved tasks).
+  This schema has no "not started" task status and no per-task priority field, so
+  the status strip honestly omits a fabricated "not started" bucket (folding
+  `superseded` out of the top-line summary rather than inventing one) and no
+  per-task priority badge is shown. The suggestions review UI moved to
   [frontend/app/review/page.tsx](frontend/app/review/page.tsx) (`/review`), with a
   minimal shared nav ([frontend/app/components/Nav.tsx](frontend/app/components/Nav.tsx))
   linking the two.

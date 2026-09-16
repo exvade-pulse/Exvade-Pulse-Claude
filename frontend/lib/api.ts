@@ -126,6 +126,55 @@ export async function fetchDashboardObjectives(): Promise<DashboardObjective[]> 
   return body.objectives;
 }
 
+export async function fetchStatusSummary(): Promise<TaskCounts> {
+  const res = await fetch(`${API_URL}/api/dashboard/status-summary`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load status summary (${res.status})`);
+  }
+  const body = (await res.json()) as { taskCounts: TaskCounts };
+  return body.taskCounts;
+}
+
+export interface DashboardTaskChainEntry {
+  id: string;
+  title: string;
+}
+
+// The task-centric shape shared by needs-attention and recent-progress: a
+// lighter-weight parent chain (id/title only, no owner/status) than
+// fetchTask's full TaskDetailResponse, since these lists render many tasks
+// at once rather than one task's full page.
+export interface DashboardTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  owner: string | null;
+  latestUpdate: string | null;
+  nextAction: string | null;
+  updatedAt: string;
+  project: DashboardTaskChainEntry;
+  initiative: DashboardTaskChainEntry;
+  objective: DashboardTaskChainEntry;
+}
+
+export async function fetchNeedsAttention(): Promise<DashboardTask[]> {
+  const res = await fetch(`${API_URL}/api/dashboard/needs-attention`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load needs-attention tasks (${res.status})`);
+  }
+  const body = (await res.json()) as { tasks: DashboardTask[] };
+  return body.tasks;
+}
+
+export async function fetchRecentProgress(): Promise<DashboardTask[]> {
+  const res = await fetch(`${API_URL}/api/dashboard/recent-progress`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load recent progress (${res.status})`);
+  }
+  const body = (await res.json()) as { tasks: DashboardTask[] };
+  return body.tasks;
+}
+
 export async function editSuggestion(id: string, proposedDiff: Record<string, unknown>): Promise<Suggestion> {
   const res = await fetch(`${API_URL}/api/suggestions/${id}`, {
     method: "PATCH",
