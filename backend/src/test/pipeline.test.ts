@@ -8,11 +8,29 @@ import { runInterpretationPipeline } from "../interpretation/pipeline.js";
 import { setClaudeClientForTesting, type ClaudeClient } from "../interpretation/claudeClient.js";
 import { NOISE_FILTER_MODEL } from "../interpretation/noiseFilter.js";
 import { INTERPRETATION_MODEL } from "../interpretation/interpret.js";
+import { PATIENT_IDENTIFIER_PLACEHOLDER, REDACTION_FAILURE_PLACEHOLDER_BODY } from "../interpretation/redactPatientIdentifiers.js";
 
 const { db, client } = testDb();
 
 function toolUseMessage(name: string, input: unknown): Anthropic.Message {
   return { content: [{ type: "tool_use", id: "t1", name, input }] } as unknown as Anthropic.Message;
+}
+
+// Redaction and interpretation are both forced tool-use calls on the same
+// underlying model (REDACTION_MODEL === INTERPRETATION_MODEL, both
+// "claude-sonnet-5"), so tests must dispatch on the forced tool name, not the
+// model string, to tell the calls apart.
+function forcedToolName(params: Anthropic.MessageCreateParamsNonStreaming): string | undefined {
+  return params.tool_choice?.type === "tool" ? params.tool_choice.name : undefined;
+}
+
+// Every real client in these tests goes through the redaction pre-pass first;
+// this stub is a no-op passthrough so tests unrelated to redaction itself can
+// assert on the body/content they already know about.
+function passthroughRedaction(params: Anthropic.MessageCreateParamsNonStreaming): Anthropic.Message | undefined {
+  if (forcedToolName(params) !== "redact_text") return undefined;
+  const body = params.messages[0]?.content as string;
+  return toolUseMessage("redact_text", { redactedText: body });
 }
 
 describe("runInterpretationPipeline (integration, mocked Claude client)", () => {
@@ -33,6 +51,8 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
 
     const fakeClient: ClaudeClient = {
       createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
         expect(params.model).toBe(NOISE_FILTER_MODEL);
         return toolUseMessage("classify_source", { isNoise: true, reason: "Out-of-office autoreply." });
       },
@@ -73,6 +93,8 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
 
     const fakeClient: ClaudeClient = {
       createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
         if (params.model === NOISE_FILTER_MODEL) {
           return toolUseMessage("classify_source", { isNoise: false, reason: "Operational hardware report." });
         }
@@ -114,6 +136,8 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
 
     const fakeClient: ClaudeClient = {
       createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
         if (params.model === NOISE_FILTER_MODEL) {
           return toolUseMessage("classify_source", { isNoise: false, reason: "Might be relevant." });
         }
@@ -144,6 +168,86 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
 
     const [sourceRow] = await db.select().from(sources).where(eq(sources.id, result.sourceId));
     expect(sourceRow).toBeDefined();
+
+    const suggestionRows = await db.select().from(suggestions).where(eq(suggestions.sourceId, result.sourceId));
+    expect(suggestionRows).toHaveLength(0);
+  });
+
+  it("persists the redacted body to sources.rawBody, not the raw patient-shaped input", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "pipeline-redact.test" });
+
+    const rawBody =
+      "Patient Jane Testperson, DOB 1/1/1990, is the 34-year-old glioblastoma patient from Duke who enrolled in March. Tejas will draft the interview question list.";
+    const redactedBody = `Patient ${PATIENT_IDENTIFIER_PLACEHOLDER}, DOB ${PATIENT_IDENTIFIER_PLACEHOLDER}, is ${PATIENT_IDENTIFIER_PLACEHOLDER}. Tejas will draft the interview question list.`;
+
+    const fakeClient: ClaudeClient = {
+      createMessage: async (params) => {
+        if (forcedToolName(params) === "redact_text") {
+          return toolUseMessage("redact_text", { redactedText: redactedBody });
+        }
+        if (params.model === NOISE_FILTER_MODEL) {
+          return toolUseMessage("classify_source", { isNoise: false, reason: "Real planning content." });
+        }
+        expect(params.model).toBe(INTERPRETATION_MODEL);
+        const userContent = params.messages[0]?.content as string;
+        // The interpretation pass must only ever see the redacted body, never the raw one.
+        expect(userContent).not.toContain("Jane Testperson");
+        expect(userContent).toContain(PATIENT_IDENTIFIER_PLACEHOLDER);
+        return toolUseMessage("propose_suggestion", {
+          changeType: "new_task",
+          targetType: "task",
+          targetId: null,
+          proposedDiff: { projectId: fixture.project.id, title: "Draft interview question list" },
+          reasoning: "New planning task mentioned in the source.",
+          confidence: 0.6,
+        });
+      },
+    };
+    setClaudeClientForTesting(fakeClient);
+
+    const result = await runInterpretationPipeline(db, fixture.org.id, {
+      type: "circleback",
+      externalId: "ext-redact-1",
+      subject: "Interview discussion",
+      from: "Circleback",
+      body: rawBody,
+      receivedAt: new Date(),
+    });
+
+    const [sourceRow] = await db.select().from(sources).where(eq(sources.id, result.sourceId));
+    expect(sourceRow.rawBody).toBe(redactedBody);
+    expect(sourceRow.rawBody).not.toContain("Jane Testperson");
+  });
+
+  it("fails closed: on a redaction failure, keeps a source row with the safe placeholder body and creates no suggestion", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "pipeline-redact-fail.test" });
+
+    const fakeClient: ClaudeClient = {
+      createMessage: async (params) => {
+        if (forcedToolName(params) === "redact_text") {
+          throw new Error("Simulated Claude API error during redaction.");
+        }
+        throw new Error(`Unexpected call (forced tool ${forcedToolName(params)}); pipeline should have stopped after redaction failed.`);
+      },
+    };
+    setClaudeClientForTesting(fakeClient);
+
+    const result = await runInterpretationPipeline(db, fixture.org.id, {
+      type: "circleback",
+      externalId: "ext-redact-fail-1",
+      subject: "Interview discussion",
+      from: "Circleback",
+      body: "Patient Jane Testperson, DOB 1/1/1990, ...",
+      receivedAt: new Date(),
+    });
+
+    expect(result.skippedAsNoise).toBe(false);
+    expect(result.suggestionId).toBeNull();
+
+    const [sourceRow] = await db.select().from(sources).where(eq(sources.id, result.sourceId));
+    expect(sourceRow).toBeDefined();
+    expect(sourceRow.rawBody).toBe(REDACTION_FAILURE_PLACEHOLDER_BODY);
+    expect(sourceRow.rawBody).not.toContain("Jane Testperson");
 
     const suggestionRows = await db.select().from(suggestions).where(eq(suggestions.sourceId, result.sourceId));
     expect(suggestionRows).toHaveLength(0);

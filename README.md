@@ -308,5 +308,17 @@ Explicitly **not** built yet (next sessions):
   approved suggestion.
 - `audit_log` is append-only — application code only ever inserts into it.
 - `sources.raw_body` is retained for the interpretation pipeline to read; there is
-  no retention/purge job yet (out of scope for this slice) and ingestion code must
-  strip patient identifiers before a row is ever written here.
+  no retention/purge job yet (out of scope for this slice).
+- Every ingestion path runs through `runInterpretationPipeline`
+  ([backend/src/interpretation/pipeline.ts](backend/src/interpretation/pipeline.ts)),
+  which redacts patient identifiers
+  ([backend/src/interpretation/redactPatientIdentifiers.ts](backend/src/interpretation/redactPatientIdentifiers.ts))
+  before anything is inserted into `sources.raw_body` or handed to the noise
+  filter/interpretation pass -- raw unredacted content is never persisted, not
+  even transiently. Redaction uses Sonnet with forced tool-use, the same
+  structured-output pattern as `interpret.ts`/`noiseFilter.ts`. Unlike the noise
+  filter (which fails open), this pre-pass fails **closed**: if the redaction
+  call itself errors or returns an untrustworthy result, the `sources` row is
+  still written for traceability but with a safe placeholder body, and the
+  pipeline stops there -- no noise check, no interpretation, no suggestion --
+  leaving it for manual review.

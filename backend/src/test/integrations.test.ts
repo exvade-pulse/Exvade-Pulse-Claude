@@ -21,9 +21,21 @@ function toolUseMessage(name: string, input: unknown): Anthropic.Message {
   return { content: [{ type: "tool_use", id: "t1", name, input }] } as unknown as Anthropic.Message;
 }
 
+// Redaction and interpretation are both forced tool-use calls on the same
+// underlying model (REDACTION_MODEL === INTERPRETATION_MODEL, both
+// "claude-sonnet-5"), so dispatch on the forced tool name, not the model
+// string, to tell the calls apart.
+function forcedToolName(params: Anthropic.MessageCreateParamsNonStreaming): string | undefined {
+  return params.tool_choice?.type === "tool" ? params.tool_choice.name : undefined;
+}
+
 function notNoiseThenSuggestionClient(): ClaudeClient {
   return {
     createMessage: async (params) => {
+      if (forcedToolName(params) === "redact_text") {
+        const body = params.messages[0]?.content as string;
+        return toolUseMessage("redact_text", { redactedText: body });
+      }
       if (params.model === NOISE_FILTER_MODEL) {
         return toolUseMessage("classify_source", { isNoise: false, reason: "Has real action items." });
       }

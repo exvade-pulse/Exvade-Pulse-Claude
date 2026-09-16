@@ -3,6 +3,11 @@ import type { Database } from "../db/client.js";
 import { initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
 import { isNoiseSource } from "./noiseFilter.js";
 import { interpretSource, InterpretationError, type CompanyContext } from "./interpret.js";
+import {
+  redactPatientIdentifiers,
+  RedactionError,
+  REDACTION_FAILURE_PLACEHOLDER_BODY,
+} from "./redactPatientIdentifiers.js";
 
 export interface RawIncomingSource {
   type: "gmail" | "circleback";
@@ -42,17 +47,46 @@ async function loadCompanyContext(db: Database, organizationId: string): Promise
   return { objectives: objectiveRows, initiatives: initiativeRows, projects: projectRows, tasks: taskRows };
 }
 
-// The real ingestion entry point: given one raw source, always keeps a `sources`
-// row for traceability (per the schema's audit-first design), runs the cheap
-// noise pre-pass, and only on a "worth it" verdict runs the real interpretation
+// The real ingestion entry point: given one raw source, redacts patient
+// identifiers BEFORE anything is written to the database (raw.body itself is
+// never inserted, not even transiently), always keeps a `sources` row for
+// traceability (per the schema's audit-first design), runs the cheap noise
+// pre-pass, and only on a "worth it" verdict runs the real interpretation
 // pass and writes a `suggestions` row. A source that is noise, or whose
 // interpretation response we couldn't trust, is left with no suggestion rather
 // than a fabricated one -- but the source row itself is never silently dropped.
+//
+// If redaction itself fails, this fails CLOSED (opposite of the noise filter
+// below): the `sources` row still gets written for traceability, but with a
+// safe placeholder body instead of raw.body, and the pipeline stops there --
+// no noise check, no interpretation, no suggestion -- leaving it for a human
+// to review rather than risk persisting or interpreting unredacted content.
 export async function runInterpretationPipeline(
   db: Database,
   organizationId: string,
   raw: RawIncomingSource,
 ): Promise<PipelineResult> {
+  let redactedBody: string;
+  try {
+    redactedBody = await redactPatientIdentifiers(raw.body);
+  } catch (err) {
+    if (!(err instanceof RedactionError)) throw err;
+    console.error(`Patient-identifier redaction failed for an incoming ${raw.type} source (external id ${raw.externalId}); storing a safe placeholder instead of raw content:`, err.message);
+
+    const [source] = await db
+      .insert(sources)
+      .values({
+        organizationId,
+        type: raw.type,
+        externalId: raw.externalId,
+        receivedAt: raw.receivedAt,
+        rawBody: REDACTION_FAILURE_PLACEHOLDER_BODY,
+      })
+      .returning();
+
+    return { sourceId: source.id, suggestionId: null, skippedAsNoise: false };
+  }
+
   const [source] = await db
     .insert(sources)
     .values({
@@ -60,11 +94,11 @@ export async function runInterpretationPipeline(
       type: raw.type,
       externalId: raw.externalId,
       receivedAt: raw.receivedAt,
-      rawBody: raw.body,
+      rawBody: redactedBody,
     })
     .returning();
 
-  const noiseCheck = await isNoiseSource({ subject: raw.subject, from: raw.from, body: raw.body });
+  const noiseCheck = await isNoiseSource({ subject: raw.subject, from: raw.from, body: redactedBody });
   if (noiseCheck.isNoise) {
     return { sourceId: source.id, suggestionId: null, skippedAsNoise: true };
   }
@@ -73,7 +107,7 @@ export async function runInterpretationPipeline(
 
   try {
     const draft = await interpretSource(
-      { subject: raw.subject, from: raw.from, body: raw.body, receivedAt: raw.receivedAt },
+      { subject: raw.subject, from: raw.from, body: redactedBody, receivedAt: raw.receivedAt },
       context,
     );
 
