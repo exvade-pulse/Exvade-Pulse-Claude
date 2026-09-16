@@ -194,6 +194,12 @@ export default function DashboardPage() {
                 {t.owner && <>Owner: {t.owner} &middot; </>}
                 {parentChain(t)}
               </p>
+              {t.blockingDecision && (
+                <p className="task-snippet blocking-decision">
+                  Blocked &mdash; waiting on decision:{" "}
+                  <Link href="/decisions">{t.blockingDecision.title}</Link>
+                </p>
+              )}
               {snippet(t.latestUpdate) && (
                 <p className="task-snippet">
                   <span className="task-snippet-label">Latest:</span> {snippet(t.latestUpdate)}

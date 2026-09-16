@@ -98,7 +98,7 @@ describe("decisions module", () => {
       decider: "Board of Directors",
     });
 
-    const updated = await resolveDecision(db, {
+    const { decision: updated, unblockedTask } = await resolveDecision(db, {
       organizationId: fixture.org.id,
       decisionId: decision.id,
       actorId: fixture.user.id,
@@ -107,6 +107,7 @@ describe("decisions module", () => {
 
     expect(updated.status).toBe("decided");
     expect(updated.resolution).toBe("Selected Site B, better enrollment projections");
+    expect(unblockedTask).toBeNull();
     expect(updated.decidedAt).not.toBeNull();
 
     const [logRow] = await db
@@ -114,6 +115,105 @@ describe("decisions module", () => {
       .from(auditLog)
       .where(and(eq(auditLog.entityId, decision.id), eq(auditLog.action, "decision.resolved")));
     expect(logRow).toBeDefined();
+  });
+
+  it("alsoUnblockTask: true with a blocked related task flips it to active and writes both audit_log rows in the same resolve", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "resolve-unblock.test" });
+    const blockedTask = await insertTask(fixture.org.id, fixture.project.id, "Blocked on vendor decision");
+    await db.update(tasks).set({ status: "blocked" }).where(eq(tasks.id, blockedTask.id));
+
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Approve vendor switch",
+      decider: "CEO",
+      relatedTaskId: blockedTask.id,
+    });
+
+    const { decision: updated, unblockedTask } = await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      resolution: "Approved vendor B",
+      alsoUnblockTask: true,
+    });
+
+    expect(updated.status).toBe("decided");
+    expect(unblockedTask).not.toBeNull();
+    expect(unblockedTask?.status).toBe("active");
+
+    const [taskRow] = await db.select().from(tasks).where(eq(tasks.id, blockedTask.id));
+    expect(taskRow.status).toBe("active");
+
+    const [resolvedLog] = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, decision.id), eq(auditLog.action, "decision.resolved")));
+    expect(resolvedLog).toBeDefined();
+
+    const [unblockLog] = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, blockedTask.id), eq(auditLog.action, "task.unblocked_via_decision")));
+    expect(unblockLog).toBeDefined();
+    expect(unblockLog.organizationId).toBe(fixture.org.id);
+  });
+
+  it("alsoUnblockTask: false leaves a blocked related task untouched", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "resolve-no-unblock.test" });
+    const blockedTask = await insertTask(fixture.org.id, fixture.project.id, "Blocked on vendor decision");
+    await db.update(tasks).set({ status: "blocked" }).where(eq(tasks.id, blockedTask.id));
+
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Approve vendor switch",
+      decider: "CEO",
+      relatedTaskId: blockedTask.id,
+    });
+
+    const { unblockedTask } = await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      resolution: "Approved vendor B",
+    });
+
+    expect(unblockedTask).toBeNull();
+    const [taskRow] = await db.select().from(tasks).where(eq(tasks.id, blockedTask.id));
+    expect(taskRow.status).toBe("blocked");
+
+    const unblockLogs = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, blockedTask.id), eq(auditLog.action, "task.unblocked_via_decision")));
+    expect(unblockLogs).toHaveLength(0);
+  });
+
+  it("alsoUnblockTask: true does nothing when the related task isn't currently blocked", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "resolve-unblock-not-blocked.test" });
+    // Default task status is "active", not blocked.
+    const activeTask = await insertTask(fixture.org.id, fixture.project.id, "Already active");
+
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Some other decision",
+      decider: "CEO",
+      relatedTaskId: activeTask.id,
+    });
+
+    const { unblockedTask } = await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      resolution: "Decided",
+      alsoUnblockTask: true,
+    });
+
+    expect(unblockedTask).toBeNull();
+    const [taskRow] = await db.select().from(tasks).where(eq(tasks.id, activeTask.id));
+    expect(taskRow.status).toBe("active");
   });
 
   it("rejects resolving an already-decided decision", async () => {
@@ -344,6 +444,74 @@ describe("GET/POST /api/decisions", () => {
     const body = response.json() as { decisions: Array<{ id: string; relatedTaskTitle: string | null }> };
     const row = body.decisions.find((d) => d.id === decision.id);
     expect(row?.relatedTaskTitle).toBe(task.title);
+  });
+
+  it("includes the related task's current status, so the resolve UI knows whether to offer unblocking", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "join-task-status.test" });
+    const task = await insertTask(fixture.org.id, fixture.project.id, "Investigate wiring harness defect");
+    await db.update(tasks).set({ status: "blocked" }).where(eq(tasks.id, task.id));
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Needs context",
+      decider: "CEO",
+      relatedTaskId: task.id,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/decisions",
+      cookies: { [SESSION_COOKIE_NAME]: await signSession({
+        userId: fixture.user.id,
+        organizationId: fixture.org.id,
+        email: fixture.user.email,
+        role: fixture.authorization.role,
+      }) },
+    });
+    await app.close();
+
+    const body = response.json() as { decisions: Array<{ id: string; relatedTaskStatus: string | null }> };
+    const row = body.decisions.find((d) => d.id === decision.id);
+    expect(row?.relatedTaskStatus).toBe("blocked");
+  });
+
+  it("PATCH .../resolve with alsoUnblockTask: true unblocks the related task via the API", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "api-resolve-unblock.test" });
+    const task = await insertTask(fixture.org.id, fixture.project.id, "Blocked on approval");
+    await db.update(tasks).set({ status: "blocked" }).where(eq(tasks.id, task.id));
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Needs approval",
+      decider: "CEO",
+      relatedTaskId: task.id,
+    });
+
+    const app = await buildApp();
+    const token = await signSession({
+      userId: fixture.user.id,
+      organizationId: fixture.org.id,
+      email: fixture.user.email,
+      role: fixture.authorization.role,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/decisions/${decision.id}/resolve`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { resolution: "Approved", alsoUnblockTask: true },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { decision: { status: string }; unblockedTask: { id: string; status: string } | null };
+    expect(body.decision.status).toBe("decided");
+    expect(body.unblockedTask?.id).toBe(task.id);
+    expect(body.unblockedTask?.status).toBe("active");
+
+    const [taskRow] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(taskRow.status).toBe("active");
   });
 
   it("a logged-in user only sees and can only resolve their own organization's decisions via the API", async () => {

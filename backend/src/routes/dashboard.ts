@@ -2,8 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { initiatives, objectives, projects, tasks } from "../db/schema.js";
+import { decisions, initiatives, objectives, projects, tasks } from "../db/schema.js";
 import { emptyTaskCounts, type TaskCounts } from "../tasks/rollup.js";
+
+// Shared by needs-attention's in-memory sort: critical/high/medium/low, an
+// objective-level-only field (see schema.ts's task table -- tasks have no
+// priority of their own), so this ranks a task by the priority of the
+// objective it rolls up to.
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 export async function dashboardRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
@@ -96,10 +102,6 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/api/dashboard/needs-attention", async (request, reply) => {
     const organizationId = request.user!.organizationId;
 
-    // Blocked reads as more urgent than needs_attention; updatedAt desc as
-    // the tie-break surfaces whichever of those just changed most recently.
-    const statusRank = sql`case ${tasks.status} when 'blocked' then 0 when 'needs_attention' then 1 else 2 end`;
-
     const rows = await db
       .select({
         id: tasks.id,
@@ -112,6 +114,10 @@ export async function dashboardRoutes(app: FastifyInstance) {
         project: { id: projects.id, title: projects.title },
         initiative: { id: initiatives.id, title: initiatives.title },
         objective: { id: objectives.id, title: objectives.title },
+        // Sort-only -- resolved via the same task -> project -> initiative ->
+        // objective chain the parent-chain columns above already join through,
+        // not a second query path. Stripped back out below before sending.
+        objectivePriority: objectives.priority,
       })
       .from(tasks)
       .innerJoin(projects, and(eq(projects.id, tasks.projectId), eq(projects.organizationId, organizationId)))
@@ -120,10 +126,58 @@ export async function dashboardRoutes(app: FastifyInstance) {
         and(eq(initiatives.id, projects.initiativeId), eq(initiatives.organizationId, organizationId)),
       )
       .innerJoin(objectives, and(eq(objectives.id, initiatives.objectiveId), eq(objectives.organizationId, organizationId)))
-      .where(and(eq(tasks.organizationId, organizationId), inArray(tasks.status, ["blocked", "needs_attention"])))
-      .orderBy(statusRank, desc(tasks.updatedAt));
+      .where(and(eq(tasks.organizationId, organizationId), inArray(tasks.status, ["blocked", "needs_attention"])));
 
-    reply.send({ tasks: rows });
+    // Three-factor sort, done in memory rather than as a SQL ORDER BY: a
+    // CASE-ranked priority pulled across a joined parent chain is more SQL
+    // than this data scale warrants, and this codebase's established pattern
+    // (see companyMap.ts) is a small number of flat queries assembled/sorted
+    // in JS rather than one large multi-join query.
+    //
+    // 1. Severity: blocked outranks needs_attention.
+    // 2. Priority: the task's inherited objective priority, critical first.
+    // 3. Staleness, ascending (oldest updatedAt first) -- deliberately the
+    //    reverse of "most recently updated first". A task that's been quietly
+    //    stuck for weeks is a bigger risk than one that became blocked an
+    //    hour ago; surfacing neglect matters more here than surfacing
+    //    freshness. Don't "fix" this back to desc without re-reading this comment.
+    const severityRank: Record<string, number> = { blocked: 0, needs_attention: 1 };
+    rows.sort((a, b) => {
+      const severityDiff = severityRank[a.status] - severityRank[b.status];
+      if (severityDiff !== 0) return severityDiff;
+
+      const priorityDiff = PRIORITY_RANK[a.objectivePriority] - PRIORITY_RANK[b.objectivePriority];
+      if (priorityDiff !== 0) return priorityDiff;
+
+      return a.updatedAt.getTime() - b.updatedAt.getTime();
+    });
+
+    const taskIds = rows.map((row) => row.id);
+    // Batch lookup, not N+1 per task: every open decision in the org whose
+    // relatedTaskId points at one of these tasks, in one query.
+    const openBlockingDecisions =
+      taskIds.length === 0
+        ? []
+        : await db
+            .select({ id: decisions.id, title: decisions.title, relatedTaskId: decisions.relatedTaskId })
+            .from(decisions)
+            .where(
+              and(
+                eq(decisions.organizationId, organizationId),
+                eq(decisions.status, "open"),
+                inArray(decisions.relatedTaskId, taskIds),
+              ),
+            );
+    const blockingDecisionByTaskId = new Map(
+      openBlockingDecisions.map((d) => [d.relatedTaskId as string, { id: d.id, title: d.title }]),
+    );
+
+    const result = rows.map(({ objectivePriority, ...task }) => ({
+      ...task,
+      blockingDecision: blockingDecisionByTaskId.get(task.id) ?? null,
+    }));
+
+    reply.send({ tasks: result });
   });
 
   // "Confirmed forward movement only" -- tasks that have actually landed

@@ -44,6 +44,7 @@ export default function DecisionsPage() {
 
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [resolutionDraft, setResolutionDraft] = useState("");
+  const [alsoUnblockTask, setAlsoUnblockTask] = useState(false);
   const [savingResolution, setSavingResolution] = useState(false);
 
   useEffect(() => {
@@ -92,6 +93,7 @@ export default function DecisionsPage() {
   function startResolve(id: string) {
     setActionError(null);
     setResolutionDraft("");
+    setAlsoUnblockTask(false);
     setResolvingId(id);
   }
 
@@ -103,10 +105,11 @@ export default function DecisionsPage() {
     setSavingResolution(true);
     setActionError(null);
     try {
-      await resolveDecision(id, resolutionDraft);
+      await resolveDecision(id, resolutionDraft, alsoUnblockTask);
       setDecisions((prev) => prev.filter((d) => d.id !== id));
       setResolvingId(null);
       setResolutionDraft("");
+      setAlsoUnblockTask(false);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -291,6 +294,19 @@ export default function DecisionsPage() {
                     placeholder="What was decided?"
                   />
                 </label>
+                {d.relatedTaskId && d.relatedTaskStatus === "blocked" && (
+                  <label className="edit-field edit-field-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={alsoUnblockTask}
+                      onChange={(e) => setAlsoUnblockTask(e.target.checked)}
+                    />
+                    <span>
+                      This decision was blocking &ldquo;{d.relatedTaskTitle}&rdquo;, currently marked blocked &mdash;
+                      also mark it active?
+                    </span>
+                  </label>
+                )}
                 <div className="card-actions">
                   <button
                     className="decision-btn save"

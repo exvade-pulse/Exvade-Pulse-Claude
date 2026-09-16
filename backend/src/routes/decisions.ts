@@ -30,6 +30,9 @@ export async function decisionRoutes(app: FastifyInstance) {
         decidedAt: decisions.decidedAt,
         relatedTaskId: decisions.relatedTaskId,
         relatedTaskTitle: tasks.title,
+        // Lets the resolve UI decide whether "also unblock this task" is even
+        // a relevant option to show, without a second round trip per decision.
+        relatedTaskStatus: tasks.status,
         sourceId: decisions.sourceId,
         createdAt: decisions.createdAt,
         updatedAt: decisions.updatedAt,
@@ -90,7 +93,7 @@ export async function decisionRoutes(app: FastifyInstance) {
     }
   });
 
-  app.patch<{ Params: { id: string }; Body: { resolution?: string } }>(
+  app.patch<{ Params: { id: string }; Body: { resolution?: string; alsoUnblockTask?: boolean } }>(
     "/api/decisions/:id/resolve",
     async (request, reply) => {
       const resolution = request.body?.resolution;
@@ -100,13 +103,14 @@ export async function decisionRoutes(app: FastifyInstance) {
       }
 
       try {
-        const decision = await resolveDecision(db, {
+        const { decision, unblockedTask } = await resolveDecision(db, {
           organizationId: request.user!.organizationId,
           decisionId: request.params.id,
           actorId: request.user!.userId,
           resolution,
+          alsoUnblockTask: request.body?.alsoUnblockTask ?? false,
         });
-        reply.send({ decision });
+        reply.send({ decision, unblockedTask });
       } catch (err) {
         if (err instanceof DecisionError) {
           reply.code(err.code === "not_found" ? 404 : 409).send({ error: err.message });

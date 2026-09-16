@@ -140,6 +140,13 @@ export interface DashboardTaskChainEntry {
   title: string;
 }
 
+// The open decision actually blocking a task, if any -- the "why is this
+// stuck" answer that a bare status chip can't show on its own.
+export interface BlockingDecision {
+  id: string;
+  title: string;
+}
+
 // The task-centric shape shared by needs-attention and recent-progress: a
 // lighter-weight parent chain (id/title only, no owner/status) than
 // fetchTask's full TaskDetailResponse, since these lists render many tasks
@@ -155,6 +162,9 @@ export interface DashboardTask {
   project: DashboardTaskChainEntry;
   initiative: DashboardTaskChainEntry;
   objective: DashboardTaskChainEntry;
+  // Only ever present on needs-attention rows (recent-progress tasks are
+  // completed/resolved, never blocked, so that endpoint doesn't compute this).
+  blockingDecision?: BlockingDecision | null;
 }
 
 export async function fetchNeedsAttention(): Promise<DashboardTask[]> {
@@ -204,6 +214,9 @@ export interface Decision {
   decidedAt: string | null;
   relatedTaskId: string | null;
   relatedTaskTitle: string | null;
+  // Lets the resolve UI decide whether "also unblock this task" is a
+  // relevant option to offer without a second fetch per decision.
+  relatedTaskStatus: TaskStatus | null;
   sourceId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -246,19 +259,30 @@ export async function createDecision(input: CreateDecisionInput): Promise<Decisi
   return body.decision;
 }
 
-export async function resolveDecision(id: string, resolution: string): Promise<Decision> {
+export interface ResolveDecisionResult {
+  decision: Decision;
+  // Non-null only when alsoUnblockTask was true, the decision had a
+  // relatedTaskId, and that task was actually blocked -- see
+  // backend/src/decisions/manage.ts's resolveDecision.
+  unblockedTask: { id: string; status: TaskStatus } | null;
+}
+
+export async function resolveDecision(
+  id: string,
+  resolution: string,
+  alsoUnblockTask = false,
+): Promise<ResolveDecisionResult> {
   const res = await fetch(`${API_URL}/api/decisions/${id}/resolve`, {
     method: "PATCH",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resolution }),
+    body: JSON.stringify({ resolution, alsoUnblockTask }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? "Failed to resolve decision");
   }
-  const body = (await res.json()) as { decision: Decision };
-  return body.decision;
+  return res.json();
 }
 
 export type StrategyStatus = "active" | "paused" | "completed" | "cancelled";
@@ -398,6 +422,7 @@ export interface TaskDetailResponse {
   initiative: { id: string; title: string } | null;
   objective: { id: string; title: string } | null;
   approvedSuggestions: ApprovedTaskSuggestion[];
+  blockingDecision: BlockingDecision | null;
 }
 
 export async function fetchTask(id: string): Promise<TaskDetailResponse | "not_found"> {

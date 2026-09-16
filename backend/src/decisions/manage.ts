@@ -153,6 +153,10 @@ interface ResolveParams {
   decisionId: string;
   actorId: string;
   resolution: string;
+  // Opt-in, off by default: when the decision that just resolved was the
+  // thing blocking a task, offer to also clear that block in the same write
+  // rather than leaving the task stuck until someone notices separately.
+  alsoUnblockTask?: boolean;
 }
 
 export async function resolveDecision(db: Database, params: ResolveParams) {
@@ -189,6 +193,38 @@ export async function resolveDecision(db: Database, params: ResolveParams) {
       details: { resolution: params.resolution },
     });
 
-    return updated;
+    let unblockedTask: typeof tasks.$inferSelect | null = null;
+
+    // Only ever auto-clears `blocked`, never `needs_attention` -- blocked is
+    // the direct "waiting on a decision" signal a decision can concretely
+    // resolve; needs_attention is a much weaker/broader signal (could mean
+    // anything from "stale" to "confusing update") that this one decision
+    // resolving shouldn't be presumed to fix. Leave that to a human.
+    if (params.alsoUnblockTask && decision.relatedTaskId) {
+      const [relatedTask] = await tx
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.id, decision.relatedTaskId), eq(tasks.organizationId, params.organizationId)));
+
+      if (relatedTask && relatedTask.status === "blocked") {
+        const [taskUpdated] = await tx
+          .update(tasks)
+          .set({ status: "active", updatedAt: new Date() })
+          .where(eq(tasks.id, relatedTask.id))
+          .returning();
+        unblockedTask = taskUpdated;
+
+        await tx.insert(auditLog).values({
+          organizationId: params.organizationId,
+          actorId: params.actorId,
+          action: "task.unblocked_via_decision",
+          entityType: "task",
+          entityId: relatedTask.id,
+          details: { decisionId: decision.id, previousStatus: "blocked", newStatus: "active" },
+        });
+      }
+    }
+
+    return { decision: updated, unblockedTask };
   });
 }

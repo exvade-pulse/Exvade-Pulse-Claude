@@ -2,7 +2,8 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { initiatives, projects, tasks } from "../db/schema.js";
+import { decisions, initiatives, objectives, projects, tasks } from "../db/schema.js";
+import { createDecision, resolveDecision } from "../decisions/manage.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 
@@ -153,7 +154,7 @@ describe("GET /api/dashboard/needs-attention", () => {
     expect(row.objective.id).toBe(fixture.objective.id);
   });
 
-  it("orders blocked before needs_attention, and by updatedAt desc within each status", async () => {
+  it("orders blocked before needs_attention, and oldest-updated first within each status when priority ties", async () => {
     const fixture = await createFixtureOrg(db, { domain: "needs-attention-order.test" });
 
     const [older] = await db
@@ -169,9 +170,13 @@ describe("GET /api/dashboard/needs-attention", () => {
       .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Needs attention", status: "needs_attention" })
       .returning();
 
-    // Force a clear updatedAt ordering: older < newer < attention, but
-    // attention's status should still sort after both blocked rows despite
-    // being the most recently updated.
+    // Force a clear updatedAt ordering: older < newer < attention. All three
+    // tasks share the same (default "medium") objective priority, so the
+    // tiebreak here is purely severity then staleness: both blocked rows
+    // outrank needs_attention regardless of recency, and within the blocked
+    // tier the STALER row (older) surfaces first -- this endpoint
+    // deliberately sorts oldest-updated-first, not most-recent-first, so a
+    // task stuck the longest is the most visible.
     await db.update(tasks).set({ updatedAt: new Date("2026-01-01") }).where(eq(tasks.id, older.id));
     await db.update(tasks).set({ updatedAt: new Date("2026-01-02") }).where(eq(tasks.id, newer.id));
     await db.update(tasks).set({ updatedAt: new Date("2026-01-03") }).where(eq(tasks.id, attention.id));
@@ -179,7 +184,98 @@ describe("GET /api/dashboard/needs-attention", () => {
     const response = await getAsUser(fixture, "/api/dashboard/needs-attention");
     expect(response.statusCode).toBe(200);
     const body = response.json() as { tasks: Array<{ id: string }> };
-    expect(body.tasks.map((t) => t.id)).toEqual([newer.id, older.id, attention.id]);
+    expect(body.tasks.map((t) => t.id)).toEqual([older.id, newer.id, attention.id]);
+  });
+
+  it("ranks a critical-priority blocked task ahead of a low-priority blocked task that's been stuck longer", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "needs-attention-priority.test" });
+
+    // A second objective/initiative/project chain with a distinct priority,
+    // so the low-priority task's parent objective differs from the fixture's
+    // default-priority ("medium") one.
+    const [lowObjective] = await db
+      .insert(objectives)
+      .values({ organizationId: fixture.org.id, title: "Low priority objective", priority: "low" })
+      .returning();
+    const [lowInitiative] = await db
+      .insert(initiatives)
+      .values({ organizationId: fixture.org.id, objectiveId: lowObjective.id, title: "Low initiative" })
+      .returning();
+    const [lowProject] = await db
+      .insert(projects)
+      .values({ organizationId: fixture.org.id, initiativeId: lowInitiative.id, title: "Low project" })
+      .returning();
+
+    await db
+      .update(objectives)
+      .set({ priority: "critical" })
+      .where(eq(objectives.id, fixture.objective.id));
+
+    const [lowPriorityStale] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: lowProject.id, title: "Low priority, very stale", status: "blocked" })
+      .returning();
+    const [criticalPriorityFresh] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Critical priority, just blocked", status: "blocked" })
+      .returning();
+
+    // The low-priority task has been stuck far longer, but priority beats
+    // staleness -- it must NOT outrank the critical-priority task.
+    await db.update(tasks).set({ updatedAt: new Date("2020-01-01") }).where(eq(tasks.id, lowPriorityStale.id));
+    await db.update(tasks).set({ updatedAt: new Date("2026-01-01") }).where(eq(tasks.id, criticalPriorityFresh.id));
+
+    const response = await getAsUser(fixture, "/api/dashboard/needs-attention");
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { tasks: Array<{ id: string }> };
+    expect(body.tasks.map((t) => t.id)).toEqual([criticalPriorityFresh.id, lowPriorityStale.id]);
+  });
+
+  it("includes a blocking open decision's id/title on a blocked task, but not one pointing at a decided decision", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "needs-attention-blocking-decision.test" });
+
+    const [blockedWithOpenDecision] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Blocked, has open decision", status: "blocked" })
+      .returning();
+    const [blockedWithDecidedDecision] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Blocked, only decided decision", status: "blocked" })
+      .returning();
+
+    const openDecision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Approve vendor switch",
+      decider: "CEO",
+      relatedTaskId: blockedWithOpenDecision.id,
+    });
+
+    const decidedDecision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Already-settled decision",
+      decider: "CEO",
+      relatedTaskId: blockedWithDecidedDecision.id,
+    });
+    await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decidedDecision.id,
+      actorId: fixture.user.id,
+      resolution: "Settled",
+    });
+
+    const response = await getAsUser(fixture, "/api/dashboard/needs-attention");
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      tasks: Array<{ id: string; blockingDecision: { id: string; title: string } | null }>;
+    };
+
+    const withOpen = body.tasks.find((t) => t.id === blockedWithOpenDecision.id);
+    expect(withOpen?.blockingDecision).toEqual({ id: openDecision.id, title: "Approve vendor switch" });
+
+    const withDecided = body.tasks.find((t) => t.id === blockedWithDecidedDecision.id);
+    expect(withDecided?.blockingDecision).toBeNull();
   });
 
   it("never returns a task belonging to a different organization", async () => {

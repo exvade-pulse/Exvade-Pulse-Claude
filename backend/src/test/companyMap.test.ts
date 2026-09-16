@@ -4,6 +4,7 @@ import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
 import { eq } from "drizzle-orm";
 import { initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { createDecision, resolveDecision } from "../decisions/manage.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 
@@ -495,6 +496,51 @@ describe("company map detail endpoints", () => {
       expect(body.objective?.id).toBe(fixture.objective.id);
       expect(body.approvedSuggestions).toHaveLength(1);
       expect(body.approvedSuggestions[0].id).toBe(approved.id);
+    });
+
+    it("includes the blocking open decision, but not a decided one", async () => {
+      const fixture = await createFixtureOrg(db, { domain: "task-blocking-decision.test" });
+      const [blockedTask] = await db
+        .insert(tasks)
+        .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Blocked task", status: "blocked" })
+        .returning();
+
+      const openDecision = await createDecision(db, {
+        organizationId: fixture.org.id,
+        actorId: fixture.user.id,
+        title: "Approve vendor switch",
+        decider: "CEO",
+        relatedTaskId: blockedTask.id,
+      });
+
+      const app = await buildApp();
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/tasks/${blockedTask.id}`,
+        cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+      });
+      await app.close();
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { blockingDecision: { id: string; title: string } | null };
+      expect(body.blockingDecision).toEqual({ id: openDecision.id, title: "Approve vendor switch" });
+
+      // Once resolved, it should no longer show as the blocker.
+      await resolveDecision(db, {
+        organizationId: fixture.org.id,
+        decisionId: openDecision.id,
+        actorId: fixture.user.id,
+        resolution: "Approved vendor B",
+      });
+      const app2 = await buildApp();
+      const response2 = await app2.inject({
+        method: "GET",
+        url: `/api/tasks/${blockedTask.id}`,
+        cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+      });
+      await app2.close();
+      const body2 = response2.json() as { blockingDecision: { id: string; title: string } | null };
+      expect(body2.blockingDecision).toBeNull();
     });
 
     it("returns 401 for an unauthenticated request", async () => {

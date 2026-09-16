@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, count, desc, eq } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
 import { emptyTaskCounts } from "../tasks/rollup.js";
 import { UUID_RE } from "./uuid.js";
 
@@ -279,12 +279,22 @@ export async function companyMapRoutes(app: FastifyInstance) {
       )
       .orderBy(desc(suggestions.reviewedAt));
 
+    // The "why is this stuck" signal for a blocked/needs_attention task --
+    // same open-decision-pointing-at-this-task lookup as the dashboard's
+    // needs-attention endpoint, just scoped to a single task here rather than
+    // batched across many.
+    const [blockingDecision] = await db
+      .select({ id: decisions.id, title: decisions.title })
+      .from(decisions)
+      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"), eq(decisions.relatedTaskId, id)));
+
     reply.send({
       task,
       project: chain?.project ?? null,
       initiative: chain?.initiative ?? null,
       objective: chain?.objective ?? null,
       approvedSuggestions,
+      blockingDecision: blockingDecision ?? null,
     });
   });
 }

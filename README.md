@@ -284,17 +284,35 @@ Built:
   and undeleted, under a "Strategy map" heading further down the same page. Three
   new endpoints in [backend/src/routes/dashboard.ts](backend/src/routes/dashboard.ts)
   back this: `GET /api/dashboard/status-summary` (org-wide task-status counts via
-  `backend/src/tasks/rollup.ts`'s shared helpers), `GET /api/dashboard/needs-attention`
-  (every blocked/needs_attention task org-wide with its full parent chain, assembled
-  via inner joins scoped at every level rather than N+1 per task), and
-  `GET /api/dashboard/recent-progress` (the 10 most recent completed/resolved tasks).
-  This schema has no "not started" task status and no per-task priority field, so
-  the status strip honestly omits a fabricated "not started" bucket (folding
-  `superseded` out of the top-line summary rather than inventing one) and no
-  per-task priority badge is shown. The suggestions review UI moved to
+  `backend/src/tasks/rollup.ts`'s shared helpers), `GET /api/dashboard/needs-attention`,
+  and `GET /api/dashboard/recent-progress` (the 10 most recent completed/resolved
+  tasks). This schema has no "not started" task status and no per-task priority
+  field, so the status strip honestly omits a fabricated "not started" bucket
+  (folding `superseded` out of the top-line summary rather than inventing one) and
+  no per-task priority badge is shown. The suggestions review UI moved to
   [frontend/app/review/page.tsx](frontend/app/review/page.tsx) (`/review`), with a
   minimal shared nav ([frontend/app/components/Nav.tsx](frontend/app/components/Nav.tsx))
-  linking the two.
+  linking the two. Needs Attention is sorted to surface actual risk, not just
+  recent churn, and shows *why* a task is stuck rather than a bare status chip:
+  `GET /api/dashboard/needs-attention` fetches every blocked/needs_attention task
+  org-wide with its full parent chain in one set of scoped joins (not N+1 per
+  task), then applies a three-factor sort in memory (this data scale doesn't
+  justify a CASE-ranked multi-join `ORDER BY`, matching the flat-queries-
+  assembled-in-JS pattern already used in `companyMap.ts`): severity first
+  (blocked before needs_attention), then the task's *inherited* priority — tasks
+  have no priority field of their own, so this walks the same task → project →
+  initiative → objective chain already resolved for the parent-chain columns and
+  uses the objective's `priority` as the tiebreak — then staleness, deliberately
+  **ascending** (oldest `updatedAt` first) within a tier, since a task quietly
+  stuck for weeks is a bigger risk than one that just became blocked an hour ago.
+  Each row also now carries `blockingDecision` (id/title of the open decision, if
+  any, whose `relatedTaskId` points at it — a batched lookup, not N+1 — `null` if
+  none, and a *decided* decision pointing at the task doesn't count), rendered on
+  the dashboard as "Blocked — waiting on decision: …" linking to `/decisions`.
+  `GET /api/tasks/:id` ([backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts))
+  carries the same `blockingDecision` field, and the task detail page
+  ([frontend/app/tasks/[id]/page.tsx](frontend/app/tasks/[id]/page.tsx)) shows the
+  matching "Blocked by open decision: …" callout.
 - Drill-down detail pages for the full Objective → Initiative → Project → Task
   hierarchy ("Company Map"), the piece deferred from the dashboard's first pass
   above: [backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts) adds
@@ -338,16 +356,32 @@ Built:
   thin-route/logic-module split), exposed via
   [backend/src/routes/decisions.ts](backend/src/routes/decisions.ts):
   `GET /api/decisions` (defaults to `status=open`, joins in the related task's
-  title, soonest `dueDate` first with nulls last), `POST /api/decisions`, and
+  title and current `status` as `relatedTaskTitle`/`relatedTaskStatus`, soonest
+  `dueDate` first with nulls last), `POST /api/decisions`, and
   `PATCH /api/decisions/:id/resolve` (rejects an already-decided decision). Both
-  writes append a `decision.created`/`decision.resolved` `audit_log` row. The
-  frontend ([frontend/app/decisions/page.tsx](frontend/app/decisions/page.tsx),
-  linked from the nav as "Decisions") lists open decisions with their stakeholder
-  chips, due date (overdue ones called out in red), the three narrative sections,
-  and the related task's title if set; a plain form creates one (title/decider/
+  writes append a `decision.created`/`decision.resolved` `audit_log` row.
+  Resolving now closes the loop with whatever task the decision was blocking
+  instead of leaving it stuck forever: the resolve route accepts an optional
+  `alsoUnblockTask` flag, and `resolveDecision` — inside the same transaction
+  that resolves the decision — checks whether `relatedTaskId` points at a task
+  that's currently `blocked` (deliberately *only* `blocked`, not
+  `needs_attention` — blocked is the direct "waiting on this decision" signal a
+  decision can concretely resolve, `needs_attention` is a much weaker/broader one
+  this one decision shouldn't presume to fix) and, if the flag is set and it is,
+  flips that task to `active` and writes a second `task.unblocked_via_decision`
+  `audit_log` row. Left unset, or when the related task isn't blocked, resolving
+  behaves exactly as before. The frontend
+  ([frontend/app/decisions/page.tsx](frontend/app/decisions/page.tsx), linked from
+  the nav as "Decisions") lists open decisions with their stakeholder chips, due
+  date (overdue ones called out in red), the three narrative sections, and the
+  related task's title if set; a plain form creates one (title/decider/
   stakeholders/due date/narrative fields — `relatedTaskId`/`sourceId` are only
   settable via the API for now, no picker UI yet), and "Mark decided" resolves one
-  inline, dropping it out of the open list. The Claude interpretation pipeline
+  inline — showing a "this decision was blocking '[task]', currently marked
+  blocked — also mark it active?" checkbox only when `relatedTaskId` is set and
+  `relatedTaskStatus` is `blocked`, so the option doesn't clutter every decision's
+  resolve form — dropping the decision out of the open list once resolved. The
+  Claude interpretation pipeline
   ([backend/src/interpretation/interpret.ts](backend/src/interpretation/interpret.ts))
   can now propose creating a decision, not just human-filled forms: `targetType`
   gained a fifth value, `"decision"`, alongside objective/initiative/project/task,

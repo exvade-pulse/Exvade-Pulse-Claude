@@ -114,6 +114,12 @@ export default function TaskDetailPage() {
               </div>
             </div>
 
+            {data.blockingDecision && (
+              <p className="blocking-decision">
+                Blocked by open decision: <Link href="/decisions">{data.blockingDecision.title}</Link>
+              </p>
+            )}
+
             {data.task.latestUpdate && (
               <div className="decision-sections">
                 <div>

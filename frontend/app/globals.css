@@ -118,6 +118,18 @@ body {
   color: #666;
 }
 
+.edit-field-checkbox {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: #333;
+}
+
+.edit-field-checkbox input[type="checkbox"] {
+  margin-top: 2px;
+}
+
 .edit-input {
   border: 1px solid #ccc;
   border-radius: 6px;
@@ -361,6 +373,16 @@ body {
 .due-overdue {
   color: #a33;
   font-weight: 600;
+}
+
+.blocking-decision {
+  color: #a33;
+  font-weight: 600;
+}
+
+.blocking-decision a {
+  color: inherit;
+  text-decoration: underline;
 }
 
 .stakeholder-chip {
