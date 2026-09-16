@@ -90,6 +90,7 @@ export default function InitiativeDetailPage() {
             <div className="card-top">
               <div>
                 {data.initiative.description && <span className="muted">{data.initiative.description}</span>}
+                {data.initiative.owner && <span className="owner-line">Owner: {data.initiative.owner}</span>}
               </div>
               <div className="card-badges">
                 <span className={`badge badge-priority-${data.initiative.priority}`}>{data.initiative.priority}</span>
@@ -108,7 +109,10 @@ export default function InitiativeDetailPage() {
             <Link className="card-link" href={`/projects/${project.id}`} key={project.id}>
               <article className="card">
                 <div className="card-top">
-                  <p className="card-title">{project.title}</p>
+                  <div>
+                    <p className="card-title">{project.title}</p>
+                    {project.owner && <span className="owner-line">Owner: {project.owner}</span>}
+                  </div>
                   <div className="card-badges">
                     <span className="badge">{project.status}</span>
                   </div>

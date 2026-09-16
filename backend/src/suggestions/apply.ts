@@ -25,11 +25,15 @@ export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision
 // Whitelists what a proposed_diff may set on each target type, so an AI-authored
 // (or hand-edited) diff can never smuggle in organization_id or other fields the
 // review flow doesn't own.
+// "owner" is deliberately only on these four hierarchy types, not "decision":
+// decisions already have their own decider/stakeholders fields for "who's
+// responsible", and this is a single free-text field (not a stakeholders
+// array) by scope decision -- see the comment on schema.ts's owner columns.
 export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
-  objective: ["title", "description", "status", "priority"],
-  initiative: ["objectiveId", "title", "description", "status", "priority"],
-  project: ["initiativeId", "title", "description", "status"],
-  task: ["projectId", "title", "description", "status", "latestUpdate", "nextAction"],
+  objective: ["title", "description", "status", "priority", "owner"],
+  initiative: ["objectiveId", "title", "description", "status", "priority", "owner"],
+  project: ["initiativeId", "title", "description", "status", "owner"],
+  task: ["projectId", "title", "description", "status", "latestUpdate", "nextAction", "owner"],
   decision: [
     "title",
     "whyItMatters",

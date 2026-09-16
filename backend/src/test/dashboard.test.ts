@@ -127,6 +127,24 @@ describe("GET /api/dashboard/objectives", () => {
     expect(row!.taskCounts).toEqual({ ...ZERO_TASK_COUNTS, waiting: 2 });
   });
 
+  it("returns owner: null for an objective with no owner set, and the real value once one is", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "owner-dashboard.test" });
+    const [owned] = await db
+      .insert(objectives)
+      .values({ organizationId: fixture.org.id, title: "Owned objective", owner: "Sean Meehan" })
+      .returning();
+
+    const response = await getAsUser(fixture);
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { objectives: Array<Record<string, unknown>> };
+
+    const unowned = body.objectives.find((o) => o.id === fixture.objective.id);
+    expect(unowned!.owner).toBeNull();
+
+    const ownedRow = body.objectives.find((o) => o.id === owned.id);
+    expect(ownedRow!.owner).toBe("Sean Meehan");
+  });
+
   it("never returns an objective belonging to a different organization", async () => {
     const orgA = await createFixtureOrg(db, { domain: "dash-org-a.test" });
     const orgB = await createFixtureOrg(db, { domain: "dash-org-b.test" });

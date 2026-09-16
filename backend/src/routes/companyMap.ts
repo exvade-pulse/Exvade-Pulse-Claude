@@ -24,6 +24,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
           description: objectives.description,
           status: objectives.status,
           priority: objectives.priority,
+          owner: objectives.owner,
         })
         .from(objectives)
         .where(eq(objectives.organizationId, organizationId))
@@ -35,6 +36,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
           title: initiatives.title,
           status: initiatives.status,
           priority: initiatives.priority,
+          owner: initiatives.owner,
         })
         .from(initiatives)
         .where(eq(initiatives.organizationId, organizationId))
@@ -45,6 +47,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
           initiativeId: projects.initiativeId,
           title: projects.title,
           status: projects.status,
+          owner: projects.owner,
         })
         .from(projects)
         .where(eq(projects.organizationId, organizationId))
@@ -57,6 +60,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
           status: tasks.status,
           latestUpdate: tasks.latestUpdate,
           nextAction: tasks.nextAction,
+          owner: tasks.owner,
         })
         .from(tasks)
         .where(eq(tasks.organizationId, organizationId))
@@ -119,6 +123,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
         title: initiatives.title,
         status: initiatives.status,
         priority: initiatives.priority,
+        owner: initiatives.owner,
       })
       .from(initiatives)
       .where(and(eq(initiatives.objectiveId, id), eq(initiatives.organizationId, organizationId)))
@@ -151,7 +156,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
       .where(and(eq(objectives.id, initiative.objectiveId), eq(objectives.organizationId, organizationId)));
 
     const projectRows = await db
-      .select({ id: projects.id, title: projects.title, status: projects.status })
+      .select({ id: projects.id, title: projects.title, status: projects.status, owner: projects.owner })
       .from(projects)
       .where(and(eq(projects.initiativeId, id), eq(projects.organizationId, organizationId)))
       .orderBy(projects.title);
@@ -203,6 +208,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
         status: tasks.status,
         latestUpdate: tasks.latestUpdate,
         nextAction: tasks.nextAction,
+        owner: tasks.owner,
       })
       .from(tasks)
       .where(and(eq(tasks.projectId, id), eq(tasks.organizationId, organizationId)))

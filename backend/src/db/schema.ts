@@ -115,6 +115,12 @@ export const authorizedUsers = pgTable(
   (table) => [uniqueIndex("authorized_users_org_email_unique").on(table.organizationId, table.email)],
 );
 
+// owner is a single free-text "who's responsible" field, not a stakeholders
+// array like decisions have -- decisions genuinely need decider+stakeholders
+// (a decider who must choose, plus others to consult/inform), but these four
+// levels just need the reference app's proven "Owner: Name" pattern. A full
+// stakeholders array here would be real added UI scope (managing a list at
+// four levels) with no evidence yet that it's needed; add it later if it is.
 export const objectives = pgTable("objectives", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
@@ -124,6 +130,7 @@ export const objectives = pgTable("objectives", {
   description: text("description"),
   status: strategyStatusEnum("status").notNull().default("active"),
   priority: priorityEnum("priority").notNull().default("medium"),
+  owner: text("owner"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -140,6 +147,7 @@ export const initiatives = pgTable("initiatives", {
   description: text("description"),
   status: strategyStatusEnum("status").notNull().default("active"),
   priority: priorityEnum("priority").notNull().default("medium"),
+  owner: text("owner"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -155,6 +163,7 @@ export const projects = pgTable("projects", {
   title: text("title").notNull(),
   description: text("description"),
   status: strategyStatusEnum("status").notNull().default("active"),
+  owner: text("owner"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -172,6 +181,7 @@ export const tasks = pgTable("tasks", {
   status: taskStatusEnum("status").notNull().default("active"),
   latestUpdate: text("latest_update"),
   nextAction: text("next_action"),
+  owner: text("owner"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

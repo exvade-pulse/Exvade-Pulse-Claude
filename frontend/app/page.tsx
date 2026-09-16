@@ -85,6 +85,7 @@ export default function DashboardPage() {
                   {o.title}
                 </Link>
                 {o.description && <span className="muted">{o.description}</span>}
+                {o.owner && <span className="owner-line">Owner: {o.owner}</span>}
               </div>
               <div className="card-badges">
                 <span className={`badge badge-priority-${o.priority}`}>{o.priority}</span>

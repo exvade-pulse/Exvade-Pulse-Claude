@@ -95,7 +95,10 @@ export default function ProjectDetailPage() {
 
           <article className="card">
             <div className="card-top">
-              <div>{data.project.description && <span className="muted">{data.project.description}</span>}</div>
+              <div>
+                {data.project.description && <span className="muted">{data.project.description}</span>}
+                {data.project.owner && <span className="owner-line">Owner: {data.project.owner}</span>}
+              </div>
               <div className="card-badges">
                 <span className="badge">{data.project.status}</span>
               </div>
@@ -112,7 +115,10 @@ export default function ProjectDetailPage() {
             <Link className="card-link" href={`/tasks/${task.id}`} key={task.id}>
               <article className="card">
                 <div className="card-top">
-                  <p className="card-title">{task.title}</p>
+                  <div>
+                    <p className="card-title">{task.title}</p>
+                    {task.owner && <span className="owner-line">Owner: {task.owner}</span>}
+                  </div>
                   <div className="card-badges">
                     <span className="badge">{task.status}</span>
                   </div>

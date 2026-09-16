@@ -28,6 +28,7 @@ function TaskRow({ task }: { task: CompanyMapProject["tasks"][number] }) {
       <Link className="tree-title-link" href={`/tasks/${task.id}`}>
         {task.title}
       </Link>
+      {task.owner && <span className="owner-line">Owner: {task.owner}</span>}
       <span className="badge">{task.status.replace("_", " ")}</span>
     </div>
   );
@@ -49,6 +50,7 @@ function ProjectNode({
         <Link className="tree-title-link" href={`/projects/${project.id}`}>
           {project.title}
         </Link>
+        {project.owner && <span className="owner-line">Owner: {project.owner}</span>}
         <span className="badge">{project.status}</span>
       </div>
       {open && (
@@ -83,6 +85,7 @@ function InitiativeNode({
         <Link className="tree-title-link" href={`/initiatives/${initiative.id}`}>
           {initiative.title}
         </Link>
+        {initiative.owner && <span className="owner-line">Owner: {initiative.owner}</span>}
         <span className={`badge badge-priority-${initiative.priority}`}>{initiative.priority}</span>
         <span className="badge">{initiative.status}</span>
       </div>
@@ -127,6 +130,7 @@ function ObjectiveNode({
         <Link className="tree-title-link" href={`/objectives/${objective.id}`}>
           {objective.title}
         </Link>
+        {objective.owner && <span className="owner-line">Owner: {objective.owner}</span>}
         <span className={`badge badge-priority-${objective.priority}`}>{objective.priority}</span>
         <span className="badge">{objective.status}</span>
       </div>

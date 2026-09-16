@@ -27,6 +27,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         description: objectives.description,
         status: objectives.status,
         priority: objectives.priority,
+        owner: objectives.owner,
         createdAt: objectives.createdAt,
         updatedAt: objectives.updatedAt,
       })

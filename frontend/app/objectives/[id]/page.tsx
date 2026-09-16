@@ -83,6 +83,7 @@ export default function ObjectiveDetailPage() {
             <div className="card-top">
               <div>
                 {data.objective.description && <span className="muted">{data.objective.description}</span>}
+                {data.objective.owner && <span className="owner-line">Owner: {data.objective.owner}</span>}
               </div>
               <div className="card-badges">
                 <span className={`badge badge-priority-${data.objective.priority}`}>{data.objective.priority}</span>
@@ -99,7 +100,10 @@ export default function ObjectiveDetailPage() {
             <Link className="card-link" href={`/initiatives/${initiative.id}`} key={initiative.id}>
               <article className="card">
                 <div className="card-top">
-                  <p className="card-title">{initiative.title}</p>
+                  <div>
+                    <p className="card-title">{initiative.title}</p>
+                    {initiative.owner && <span className="owner-line">Owner: {initiative.owner}</span>}
+                  </div>
                   <div className="card-badges">
                     <span className={`badge badge-priority-${initiative.priority}`}>{initiative.priority}</span>
                     <span className="badge">{initiative.status}</span>

@@ -186,6 +186,17 @@ body {
   margin: 4px 0 10px;
 }
 
+/* Forces its own line inside a plain (non-flex) card-top column, so "Owner: X"
+   never runs into an adjacent description span; inside a flex row (the
+   company-map tree) every child is already its own flex item, so this class
+   works unchanged there too. */
+.owner-line {
+  display: block;
+  color: #666;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;

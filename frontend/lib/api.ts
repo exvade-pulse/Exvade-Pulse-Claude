@@ -110,6 +110,7 @@ export interface DashboardObjective {
   description: string | null;
   status: "active" | "paused" | "completed" | "cancelled";
   priority: "low" | "medium" | "high" | "critical";
+  owner: string | null;
   createdAt: string;
   updatedAt: string;
   initiativeCount: number;
@@ -220,6 +221,7 @@ export interface ObjectiveDetail {
   description: string | null;
   status: StrategyStatus;
   priority: Priority;
+  owner: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -229,6 +231,7 @@ export interface InitiativeSummary {
   title: string;
   status: StrategyStatus;
   priority: Priority;
+  owner: string | null;
 }
 
 export interface ObjectiveDetailResponse {
@@ -254,6 +257,7 @@ export interface InitiativeDetail {
   description: string | null;
   status: StrategyStatus;
   priority: Priority;
+  owner: string | null;
   objectiveId: string;
   createdAt: string;
   updatedAt: string;
@@ -263,6 +267,7 @@ export interface ProjectSummary {
   id: string;
   title: string;
   status: StrategyStatus;
+  owner: string | null;
 }
 
 export interface InitiativeDetailResponse {
@@ -286,6 +291,7 @@ export interface ProjectDetail {
   title: string;
   description: string | null;
   status: StrategyStatus;
+  owner: string | null;
   initiativeId: string;
   createdAt: string;
   updatedAt: string;
@@ -297,6 +303,7 @@ export interface TaskSummary {
   status: TaskStatus;
   latestUpdate: string | null;
   nextAction: string | null;
+  owner: string | null;
 }
 
 export interface ProjectDetailResponse {
@@ -322,6 +329,7 @@ export interface TaskDetail {
   status: TaskStatus;
   latestUpdate: string | null;
   nextAction: string | null;
+  owner: string | null;
   projectId: string;
   createdAt: string;
   updatedAt: string;
@@ -465,12 +473,14 @@ export interface CompanyMapTask {
   status: TaskStatus;
   latestUpdate: string | null;
   nextAction: string | null;
+  owner: string | null;
 }
 
 export interface CompanyMapProject {
   id: string;
   title: string;
   status: StrategyStatus;
+  owner: string | null;
   tasks: CompanyMapTask[];
 }
 
@@ -479,6 +489,7 @@ export interface CompanyMapInitiative {
   title: string;
   status: StrategyStatus;
   priority: Priority;
+  owner: string | null;
   projects: CompanyMapProject[];
 }
 
@@ -488,6 +499,7 @@ export interface CompanyMapObjective {
   description: string | null;
   status: StrategyStatus;
   priority: Priority;
+  owner: string | null;
   initiatives: CompanyMapInitiative[];
 }
 

@@ -105,7 +105,10 @@ export default function TaskDetailPage() {
 
           <article className="card">
             <div className="card-top">
-              <div>{data.task.description && <span className="muted">{data.task.description}</span>}</div>
+              <div>
+                {data.task.description && <span className="muted">{data.task.description}</span>}
+                {data.task.owner && <span className="owner-line">Owner: {data.task.owner}</span>}
+              </div>
               <div className="card-badges">
                 <span className="badge">{data.task.status}</span>
               </div>

@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { auditLog, decisions, suggestions, tasks } from "../db/schema.js";
+import { auditLog, decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 import { createDecision, DecisionError } from "../decisions/manage.js";
 
@@ -307,6 +307,90 @@ describe("suggestion approval", () => {
 
     const [decisionRow] = await db.select().from(decisions).where(eq(decisions.id, decisionB.id));
     expect(decisionRow.relevantContext).toBeNull();
+  });
+
+  it("approving a suggestion with owner in proposedDiff sets it, for each of the four hierarchy target types", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "owner-flow.test" });
+
+    const cases: Array<{
+      targetType: "objective" | "initiative" | "project" | "task";
+      proposedDiff: Record<string, unknown>;
+      table: typeof objectives | typeof initiatives | typeof projects | typeof tasks;
+    }> = [
+      { targetType: "objective", proposedDiff: { title: "New objective", owner: "Sean Meehan" }, table: objectives },
+      {
+        targetType: "initiative",
+        proposedDiff: { objectiveId: fixture.objective.id, title: "New initiative", owner: "Sean Meehan" },
+        table: initiatives,
+      },
+      {
+        targetType: "project",
+        proposedDiff: { initiativeId: fixture.initiative.id, title: "New project", owner: "Sean Meehan" },
+        table: projects,
+      },
+      {
+        targetType: "task",
+        proposedDiff: { projectId: fixture.project.id, title: "New task", owner: "Sean Meehan" },
+        table: tasks,
+      },
+    ];
+
+    for (const { targetType, proposedDiff, table } of cases) {
+      const [suggestion] = await db
+        .insert(suggestions)
+        .values({
+          organizationId: fixture.org.id,
+          sourceId: fixture.source.id,
+          targetType,
+          targetId: null,
+          changeType: "context",
+          proposedDiff,
+          reasoning: "test",
+          confidence: 0.5,
+        })
+        .returning();
+
+      const updated = await approveSuggestion(db, {
+        organizationId: fixture.org.id,
+        suggestionId: suggestion.id,
+        reviewerId: fixture.user.id,
+      });
+
+      const [row] = await db.select().from(table).where(eq(table.id, updated.targetId!));
+      expect((row as { owner: string | null }).owner).toBe("Sean Meehan");
+    }
+  });
+
+  it("strips an owner key from a decision suggestion's proposedDiff -- owner is only whitelisted for the four hierarchy types", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "decision-owner-scope.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "decision",
+        targetId: null,
+        changeType: "decision",
+        proposedDiff: {
+          title: "Should we renew the office lease?",
+          decider: "Leadership",
+          owner: "Sean Meehan", // not a decision field -- must be dropped, not smuggled onto the decision
+        },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    const updated = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+
+    const [decision] = await db.select().from(decisions).where(eq(decisions.id, updated.targetId!));
+    expect(decision).toBeDefined();
+    expect(decision).not.toHaveProperty("owner");
   });
 });
 

@@ -450,6 +450,52 @@ describe("interpretSource", () => {
     await expect(interpretSource(source, emptyContext(), client)).rejects.toBeInstanceOf(InterpretationError);
   });
 
+  it("accepts owner in proposedDiff for a hierarchy targetType and keeps it through sanitization", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "operational_update",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: { owner: "Sean Meehan" },
+        reasoning: "Email says Sean is now handling the rig #3 wiring fix.",
+        confidence: 0.8,
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff.owner).toBe("Sean Meehan");
+  });
+
+  it("validates fine when a hierarchy targetType's proposedDiff plausibly omits owner (no evidence in the source)", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "operational_update",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: { status: "needs_attention" },
+        reasoning: "No named owner in this update, just a status change.",
+        confidence: 0.7,
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff.owner).toBeUndefined();
+  });
+
   it("caps accepted tool_use calls at MAX_SUGGESTIONS_PER_SOURCE, keeping only the first N", async () => {
     const projectId = randomUUID();
     const context: CompanyContext = {

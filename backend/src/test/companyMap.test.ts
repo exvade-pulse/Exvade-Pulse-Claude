@@ -76,6 +76,7 @@ describe("GET /api/company-map", () => {
         status: "active",
         latestUpdate: "In progress",
         nextAction: "Keep going",
+        owner: "Sean Meehan",
       },
       { organizationId: orgA.org.id, projectId: projectB.id, title: "Task B1", status: "blocked" },
     ]);
@@ -93,13 +94,16 @@ describe("GET /api/company-map", () => {
       objectives: Array<{
         id: string;
         title: string;
+        owner: string | null;
         initiatives: Array<{
           id: string;
           title: string;
+          owner: string | null;
           projects: Array<{
             id: string;
             title: string;
-            tasks: Array<{ id: string; title: string; status: string; latestUpdate: string | null }>;
+            owner: string | null;
+            tasks: Array<{ id: string; title: string; status: string; latestUpdate: string | null; owner: string | null }>;
           }>;
         }>;
       }>;
@@ -111,6 +115,7 @@ describe("GET /api/company-map", () => {
     expect(objectiveIds).not.toContain(orgB.objective.id);
 
     const objective = body.objectives.find((o) => o.id === orgA.objective.id)!;
+    expect(objective.owner).toBeNull();
     const initiativeIds = objective.initiatives.map((i) => i.id);
     expect(initiativeIds).toContain(orgA.initiative.id);
     expect(initiativeIds).toContain(initiativeB.id);
@@ -121,6 +126,7 @@ describe("GET /api/company-map", () => {
     expect(projectA.tasks).toHaveLength(1);
     expect(projectA.tasks[0].title).toBe("Task A1");
     expect(projectA.tasks[0].latestUpdate).toBe("In progress");
+    expect(projectA.tasks[0].owner).toBe("Sean Meehan");
 
     const initiativeBNode = objective.initiatives.find((i) => i.id === initiativeB.id)!;
     const projectBNode = initiativeBNode.projects.find((p) => p.id === projectB.id)!;
@@ -155,15 +161,17 @@ describe("company map detail endpoints", () => {
 
       expect(response.statusCode).toBe(200);
       const body = response.json() as {
-        objective: { id: string; title: string; description: string | null };
-        initiatives: Array<{ id: string; title: string }>;
+        objective: { id: string; title: string; description: string | null; owner: string | null };
+        initiatives: Array<{ id: string; title: string; owner: string | null }>;
       };
       expect(body.objective.id).toBe(fixture.objective.id);
       expect(body.objective.title).toBe("Test objective");
+      expect(body.objective.owner).toBeNull();
       const initiativeIds = body.initiatives.map((i) => i.id);
       expect(initiativeIds).toContain(fixture.initiative.id);
       expect(initiativeIds).toContain(initiativeB.id);
       expect(body.initiatives).toHaveLength(2);
+      expect(body.initiatives.find((i) => i.id === fixture.initiative.id)!.owner).toBeNull();
     });
 
     it("404s for a nonexistent id", async () => {
@@ -199,7 +207,7 @@ describe("company map detail endpoints", () => {
       const fixture = await createFixtureOrg(db, { domain: "init-detail.test" });
       const [projectB] = await db
         .insert(projects)
-        .values({ organizationId: fixture.org.id, initiativeId: fixture.initiative.id, title: "Project B" })
+        .values({ organizationId: fixture.org.id, initiativeId: fixture.initiative.id, title: "Project B", owner: "Sean Meehan" })
         .returning();
 
       const response = await app.inject({
@@ -211,16 +219,18 @@ describe("company map detail endpoints", () => {
 
       expect(response.statusCode).toBe(200);
       const body = response.json() as {
-        initiative: { id: string; title: string };
+        initiative: { id: string; title: string; owner: string | null };
         objective: { id: string; title: string } | null;
-        projects: Array<{ id: string; title: string }>;
+        projects: Array<{ id: string; title: string; owner: string | null }>;
       };
       expect(body.initiative.id).toBe(fixture.initiative.id);
+      expect(body.initiative.owner).toBeNull();
       expect(body.objective?.id).toBe(fixture.objective.id);
       const projectIds = body.projects.map((p) => p.id);
       expect(projectIds).toContain(fixture.project.id);
       expect(projectIds).toContain(projectB.id);
       expect(body.projects).toHaveLength(2);
+      expect(body.projects.find((p) => p.id === projectB.id)!.owner).toBe("Sean Meehan");
     });
 
     it("rolls up task-status counts across all of this initiative's projects, org-scoped", async () => {
@@ -309,6 +319,7 @@ describe("company map detail endpoints", () => {
           status: "active",
           latestUpdate: "Made progress",
           nextAction: "Ship it",
+          owner: "Sean Meehan",
         },
         { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task B", status: "blocked" },
       ]);
@@ -322,16 +333,27 @@ describe("company map detail endpoints", () => {
 
       expect(response.statusCode).toBe(200);
       const body = response.json() as {
-        project: { id: string; title: string };
+        project: { id: string; title: string; owner: string | null };
         initiative: { id: string; title: string } | null;
-        tasks: Array<{ id: string; title: string; status: string; latestUpdate: string | null; nextAction: string | null }>;
+        tasks: Array<{
+          id: string;
+          title: string;
+          status: string;
+          latestUpdate: string | null;
+          nextAction: string | null;
+          owner: string | null;
+        }>;
       };
       expect(body.project.id).toBe(fixture.project.id);
+      expect(body.project.owner).toBeNull();
       expect(body.initiative?.id).toBe(fixture.initiative.id);
       expect(body.tasks).toHaveLength(2);
       const taskA = body.tasks.find((t) => t.title === "Task A");
       expect(taskA?.latestUpdate).toBe("Made progress");
       expect(taskA?.nextAction).toBe("Ship it");
+      expect(taskA?.owner).toBe("Sean Meehan");
+      const taskB = body.tasks.find((t) => t.title === "Task B");
+      expect(taskB?.owner).toBeNull();
     });
 
     it("rolls up task-status counts across this project's own tasks, org-scoped", async () => {
@@ -416,6 +438,7 @@ describe("company map detail endpoints", () => {
           status: "active",
           latestUpdate: "Root cause found",
           nextAction: "File CAPA",
+          owner: "Sean Meehan",
         })
         .returning();
 
@@ -458,7 +481,7 @@ describe("company map detail endpoints", () => {
 
       expect(response.statusCode).toBe(200);
       const body = response.json() as {
-        task: { id: string; title: string; latestUpdate: string | null };
+        task: { id: string; title: string; latestUpdate: string | null; owner: string | null };
         project: { id: string; title: string } | null;
         initiative: { id: string; title: string } | null;
         objective: { id: string; title: string } | null;
@@ -466,6 +489,7 @@ describe("company map detail endpoints", () => {
       };
       expect(body.task.id).toBe(task.id);
       expect(body.task.latestUpdate).toBe("Root cause found");
+      expect(body.task.owner).toBe("Sean Meehan");
       expect(body.project?.id).toBe(fixture.project.id);
       expect(body.initiative?.id).toBe(fixture.initiative.id);
       expect(body.objective?.id).toBe(fixture.objective.id);

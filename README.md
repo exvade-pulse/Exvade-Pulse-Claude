@@ -180,7 +180,10 @@ Built:
   (typecheck/test/build gate before merge).
 - The full data model: `organizations`, `users`, `authorized_users`, `objectives`,
   `initiatives`, `projects`, `tasks`, `sources`, `suggestions`, `decisions`,
-  `audit_log`, `webhook_integrations`.
+  `audit_log`, `webhook_integrations`. `objectives`/`initiatives`/`projects`/`tasks`
+  each carry a nullable `owner` (free text, "who's responsible") -- see the
+  Company Map bullet below for why it's a single field rather than a
+  `decisions`-style `stakeholders` array.
 - Google OAuth restricted to one Workspace domain, JWT session cookie.
 - An allowlist + roles gate on top of that OAuth flow, replacing "any account on
   the domain auto-provisions": `authorized_users`
@@ -600,6 +603,30 @@ Built:
   - A shared `UUID_RE` malformed-id check, previously only in companyMap.ts,
     moved to [backend/src/routes/uuid.ts](backend/src/routes/uuid.ts) so the
     new sources route uses the identical check rather than a second copy.
+- An `owner` field on objectives/initiatives/projects/tasks, closing the other
+  half of the "company map is missing stakeholders and related people"
+  feedback. Every card in the reference Lovable app this session is
+  maturing showed "Owner: [Name]"; scoped here to a single nullable
+  `owner` text column per level (`backend/src/db/schema.ts`), not a
+  `decisions`-style `stakeholders` array -- `owner` (singular, "who's
+  responsible") is the proven-useful pattern the feedback actually calls
+  for, and a full stakeholders array at four levels is real added UI scope
+  with no evidence yet that it's needed; a natural follow-up if it is.
+  [backend/src/suggestions/apply.ts](backend/src/suggestions/apply.ts)'s
+  `ALLOWED_FIELDS` whitelists `owner` for objective/initiative/project/task
+  only, deliberately excluding `decision` (which already owns `decider`/
+  `stakeholders`). The interpretation pipeline
+  ([backend/src/interpretation/interpret.ts](backend/src/interpretation/interpret.ts))
+  can propose `owner` in a suggestion's `proposedDiff` only when the source
+  names a specific person as doing or owning the work -- same
+  evidence-based restraint as the rest of the prompt, never defaulting to
+  the sender's name. Every dashboard/company-map/detail response in
+  [backend/src/routes/dashboard.ts](backend/src/routes/dashboard.ts) and
+  [backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts) now
+  includes `owner`, and the frontend renders a small "Owner: X" line
+  (`.owner-line` in `frontend/app/globals.css`) on the dashboard, every
+  level of the company-map tree, and all four detail pages -- omitted
+  entirely, not shown blank, when unset.
 
 Explicitly **not** built yet (next sessions):
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via
