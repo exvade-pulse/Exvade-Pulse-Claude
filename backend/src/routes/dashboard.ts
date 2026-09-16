@@ -2,9 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { decisions, initiatives, objectives, projects, tasks } from "../db/schema.js";
+import { initiatives, objectives, projects, tasks } from "../db/schema.js";
 import { emptyTaskCounts, type TaskCounts } from "../tasks/rollup.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
+import { blockingDecisionsForTasks } from "../tasks/blockingDecisions.js";
+import { taskSourceCounts } from "../tasks/sourceCounts.js";
 
 // Shared by needs-attention's in-memory sort: critical/high/medium/low, an
 // objective-level-only field (see schema.ts's task table -- tasks have no
@@ -145,28 +147,15 @@ export async function dashboardRoutes(app: FastifyInstance) {
     });
 
     const taskIds = rows.map((row) => row.id);
-    // Batch lookup, not N+1 per task: every open decision in the org whose
-    // relatedTaskId points at one of these tasks, in one query.
-    const openBlockingDecisions =
-      taskIds.length === 0
-        ? []
-        : await db
-            .select({ id: decisions.id, title: decisions.title, relatedTaskId: decisions.relatedTaskId })
-            .from(decisions)
-            .where(
-              and(
-                eq(decisions.organizationId, organizationId),
-                eq(decisions.status, "open"),
-                inArray(decisions.relatedTaskId, taskIds),
-              ),
-            );
-    const blockingDecisionByTaskId = new Map(
-      openBlockingDecisions.map((d) => [d.relatedTaskId as string, { id: d.id, title: d.title }]),
-    );
+    const [blockingDecisionByTaskId, sourceCountByTaskId] = await Promise.all([
+      blockingDecisionsForTasks(db, organizationId, taskIds),
+      taskSourceCounts(db, organizationId, taskIds),
+    ]);
 
     const result = rows.map((task) => ({
       ...task,
       blockingDecision: blockingDecisionByTaskId.get(task.id) ?? null,
+      sourceCount: sourceCountByTaskId.get(task.id) ?? 0,
     }));
 
     reply.send({ tasks: result });
@@ -184,6 +173,9 @@ export async function dashboardRoutes(app: FastifyInstance) {
       .orderBy(desc(tasks.updatedAt))
       .limit(10);
 
-    reply.send({ tasks: rows });
+    const sourceCountByTaskId = await taskSourceCounts(db, organizationId, rows.map((row) => row.id));
+    const result = rows.map((task) => ({ ...task, sourceCount: sourceCountByTaskId.get(task.id) ?? 0 }));
+
+    reply.send({ tasks: result });
   });
 }

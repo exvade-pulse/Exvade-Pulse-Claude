@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { decisions, initiatives, objectives, projects, tasks } from "../db/schema.js";
+import { decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
 import { createDecision, resolveDecision } from "../decisions/manage.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
@@ -278,6 +278,51 @@ describe("GET /api/dashboard/needs-attention", () => {
     expect(withDecided?.blockingDecision).toBeNull();
   });
 
+  it("tags each task with its all-time count of approved suggestions, excluding pending ones", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "needs-attention-source-count.test" });
+
+    const [cited] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Cited", status: "blocked" })
+      .returning();
+    const [uncited] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Uncited", status: "blocked" })
+      .returning();
+
+    await db.insert(suggestions).values([
+      {
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: cited.id,
+        changeType: "operational_update",
+        proposedDiff: {},
+        reasoning: "Approved one",
+        confidence: 0.8,
+        status: "approved",
+      },
+      {
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: cited.id,
+        changeType: "operational_update",
+        proposedDiff: {},
+        reasoning: "Still pending",
+        confidence: 0.5,
+        status: "pending",
+      },
+    ]);
+
+    const response = await getAsUser(fixture, "/api/dashboard/needs-attention");
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { tasks: Array<{ id: string; sourceCount: number }> };
+
+    expect(body.tasks.find((t) => t.id === cited.id)?.sourceCount).toBe(1);
+    expect(body.tasks.find((t) => t.id === uncited.id)?.sourceCount).toBe(0);
+  });
+
   it("never returns a task belonging to a different organization", async () => {
     const orgA = await createFixtureOrg(db, { domain: "needs-attention-org-a.test" });
     const orgB = await createFixtureOrg(db, { domain: "needs-attention-org-b.test" });
@@ -330,6 +375,32 @@ describe("GET /api/dashboard/recent-progress", () => {
     const body = response.json() as { tasks: Array<{ id: string; title: string; status: string }> };
     expect(body.tasks.map((t) => t.id)).toEqual([newResolved.id, oldCompleted.id]);
     expect(body.tasks.map((t) => t.status)).toEqual(["resolved", "completed"]);
+  });
+
+  it("tags each task with its all-time count of approved suggestions", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "recent-progress-source-count.test" });
+
+    const [completed] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Completed", status: "completed" })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: completed.id,
+      changeType: "operational_update",
+      proposedDiff: {},
+      reasoning: "Approved",
+      confidence: 0.8,
+      status: "approved",
+    });
+
+    const response = await getAsUser(fixture, "/api/dashboard/recent-progress");
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { tasks: Array<{ id: string; sourceCount: number }> };
+    expect(body.tasks.find((t) => t.id === completed.id)?.sourceCount).toBe(1);
   });
 
   it("never returns a task belonging to a different organization", async () => {

@@ -646,6 +646,30 @@ Built:
   only the changed field in local state on save rather than replacing the
   whole card (the PATCH response is the raw `decisions` row, without the
   `relatedTaskTitle`/`relatedTaskStatus` join the list endpoint adds).
+- Source-count and blocking-decision tags on task cards in the Company Map
+  tree and dashboard lists, so "has this been backed by a real source" and
+  "why is this stuck" are visible at a glance without opening the task.
+  `taskSourceCounts`/`blockingDecisionsForTasks`
+  ([backend/src/tasks/sourceCounts.ts](backend/src/tasks/sourceCounts.ts),
+  [backend/src/tasks/blockingDecisions.ts](backend/src/tasks/blockingDecisions.ts))
+  are shared, batch (not N+1) lookups keyed by task id — `taskSourceCounts`
+  is all-time (every approved suggestion ever citing a task), deliberately
+  distinct from `reports.ts`'s own week-scoped source count.
+  `blockingDecisionsForTasks` factors out the same open-decision-pointing-
+  at-a-task lookup `GET /api/tasks/:id` already did for one task, now reused
+  across many. `GET /api/company-map`
+  ([backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts)) and
+  `GET /api/dashboard/needs-attention`/`recent-progress`
+  ([backend/src/routes/dashboard.ts](backend/src/routes/dashboard.ts)) all
+  merge both onto their task rows in memory, the same "few flat queries,
+  joined in memory" pattern this codebase already uses rather than one
+  bigger multi-join query. The frontend renders a neutral "N sources" chip
+  (hidden at zero, not a bare "0") wherever a task row appears
+  ([frontend/app/company-map/page.tsx](frontend/app/company-map/page.tsx),
+  [frontend/app/page.tsx](frontend/app/page.tsx)), plus a red "blocked by
+  decision" chip on Company Map task rows specifically -- the dashboard's
+  Needs Attention list already had a full blocking-decision sentence, so it
+  only gains the source-count chip, not a redundant second decision tag.
 - Confidence tiering and a reviewed-history view on `/review`, closing two gaps
   in the review queue: every suggestion carried a `confidence` score but the
   queue rendered one flat list, and an approved/rejected suggestion vanished

@@ -29,6 +29,16 @@ function TaskRow({ task }: { task: CompanyMapProject["tasks"][number] }) {
         {task.title}
       </Link>
       {task.owner && <span className="owner-line">Owner: {task.owner}</span>}
+      {task.sourceCount > 0 && (
+        <span className="chip" title="Approved suggestions citing a source">
+          {task.sourceCount} source{task.sourceCount === 1 ? "" : "s"}
+        </span>
+      )}
+      {task.blockingDecision && (
+        <span className="tag-decision" title={`Blocked by open decision: ${task.blockingDecision.title}`}>
+          blocked by decision
+        </span>
+      )}
       <span className="badge">{task.status.replace("_", " ")}</span>
     </div>
   );

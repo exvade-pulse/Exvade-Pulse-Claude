@@ -165,6 +165,9 @@ export interface DashboardTask {
   // Only ever present on needs-attention rows (recent-progress tasks are
   // completed/resolved, never blocked, so that endpoint doesn't compute this).
   blockingDecision?: BlockingDecision | null;
+  // All-time count of approved suggestions citing this task -- see
+  // backend/src/tasks/sourceCounts.ts.
+  sourceCount: number;
 }
 
 export async function fetchNeedsAttention(): Promise<DashboardTask[]> {
@@ -607,6 +610,8 @@ export interface CompanyMapTask {
   latestUpdate: string | null;
   nextAction: string | null;
   owner: string | null;
+  sourceCount: number;
+  blockingDecision: BlockingDecision | null;
 }
 
 export interface CompanyMapProject {

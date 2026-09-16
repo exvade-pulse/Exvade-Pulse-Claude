@@ -188,7 +188,14 @@ export default function DashboardPage() {
                 <Link className="task-row-title" href={`/tasks/${t.id}`}>
                   {t.title}
                 </Link>
-                <span className={chipClass(t.status)}>{STATUS_LABEL[t.status]}</span>
+                <span className="task-row-tags">
+                  {t.sourceCount > 0 && (
+                    <span className="chip" title="Approved suggestions citing a source">
+                      {t.sourceCount} source{t.sourceCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  <span className={chipClass(t.status)}>{STATUS_LABEL[t.status]}</span>
+                </span>
               </div>
               <p className="task-row-meta">
                 {t.owner && <>Owner: {t.owner} &middot; </>}
@@ -228,7 +235,14 @@ export default function DashboardPage() {
                 <Link className="task-row-title" href={`/tasks/${t.id}`}>
                   {t.title}
                 </Link>
-                <span className="chip chip-done">{STATUS_LABEL[t.status]}</span>
+                <span className="task-row-tags">
+                  {t.sourceCount > 0 && (
+                    <span className="chip" title="Approved suggestions citing a source">
+                      {t.sourceCount} source{t.sourceCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  <span className="chip chip-done">{STATUS_LABEL[t.status]}</span>
+                </span>
               </div>
               <p className="task-row-meta">
                 {t.owner && <>Owner: {t.owner} &middot; </>}

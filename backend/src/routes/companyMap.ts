@@ -4,6 +4,8 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
 import { emptyTaskCounts } from "../tasks/rollup.js";
+import { blockingDecisionsForTasks } from "../tasks/blockingDecisions.js";
+import { taskSourceCounts } from "../tasks/sourceCounts.js";
 import { UUID_RE } from "./uuid.js";
 
 export async function companyMapRoutes(app: FastifyInstance) {
@@ -67,14 +69,28 @@ export async function companyMapRoutes(app: FastifyInstance) {
         .orderBy(tasks.title),
     ]);
 
-    const tasksByProject = new Map<string, typeof taskRows>();
-    for (const task of taskRows) {
+    const allTaskIds = taskRows.map((task) => task.id);
+    const [blockingDecisionByTaskId, sourceCountByTaskId] = await Promise.all([
+      blockingDecisionsForTasks(db, organizationId, allTaskIds),
+      taskSourceCounts(db, organizationId, allTaskIds),
+    ]);
+    const taskRowsWithTags = taskRows.map((task) => ({
+      ...task,
+      blockingDecision: blockingDecisionByTaskId.get(task.id) ?? null,
+      sourceCount: sourceCountByTaskId.get(task.id) ?? 0,
+    }));
+
+    const tasksByProject = new Map<string, typeof taskRowsWithTags>();
+    for (const task of taskRowsWithTags) {
       const list = tasksByProject.get(task.projectId) ?? [];
       list.push(task);
       tasksByProject.set(task.projectId, list);
     }
 
-    const projectsByInitiative = new Map<string, Array<(typeof projectRows)[number] & { tasks: typeof taskRows }>>();
+    const projectsByInitiative = new Map<
+      string,
+      Array<(typeof projectRows)[number] & { tasks: typeof taskRowsWithTags }>
+    >();
     for (const project of projectRows) {
       const list = projectsByInitiative.get(project.initiativeId) ?? [];
       list.push({ ...project, tasks: tasksByProject.get(project.id) ?? [] });

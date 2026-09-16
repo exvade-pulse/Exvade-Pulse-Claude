@@ -413,6 +413,17 @@ body {
   font-weight: 600;
 }
 
+.tag-decision {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #fdecea;
+  color: #a33;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 .blocking-decision a {
   color: inherit;
   text-decoration: underline;
@@ -670,6 +681,13 @@ body {
   align-items: baseline;
   gap: 12px;
   margin-bottom: 3px;
+}
+
+.task-row-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .task-row-title {

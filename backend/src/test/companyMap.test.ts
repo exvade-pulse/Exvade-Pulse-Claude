@@ -134,6 +134,104 @@ describe("GET /api/company-map", () => {
     expect(projectBNode.tasks).toHaveLength(1);
     expect(projectBNode.tasks[0].title).toBe("Task B1");
   });
+
+  it("tags each task row with its approved-suggestion source count and any blocking open decision", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "map-tags.test" });
+
+    const [citedTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Cited task", status: "active" })
+      .returning();
+    const [blockedTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Blocked task", status: "blocked" })
+      .returning();
+    const [plainTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Plain task", status: "active" })
+      .returning();
+
+    await db.insert(suggestions).values([
+      {
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: citedTask.id,
+        changeType: "operational_update",
+        proposedDiff: {},
+        reasoning: "First",
+        confidence: 0.8,
+        status: "approved",
+      },
+      {
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: citedTask.id,
+        changeType: "operational_update",
+        proposedDiff: {},
+        reasoning: "Second",
+        confidence: 0.8,
+        status: "approved",
+      },
+      // A pending (not approved) suggestion on the same task must not count.
+      {
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: citedTask.id,
+        changeType: "operational_update",
+        proposedDiff: {},
+        reasoning: "Still pending",
+        confidence: 0.5,
+        status: "pending",
+      },
+    ]);
+
+    const blockingDecision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Needs a call before this can proceed",
+      decider: "CEO",
+      relatedTaskId: blockedTask.id,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/company-map",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      objectives: Array<{
+        initiatives: Array<{
+          projects: Array<{
+            tasks: Array<{
+              id: string;
+              sourceCount: number;
+              blockingDecision: { id: string; title: string } | null;
+            }>;
+          }>;
+        }>;
+      }>;
+    };
+    const allTasks = body.objectives.flatMap((o) => o.initiatives.flatMap((i) => i.projects.flatMap((p) => p.tasks)));
+
+    const cited = allTasks.find((t) => t.id === citedTask.id)!;
+    expect(cited.sourceCount).toBe(2);
+    expect(cited.blockingDecision).toBeNull();
+
+    const blocked = allTasks.find((t) => t.id === blockedTask.id)!;
+    expect(blocked.sourceCount).toBe(0);
+    expect(blocked.blockingDecision).toEqual({ id: blockingDecision.id, title: blockingDecision.title });
+
+    const plain = allTasks.find((t) => t.id === plainTask.id)!;
+    expect(plain.sourceCount).toBe(0);
+    expect(plain.blockingDecision).toBeNull();
+  });
 });
 
 describe("company map detail endpoints", () => {
