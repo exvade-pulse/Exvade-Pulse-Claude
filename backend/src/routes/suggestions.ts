@@ -34,6 +34,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
         reviewerName: users.name,
         reviewerEmail: users.email,
         source: {
+          id: sources.id,
           type: sources.type,
           externalId: sources.externalId,
           receivedAt: sources.receivedAt,

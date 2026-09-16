@@ -11,6 +11,7 @@ import {
   type SessionUser,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
+import { SourceToggle } from "../components/SourceToggle";
 
 const EMPTY_FORM = {
   title: "",
@@ -276,6 +277,8 @@ export default function DecisionsPage() {
             </div>
 
             {d.relatedTaskTitle && <p className="decision-meta">Related task: {d.relatedTaskTitle}</p>}
+
+            {d.sourceId && <SourceToggle sourceId={d.sourceId} />}
 
             {isResolving ? (
               <div className="edit-form">

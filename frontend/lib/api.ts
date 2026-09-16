@@ -23,6 +23,7 @@ export interface Suggestion {
   reviewerName: string | null;
   reviewerEmail: string | null;
   source: {
+    id: string;
     type: string;
     externalId: string;
     receivedAt: string;
@@ -69,6 +70,27 @@ export async function decideSuggestion(id: string, decision: "approve" | "reject
     const body = await res.json().catch(() => ({}));
     throw new Error((body as { error?: string }).error ?? `Failed to ${decision} suggestion`);
   }
+}
+
+export interface SourceDetail {
+  id: string;
+  type: string;
+  externalId: string;
+  receivedAt: string;
+  rawBody: string | null;
+}
+
+// Deliberately separate from fetchPendingSuggestions/fetchOpenDecisions:
+// rawBody can be a full email/meeting/document and is usually never read, so
+// it's fetched lazily only when a "View source" toggle is actually opened,
+// not bundled into every suggestion/decision list response.
+export async function fetchSource(id: string): Promise<SourceDetail> {
+  const res = await fetch(`${API_URL}/api/sources/${id}`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load source (${res.status})`);
+  }
+  const body = (await res.json()) as { source: SourceDetail };
+  return body.source;
 }
 
 export type TaskStatus =
@@ -247,6 +269,7 @@ export interface InitiativeDetailResponse {
   initiative: InitiativeDetail;
   objective: { id: string; title: string } | null;
   projects: ProjectSummary[];
+  taskCounts: TaskCounts;
 }
 
 export async function fetchInitiative(id: string): Promise<InitiativeDetailResponse | "not_found"> {
@@ -280,6 +303,7 @@ export interface ProjectDetailResponse {
   project: ProjectDetail;
   initiative: { id: string; title: string } | null;
   tasks: TaskSummary[];
+  taskCounts: TaskCounts;
 }
 
 export async function fetchProject(id: string): Promise<ProjectDetailResponse | "not_found"> {
@@ -307,6 +331,7 @@ export interface ApprovedTaskSuggestion {
   id: string;
   changeType: string;
   reasoning: string;
+  proposedDiff: Record<string, unknown>;
   reviewedAt: string | null;
 }
 
@@ -432,6 +457,54 @@ export async function fetchActivity(): Promise<ActivityEntry[]> {
   }
   const body = (await res.json()) as { entries: ActivityEntry[] };
   return body.entries;
+}
+
+export interface CompanyMapTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  latestUpdate: string | null;
+  nextAction: string | null;
+}
+
+export interface CompanyMapProject {
+  id: string;
+  title: string;
+  status: StrategyStatus;
+  tasks: CompanyMapTask[];
+}
+
+export interface CompanyMapInitiative {
+  id: string;
+  title: string;
+  status: StrategyStatus;
+  priority: Priority;
+  projects: CompanyMapProject[];
+}
+
+export interface CompanyMapObjective {
+  id: string;
+  title: string;
+  description: string | null;
+  status: StrategyStatus;
+  priority: Priority;
+  initiatives: CompanyMapInitiative[];
+}
+
+export interface CompanyMapResponse {
+  objectives: CompanyMapObjective[];
+}
+
+// The whole Objective -> Initiative -> Project -> Task tree in one call, for
+// the Company Map overview page -- distinct from fetchObjective/fetchInitiative/
+// fetchProject/fetchTask, which each fetch one node plus its immediate
+// children for a drill-down detail page.
+export async function fetchCompanyMap(): Promise<CompanyMapResponse> {
+  const res = await fetch(`${API_URL}/api/company-map`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load company map (${res.status})`);
+  }
+  return res.json();
 }
 
 export async function revokeUser(email: string): Promise<void> {

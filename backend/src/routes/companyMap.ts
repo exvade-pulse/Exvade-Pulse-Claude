@@ -1,17 +1,99 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
-
-// Route params arrive as arbitrary strings (a stale link, a typo, a poked-at
-// URL) -- Postgres throws (not a clean empty result) on a non-UUID literal
-// against a uuid column, which would otherwise surface as a 500 instead of
-// the 404 a bad id should produce.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { emptyTaskCounts } from "../tasks/rollup.js";
+import { UUID_RE } from "./uuid.js";
 
 export async function companyMapRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
+
+  // The full Objective -> Initiative -> Project -> Task tree in one response,
+  // for the Company Map overview page -- assembled in memory from four
+  // org-scoped queries (one per level) rather than one query per objective,
+  // so this stays flat regardless of how many objectives an org has.
+  app.get("/api/company-map", async (request, reply) => {
+    const organizationId = request.user!.organizationId;
+
+    const [objectiveRows, initiativeRows, projectRows, taskRows] = await Promise.all([
+      db
+        .select({
+          id: objectives.id,
+          title: objectives.title,
+          description: objectives.description,
+          status: objectives.status,
+          priority: objectives.priority,
+        })
+        .from(objectives)
+        .where(eq(objectives.organizationId, organizationId))
+        .orderBy(objectives.title),
+      db
+        .select({
+          id: initiatives.id,
+          objectiveId: initiatives.objectiveId,
+          title: initiatives.title,
+          status: initiatives.status,
+          priority: initiatives.priority,
+        })
+        .from(initiatives)
+        .where(eq(initiatives.organizationId, organizationId))
+        .orderBy(initiatives.title),
+      db
+        .select({
+          id: projects.id,
+          initiativeId: projects.initiativeId,
+          title: projects.title,
+          status: projects.status,
+        })
+        .from(projects)
+        .where(eq(projects.organizationId, organizationId))
+        .orderBy(projects.title),
+      db
+        .select({
+          id: tasks.id,
+          projectId: tasks.projectId,
+          title: tasks.title,
+          status: tasks.status,
+          latestUpdate: tasks.latestUpdate,
+          nextAction: tasks.nextAction,
+        })
+        .from(tasks)
+        .where(eq(tasks.organizationId, organizationId))
+        .orderBy(tasks.title),
+    ]);
+
+    const tasksByProject = new Map<string, typeof taskRows>();
+    for (const task of taskRows) {
+      const list = tasksByProject.get(task.projectId) ?? [];
+      list.push(task);
+      tasksByProject.set(task.projectId, list);
+    }
+
+    const projectsByInitiative = new Map<string, Array<(typeof projectRows)[number] & { tasks: typeof taskRows }>>();
+    for (const project of projectRows) {
+      const list = projectsByInitiative.get(project.initiativeId) ?? [];
+      list.push({ ...project, tasks: tasksByProject.get(project.id) ?? [] });
+      projectsByInitiative.set(project.initiativeId, list);
+    }
+
+    const initiativesByObjective = new Map<
+      string,
+      Array<(typeof initiativeRows)[number] & { projects: ReturnType<typeof projectsByInitiative.get> }>
+    >();
+    for (const initiative of initiativeRows) {
+      const list = initiativesByObjective.get(initiative.objectiveId) ?? [];
+      list.push({ ...initiative, projects: projectsByInitiative.get(initiative.id) ?? [] });
+      initiativesByObjective.set(initiative.objectiveId, list);
+    }
+
+    const tree = objectiveRows.map((objective) => ({
+      ...objective,
+      initiatives: initiativesByObjective.get(objective.id) ?? [],
+    }));
+
+    reply.send({ objectives: tree });
+  });
 
   app.get<{ Params: { id: string } }>("/api/objectives/:id", async (request, reply) => {
     const organizationId = request.user!.organizationId;
@@ -74,7 +156,21 @@ export async function companyMapRoutes(app: FastifyInstance) {
       .where(and(eq(projects.initiativeId, id), eq(projects.organizationId, organizationId)))
       .orderBy(projects.title);
 
-    reply.send({ initiative, objective: objective ?? null, projects: projectRows });
+    // Same rollup shape as the dashboard's objective cards, one level down --
+    // every task across this initiative's projects, joined up through
+    // projects to scope by initiativeId (tasks don't carry initiativeId
+    // directly).
+    const taskStatusCounts = await db
+      .select({ status: tasks.status, count: count() })
+      .from(tasks)
+      .innerJoin(projects, eq(projects.id, tasks.projectId))
+      .where(and(eq(projects.initiativeId, id), eq(tasks.organizationId, organizationId)))
+      .groupBy(tasks.status);
+
+    const taskCounts = emptyTaskCounts();
+    for (const row of taskStatusCounts) taskCounts[row.status] = row.count;
+
+    reply.send({ initiative, objective: objective ?? null, projects: projectRows, taskCounts });
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id", async (request, reply) => {
@@ -112,7 +208,19 @@ export async function companyMapRoutes(app: FastifyInstance) {
       .where(and(eq(tasks.projectId, id), eq(tasks.organizationId, organizationId)))
       .orderBy(tasks.title);
 
-    reply.send({ project, initiative: initiative ?? null, tasks: taskRows });
+    // Same rollup shape as the initiative endpoint above, scoped to this
+    // project's own tasks directly (no join needed -- tasks already carry
+    // projectId).
+    const taskStatusCounts = await db
+      .select({ status: tasks.status, count: count() })
+      .from(tasks)
+      .where(and(eq(tasks.projectId, id), eq(tasks.organizationId, organizationId)))
+      .groupBy(tasks.status);
+
+    const taskCounts = emptyTaskCounts();
+    for (const row of taskStatusCounts) taskCounts[row.status] = row.count;
+
+    reply.send({ project, initiative: initiative ?? null, tasks: taskRows, taskCounts });
   });
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
@@ -151,6 +259,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
         id: suggestions.id,
         changeType: suggestions.changeType,
         reasoning: suggestions.reasoning,
+        proposedDiff: suggestions.proposedDiff,
         reviewedAt: suggestions.reviewedAt,
       })
       .from(suggestions)

@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { initiatives, projects, suggestions, tasks } from "../db/schema.js";
+import { eq } from "drizzle-orm";
+import { initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 
@@ -20,6 +21,113 @@ async function tokenFor(fixture: Awaited<ReturnType<typeof createFixtureOrg>>) {
     role: fixture.authorization.role,
   });
 }
+
+describe("GET /api/company-map", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const app = await buildApp();
+    const response = await app.inject({ method: "GET", url: "/api/company-map" });
+    await app.close();
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("an org with zero objectives returns an empty tree, not an error", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "map-empty.test" });
+    // createFixtureOrg always creates one objective (with an initiative and
+    // project cascading from it) -- delete it to exercise the genuinely-empty
+    // case; onDelete: "cascade" on initiatives/projects/tasks takes the rest
+    // with it.
+    await db.delete(objectives).where(eq(objectives.organizationId, fixture.org.id));
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/company-map",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { objectives: unknown[] };
+    expect(body.objectives).toEqual([]);
+  });
+
+  it("returns the full nested tree for the caller's org, org-isolated from another org's data", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "map-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "map-org-b.test" });
+
+    const [initiativeB] = await db
+      .insert(initiatives)
+      .values({ organizationId: orgA.org.id, objectiveId: orgA.objective.id, title: "Initiative B" })
+      .returning();
+    const [projectB] = await db
+      .insert(projects)
+      .values({ organizationId: orgA.org.id, initiativeId: initiativeB.id, title: "Project B" })
+      .returning();
+
+    await db.insert(tasks).values([
+      {
+        organizationId: orgA.org.id,
+        projectId: orgA.project.id,
+        title: "Task A1",
+        status: "active",
+        latestUpdate: "In progress",
+        nextAction: "Keep going",
+      },
+      { organizationId: orgA.org.id, projectId: projectB.id, title: "Task B1", status: "blocked" },
+    ]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/company-map",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(orgA) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      objectives: Array<{
+        id: string;
+        title: string;
+        initiatives: Array<{
+          id: string;
+          title: string;
+          projects: Array<{
+            id: string;
+            title: string;
+            tasks: Array<{ id: string; title: string; status: string; latestUpdate: string | null }>;
+          }>;
+        }>;
+      }>;
+    };
+
+    // Org isolation: only orgA's objective shows up.
+    const objectiveIds = body.objectives.map((o) => o.id);
+    expect(objectiveIds).toContain(orgA.objective.id);
+    expect(objectiveIds).not.toContain(orgB.objective.id);
+
+    const objective = body.objectives.find((o) => o.id === orgA.objective.id)!;
+    const initiativeIds = objective.initiatives.map((i) => i.id);
+    expect(initiativeIds).toContain(orgA.initiative.id);
+    expect(initiativeIds).toContain(initiativeB.id);
+
+    const initiativeA = objective.initiatives.find((i) => i.id === orgA.initiative.id)!;
+    expect(initiativeA.projects.map((p) => p.id)).toContain(orgA.project.id);
+    const projectA = initiativeA.projects.find((p) => p.id === orgA.project.id)!;
+    expect(projectA.tasks).toHaveLength(1);
+    expect(projectA.tasks[0].title).toBe("Task A1");
+    expect(projectA.tasks[0].latestUpdate).toBe("In progress");
+
+    const initiativeBNode = objective.initiatives.find((i) => i.id === initiativeB.id)!;
+    const projectBNode = initiativeBNode.projects.find((p) => p.id === projectB.id)!;
+    expect(projectBNode.tasks).toHaveLength(1);
+    expect(projectBNode.tasks[0].title).toBe("Task B1");
+  });
+});
 
 describe("company map detail endpoints", () => {
   beforeEach(async () => {
@@ -115,6 +223,46 @@ describe("company map detail endpoints", () => {
       expect(body.projects).toHaveLength(2);
     });
 
+    it("rolls up task-status counts across all of this initiative's projects, org-scoped", async () => {
+      const app = await buildApp();
+      const fixture = await createFixtureOrg(db, { domain: "init-rollup.test" });
+      const otherOrg = await createFixtureOrg(db, { domain: "init-rollup-other.test" });
+
+      const [projectB] = await db
+        .insert(projects)
+        .values({ organizationId: fixture.org.id, initiativeId: fixture.initiative.id, title: "Project B" })
+        .returning();
+
+      await db.insert(tasks).values([
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "T1", status: "active" },
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "T2", status: "active" },
+        { organizationId: fixture.org.id, projectId: projectB.id, title: "T3", status: "blocked" },
+        { organizationId: fixture.org.id, projectId: projectB.id, title: "T4", status: "completed" },
+        // A task under a different organization's initiative must never
+        // bleed into this rollup.
+        { organizationId: otherOrg.org.id, projectId: otherOrg.project.id, title: "Other org task", status: "active" },
+      ]);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/initiatives/${fixture.initiative.id}`,
+        cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+      });
+      await app.close();
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { taskCounts: Record<string, number> };
+      expect(body.taskCounts).toEqual({
+        active: 2,
+        waiting: 0,
+        needs_attention: 0,
+        completed: 1,
+        superseded: 0,
+        resolved: 0,
+        blocked: 1,
+      });
+    });
+
     it("returns 401 for an unauthenticated request", async () => {
       const app = await buildApp();
       const response = await app.inject({ method: "GET", url: `/api/initiatives/${randomUUID()}` });
@@ -184,6 +332,41 @@ describe("company map detail endpoints", () => {
       const taskA = body.tasks.find((t) => t.title === "Task A");
       expect(taskA?.latestUpdate).toBe("Made progress");
       expect(taskA?.nextAction).toBe("Ship it");
+    });
+
+    it("rolls up task-status counts across this project's own tasks, org-scoped", async () => {
+      const app = await buildApp();
+      const fixture = await createFixtureOrg(db, { domain: "proj-rollup.test" });
+      const otherOrg = await createFixtureOrg(db, { domain: "proj-rollup-other.test" });
+
+      await db.insert(tasks).values([
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "T1", status: "active" },
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "T2", status: "needs_attention" },
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "T3", status: "needs_attention" },
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "T4", status: "resolved" },
+        // A task under a different organization's project must never bleed
+        // into this rollup.
+        { organizationId: otherOrg.org.id, projectId: otherOrg.project.id, title: "Other org task", status: "active" },
+      ]);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/projects/${fixture.project.id}`,
+        cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+      });
+      await app.close();
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { taskCounts: Record<string, number> };
+      expect(body.taskCounts).toEqual({
+        active: 1,
+        waiting: 0,
+        needs_attention: 2,
+        completed: 0,
+        superseded: 0,
+        resolved: 1,
+        blocked: 0,
+      });
     });
 
     it("returns 401 for an unauthenticated request", async () => {

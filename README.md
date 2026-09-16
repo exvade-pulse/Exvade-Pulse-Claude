@@ -531,6 +531,75 @@ Built:
   [frontend/lib/api.ts](frontend/lib/api.ts) adds `fetchSuggestionsByStatus` next
   to the existing `fetchPendingSuggestions`, and extends the `Suggestion` type
   with the three new fields.
+- A Company Map overview page, plus richer context throughout — the piece of
+  user feedback ("still very sparse... company map is missing") this session
+  closes, in four parts:
+  - **The actual Company Map.** Every prior "Company Map" page was drill-down
+    only — one level at a time, no page showing the whole Objective →
+    Initiative → Project → Task tree at once, and no nav entry for it.
+    `GET /api/company-map` ([backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts)),
+    `requireAuth`-gated and org-scoped, assembles the full nested tree from
+    four flat, org-scoped queries (one per level) run in parallel and joined
+    in memory by parent id, rather than one query per objective — stays flat
+    regardless of tree size. Task nodes include `latestUpdate`/`nextAction`
+    inline (the app's scale makes the extra response size worth saving a
+    click). [frontend/app/company-map/page.tsx](frontend/app/company-map/page.tsx)
+    renders it as an expand/collapse tree (`frontend/app/components/Nav.tsx`
+    gains a "Company Map" link, ungated like Dashboard/Review/Decisions/
+    Activity): objectives and initiatives start expanded (seeing the whole
+    structure at once is the point), projects start collapsed (task lists are
+    the most numerous leaf level, the one place a real org's map could get
+    unwieldy). Each node is its own small component
+    (`ObjectiveNode`/`InitiativeNode`/`ProjectNode`/`TaskRow`) with manual
+    React-state expand/collapse rather than nested native `<details>`, since a
+    `<summary>` containing a `<Link>` makes click targets conflict; clicking a
+    title still navigates to that item's existing detail page — this is a map,
+    not a replacement for drill-down detail.
+  - **Rollup chips at every level, not just the top.** Only the dashboard's
+    objective cards had a task-status breakdown; initiative/project detail
+    pages just listed child rows with no "what's the state of everything under
+    here" summary. The initiative and project detail endpoints
+    ([backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts))
+    now return a `taskCounts` breakdown alongside their existing response —
+    real SQL `groupBy`/`count`, scoped by `initiativeId` (joined up through
+    projects, since tasks don't carry it directly) or `projectId` respectively
+    — reusing the exact rollup shape dashboard.ts already established rather
+    than reinventing it: `TASK_STATUSES`/`TaskCounts`/`emptyTaskCounts` moved
+    out of dashboard.ts into [backend/src/tasks/rollup.ts](backend/src/tasks/rollup.ts)
+    so all three routes share one definition. The frontend's chip-row
+    rendering (workflow-ordered statuses, attention/done color variants) moved
+    the same way, from `frontend/app/page.tsx` into
+    [frontend/app/components/TaskStatusChips.tsx](frontend/app/components/TaskStatusChips.tsx),
+    now used by the dashboard, [frontend/app/initiatives/[id]/page.tsx](frontend/app/initiatives/[id]/page.tsx),
+    and [frontend/app/projects/[id]/page.tsx](frontend/app/projects/[id]/page.tsx) alike.
+  - **Richer history on task detail pages.** `GET /api/tasks/:id`'s
+    `approvedSuggestions` now also returns each suggestion's `proposedDiff`;
+    the task page renders it with the same `formatDiff` logic the review page
+    uses, moved to [frontend/lib/formatDiff.ts](frontend/lib/formatDiff.ts) so
+    "what changed" reads identically in both places instead of two
+    implementations drifting apart. A history entry now reads as "here's what
+    happened and when," not just a bare reasoning string and a date.
+  - **Source evidence, available but not prominent.** Per explicit user
+    feedback, source content needed to be *available* on suggestion/decision
+    cards without competing with the title/reasoning/diff for attention.
+    [backend/src/routes/sources.ts](backend/src/routes/sources.ts) adds
+    `GET /api/sources/:id` (`requireAuth`-gated, org-scoped, 404 for a
+    malformed/nonexistent/other-org id) returning one source's full row
+    including `rawBody` — kept out of the `GET /api/suggestions`/
+    `GET /api/decisions` list responses (which only ever needed
+    type/externalId/receivedAt, now also `id` on the suggestions join) so a
+    potentially-long raw email/transcript body isn't bundled into every list
+    fetch when it's usually never read.
+    [frontend/app/components/SourceToggle.tsx](frontend/app/components/SourceToggle.tsx)
+    is a plain `<details>`/`<summary>` "View source" toggle — collapsed by
+    default, zero extra state for open/close, fetching the body lazily via
+    `fetchSource` only on first open — used on both
+    [frontend/app/review/page.tsx](frontend/app/review/page.tsx) (every
+    suggestion card) and [frontend/app/decisions/page.tsx](frontend/app/decisions/page.tsx)
+    (only when a decision has a `sourceId`).
+  - A shared `UUID_RE` malformed-id check, previously only in companyMap.ts,
+    moved to [backend/src/routes/uuid.ts](backend/src/routes/uuid.ts) so the
+    new sources route uses the identical check rather than a second copy.
 
 Explicitly **not** built yet (next sessions):
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via

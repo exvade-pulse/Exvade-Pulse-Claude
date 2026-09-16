@@ -11,6 +11,7 @@ import {
   type SessionUser,
 } from "../../../lib/api";
 import { Nav } from "../../components/Nav";
+import { TaskStatusChips } from "../../components/TaskStatusChips";
 
 export default function InitiativeDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -95,6 +96,8 @@ export default function InitiativeDetailPage() {
                 <span className="badge">{data.initiative.status}</span>
               </div>
             </div>
+
+            <TaskStatusChips counts={data.taskCounts} />
           </article>
 
           <h2 className="section-title">Projects</h2>

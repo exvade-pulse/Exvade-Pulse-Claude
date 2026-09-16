@@ -8,40 +8,12 @@ import {
   fetchDashboardObjectives,
   type DashboardObjective,
   type SessionUser,
-  type TaskStatus,
 } from "../lib/api";
 import { Nav } from "./components/Nav";
-
-// Workflow order, not alphabetical -- what needs eyes on it (active work, then
-// trouble) reads before what's settled (resolved/completed/superseded).
-const STATUS_ORDER: TaskStatus[] = [
-  "active",
-  "needs_attention",
-  "blocked",
-  "waiting",
-  "resolved",
-  "completed",
-  "superseded",
-];
-
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  active: "active",
-  waiting: "waiting",
-  needs_attention: "needs attention",
-  completed: "completed",
-  superseded: "superseded",
-  resolved: "resolved",
-  blocked: "blocked",
-};
+import { TaskStatusChips } from "./components/TaskStatusChips";
 
 function totalTasks(counts: DashboardObjective["taskCounts"]): number {
   return Object.values(counts).reduce((sum, n) => sum + n, 0);
-}
-
-function chipClass(status: TaskStatus): string {
-  if (status === "needs_attention" || status === "blocked") return "chip chip-attention";
-  if (status === "completed") return "chip chip-done";
-  return "chip";
 }
 
 export default function DashboardPage() {
@@ -104,7 +76,6 @@ export default function DashboardPage() {
         const nonSuperseded = total - o.taskCounts.superseded;
         const completedPct = nonSuperseded > 0 ? Math.round((o.taskCounts.completed / nonSuperseded) * 100) : null;
         const needsAttention = o.taskCounts.needs_attention + o.taskCounts.blocked;
-        const activeStatuses = STATUS_ORDER.filter((status) => o.taskCounts[status] > 0);
 
         return (
           <article className="card" key={o.id}>
@@ -126,17 +97,7 @@ export default function DashboardPage() {
               attention
             </p>
 
-            {activeStatuses.length > 0 ? (
-              <div className="chip-row">
-                {activeStatuses.map((status) => (
-                  <span className={chipClass(status)} key={status}>
-                    {o.taskCounts[status]} {STATUS_LABEL[status]}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="muted">No tasks yet.</p>
-            )}
+            <TaskStatusChips counts={o.taskCounts} />
 
             {completedPct !== null && (
               <div className="progress-track">

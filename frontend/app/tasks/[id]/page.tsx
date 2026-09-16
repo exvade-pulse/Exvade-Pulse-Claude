@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { API_URL, fetchCurrentUser, fetchTask, type SessionUser, type TaskDetailResponse } from "../../../lib/api";
+import { formatDiff } from "../../../lib/formatDiff";
 import { Nav } from "../../components/Nav";
 
 function formatDate(dateStr: string | null): string {
@@ -135,8 +136,9 @@ export default function TaskDetailPage() {
               {data.approvedSuggestions.map((s) => (
                 <article className="card" key={s.id}>
                   <p className="card-title">{s.reasoning}</p>
+                  <p className="card-diff">{formatDiff(s.proposedDiff)}</p>
                   <p className="muted">
-                    {s.changeType} &middot; {formatDate(s.reviewedAt)}
+                    {s.changeType.replace("_", " ")} &middot; {formatDate(s.reviewedAt)}
                   </p>
                 </article>
               ))}

@@ -11,7 +11,9 @@ import {
   type SessionUser,
   type Suggestion,
 } from "../../lib/api";
+import { formatDiff, HIDDEN_DIFF_KEYS } from "../../lib/formatDiff";
 import { Nav } from "../components/Nav";
+import { SourceToggle } from "../components/SourceToggle";
 
 const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   objective: "Objective",
@@ -20,11 +22,6 @@ const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   task: "Task",
   decision: "Decision",
 };
-
-// Foreign keys (objectiveId, projectId, ...) are implementation detail, not
-// something a reviewer needs to read — "where it belongs" is already conveyed by
-// the "Proposes new X" / "Updates existing X" line above the diff.
-const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId"]);
 
 // interpret.ts's system prompt frames confidence as "how sure the model is that
 // this specific target and diff are correct," 0 (low) to 1 (high), without
@@ -47,16 +44,6 @@ const TAB_EMPTY_MESSAGE: Record<ReviewTab, string> = {
   approved: "No approved suggestions yet.",
   rejected: "No rejected suggestions yet.",
 };
-
-function formatDiff(diff: Record<string, unknown>): string {
-  return Object.entries(diff)
-    .filter(([key]) => !HIDDEN_DIFF_KEYS.has(key))
-    // Array.prototype.toString() (what String(value) falls back to) joins with
-    // a bare comma -- fine for most proposedDiff values, but a decision's
-    // stakeholders array reads as "Ops lead,CFO" without this.
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)
-    .join("\n");
-}
 
 function reviewerLabel(s: Suggestion): string {
   return s.reviewerName ?? s.reviewerEmail ?? "Unknown reviewer";
@@ -176,6 +163,8 @@ export default function ReviewPage() {
           Source: {s.source.type} &middot; received {new Date(s.source.receivedAt).toLocaleString()} &middot;
           confidence {Math.round(s.confidence * 100)}%
         </p>
+
+        <SourceToggle sourceId={s.source.id} />
 
         {isHistory && s.reviewedAt && (
           <p className="card-source">

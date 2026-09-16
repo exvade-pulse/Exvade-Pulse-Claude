@@ -11,6 +11,7 @@ import {
   type SessionUser,
 } from "../../../lib/api";
 import { Nav } from "../../components/Nav";
+import { TaskStatusChips } from "../../components/TaskStatusChips";
 
 const SNIPPET_LENGTH = 100;
 
@@ -99,6 +100,8 @@ export default function ProjectDetailPage() {
                 <span className="badge">{data.project.status}</span>
               </div>
             </div>
+
+            <TaskStatusChips counts={data.taskCounts} />
           </article>
 
           <h2 className="section-title">Tasks</h2>

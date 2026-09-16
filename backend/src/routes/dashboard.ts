@@ -2,16 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { count, eq, sql } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { initiatives, objectives, projects, taskStatusEnum, tasks } from "../db/schema.js";
-
-const TASK_STATUSES = taskStatusEnum.enumValues;
-
-type TaskStatus = (typeof TASK_STATUSES)[number];
-type TaskCounts = Record<TaskStatus, number>;
-
-function emptyTaskCounts(): TaskCounts {
-  return Object.fromEntries(TASK_STATUSES.map((status) => [status, 0])) as TaskCounts;
-}
+import { initiatives, objectives, projects, tasks } from "../db/schema.js";
+import { emptyTaskCounts, type TaskCounts } from "../tasks/rollup.js";
 
 export async function dashboardRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
