@@ -1,0 +1,31 @@
+# Fly.io config for the backend. Not yet deployed or validated against a live
+# Fly.io app -- run `fly launch --no-deploy` from the repo root first, which
+# will detect this file and let you adjust `app`/`primary_region` interactively
+# before the first real deploy. Treat this as a starting point, not gospel.
+
+app = "exvade-pulse-api"       # must be globally unique on Fly.io -- change this
+primary_region = "iad"         # pick the region closest to Exvade's team
+
+[build]
+  dockerfile = "backend/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3001"
+
+[deploy]
+  # Runs once per release, before traffic switches to the new version.
+  release_command = "node dist/db/migrate.js"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  path = "/health"
+  interval = "15s"
+  timeout = "5s"
+  grace_period = "10s"

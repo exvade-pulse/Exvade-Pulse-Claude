@@ -121,6 +121,47 @@ so an interrupted run can just be re-run. `path/to/folder` defaults to
 `C:\Users\meeha\Documents\ExvadePulse-Import`, a local folder deliberately kept
 outside this repo so real company documents are never at risk of being committed.
 
+## Deployment
+
+Prepared but **not yet deployed or validated against a live host** — these are a
+starting point for when Neon/Fly.io/Vercel accounts exist, not a tested path.
+
+### Backend → Fly.io
+
+[backend/Dockerfile](backend/Dockerfile) is a multistage build (`npm ci` at the
+workspace root, `npm run build -w backend`, then a slim runtime image) and
+[fly.toml](fly.toml) configures a Fly app around it, including a
+`release_command` that runs migrations before each new version takes traffic.
+
+1. `fly launch --no-deploy` from the repo root — it'll detect `fly.toml` and let
+   you adjust `app`/`primary_region` (both are placeholders) before anything ships.
+2. Point `DATABASE_URL` at a real Postgres instance (Neon works over the standard
+   wire protocol, not just its HTTP driver — see "Local setup" above).
+3. Set the rest as Fly secrets (never in `fly.toml`, which is committed):
+   `fly secrets set DATABASE_URL=... SESSION_SECRET=... GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... GOOGLE_CALLBACK_URL=... ALLOWED_GOOGLE_DOMAIN=... FRONTEND_URL=... BACKEND_URL=... ANTHROPIC_API_KEY=...`
+   — `GOOGLE_CALLBACK_URL`, `FRONTEND_URL`, and `BACKEND_URL` all need their real
+   production values (not `localhost`), and the Google OAuth client's authorized
+   redirect URIs need the production callback URL added.
+4. `fly deploy`.
+
+Render is a viable alternative to Fly.io (per the original kickoff spec) — it can
+build directly from the same `backend/Dockerfile`, just without `fly.toml`.
+
+### Frontend → Vercel
+
+A standard Next.js app needs no extra config file for Vercel — connect the repo,
+set the **root directory to `frontend/`**, and set `NEXT_PUBLIC_API_URL` to the
+backend's real deployed URL as an environment variable. Update the backend's
+`FRONTEND_URL` secret to match the resulting Vercel URL (CORS is locked to it).
+
+### GitHub Actions
+
+No deploy-on-push workflow exists yet — [.github/workflows/ci.yml](.github/workflows/ci.yml)
+only gates merges on typecheck/test/build. Adding an automated deploy step needs
+`FLY_API_TOKEN`/`VERCEL_TOKEN` secrets configured first; wiring that up without
+those in place would just fail, so it's deliberately left as a manual `fly deploy`
+for now rather than a half-working automation.
+
 ## Tests & typecheck
 
 ```bash
