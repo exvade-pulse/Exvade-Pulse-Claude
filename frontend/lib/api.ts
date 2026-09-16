@@ -563,6 +563,13 @@ export async function fetchActivity(): Promise<ActivityResponse> {
   return res.json();
 }
 
+// A separate mutation from fetchActivity on purpose -- call this once per
+// genuine page visit (guarded against StrictMode's double-invoke by the
+// caller), never as a side effect of the read itself.
+export async function markActivityVisited(): Promise<void> {
+  await fetch(`${API_URL}/api/activity/mark-visited`, { method: "POST", credentials: "include" });
+}
+
 export interface CompanyMapTask {
   id: string;
   title: string;

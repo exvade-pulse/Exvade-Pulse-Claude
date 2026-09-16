@@ -556,9 +556,15 @@ Built:
   newest-first — no pagination yet, a fine limitation to leave for later. A
   nullable `users.lastActivityViewAt` timestamp (per-user, not per-org, since
   two people watching the same org's feed each have their own "since I last
-  looked") is read before this request and written to `now()` after, so the
-  response can report the caller's *previous* visit time alongside a
-  deterministic, templated executive summary computed from real counts —
+  looked") is read before this request, so the response can report the
+  caller's *previous* visit time alongside a deterministic, templated
+  executive summary computed from real counts — advancing that timestamp is
+  deliberately a *separate* `POST /api/activity/mark-visited` call, not a side
+  effect of the `GET`: a read that mutates state would have two open tabs, a
+  page refresh, or any future polling each silently consume the "since last
+  visit" window before the user actually saw it. The frontend calls the POST
+  once per genuine page visit, guarded by a `useRef` against React
+  StrictMode's dev-mode double-invoke firing it twice. That summary covers
   status moves and completions (`suggestion.approved` entries whose
   `details.appliedFields` includes a `status` key), new decisions
   (`decision.created` entries) since that previous visit, plus the

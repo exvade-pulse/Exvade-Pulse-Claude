@@ -192,12 +192,37 @@ describe("GET /api/activity -- what changed since last visit", () => {
     expect(body.summary.newDecisions).toBe(0);
     expect(body.summary.openDecisionsCount).toBe(0);
     expect(body.summary.mostUrgentOpenDecision).toBeNull();
+  });
 
-    const [row] = await db.select({ lastActivityViewAt: users.lastActivityViewAt }).from(users).where(eq(users.id, fixture.user.id));
+  it("GET never mutates lastActivityViewAt, even across repeated requests -- only POST /api/activity/mark-visited does", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "get-is-read-only.test" });
+
+    const app = await buildApp();
+    const cookie = { [SESSION_COOKIE_NAME]: await tokenFor(fixture) };
+
+    await app.inject({ method: "GET", url: "/api/activity", cookies: cookie });
+    await app.inject({ method: "GET", url: "/api/activity", cookies: cookie });
+    await app.inject({ method: "GET", url: "/api/activity", cookies: cookie });
+
+    let [row] = await db.select({ lastActivityViewAt: users.lastActivityViewAt }).from(users).where(eq(users.id, fixture.user.id));
+    expect(row.lastActivityViewAt).toBeNull();
+
+    const markResponse = await app.inject({ method: "POST", url: "/api/activity/mark-visited", cookies: cookie });
+    await app.close();
+
+    expect(markResponse.statusCode).toBe(200);
+    [row] = await db.select({ lastActivityViewAt: users.lastActivityViewAt }).from(users).where(eq(users.id, fixture.user.id));
     expect(row.lastActivityViewAt).not.toBeNull();
   });
 
-  it("a second visit scopes 'since last visit' to entries after the previous visit, and advances the stored timestamp", async () => {
+  it("POST /api/activity/mark-visited returns 401 for an unauthenticated request", async () => {
+    const app = await buildApp();
+    const response = await app.inject({ method: "POST", url: "/api/activity/mark-visited" });
+    await app.close();
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("a second visit scopes 'since last visit' to entries after the previous visit", async () => {
     const fixture = await createFixtureOrg(db, { domain: "second-visit.test" });
 
     const previousVisit = new Date(Date.now() - 60 * 60 * 1000);
@@ -236,8 +261,7 @@ describe("GET /api/activity -- what changed since last visit", () => {
     expect(body.summary.newDecisions).toBe(1);
 
     const [row] = await db.select({ lastActivityViewAt: users.lastActivityViewAt }).from(users).where(eq(users.id, fixture.user.id));
-    expect(row.lastActivityViewAt).not.toBeNull();
-    expect(row.lastActivityViewAt!.getTime()).toBeGreaterThan(previousVisit.getTime());
+    expect(row.lastActivityViewAt!.getTime()).toBe(previousVisit.getTime());
   });
 
   it("counts status-move and completion suggestion.approved entries correctly, ignoring ones with no status key", async () => {
@@ -390,11 +414,6 @@ describe("GET /api/activity -- what changed since last visit", () => {
     expect(bodyB.previousLastActivityViewAt).toBe(userBPreviousVisit.toISOString());
     expect(bodyA.summary.newDecisions).toBe(1);
     expect(bodyB.summary.newDecisions).toBe(0);
-
-    const [rowA] = await db.select({ lastActivityViewAt: users.lastActivityViewAt }).from(users).where(eq(users.id, fixture.user.id));
-    const [rowB] = await db.select({ lastActivityViewAt: users.lastActivityViewAt }).from(users).where(eq(users.id, userB.id));
-    expect(rowA.lastActivityViewAt!.getTime()).toBeGreaterThan(userAPreviousVisit.getTime());
-    expect(rowB.lastActivityViewAt!.getTime()).toBeGreaterThan(userBPreviousVisit.getTime());
   });
 
   it("only counts and reflects the caller's own organization's decisions and audit_log entries", async () => {

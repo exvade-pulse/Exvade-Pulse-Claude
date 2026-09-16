@@ -77,8 +77,6 @@ export async function activityRoutes(app: FastifyInstance) {
       .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open")))
       .orderBy(sql`${decisions.dueDate} is null`, decisions.dueDate);
 
-    await db.update(users).set({ lastActivityViewAt: new Date() }).where(eq(users.id, userId));
-
     reply.send({
       entries: rows,
       previousLastActivityViewAt: previousLastActivityViewAt ? previousLastActivityViewAt.toISOString() : null,
@@ -90,5 +88,18 @@ export async function activityRoutes(app: FastifyInstance) {
         mostUrgentOpenDecision: openDecisions[0] ? { id: openDecisions[0].id, title: openDecisions[0].title } : null,
       },
     });
+  });
+
+  // Deliberately a separate mutation from the GET above: a read must stay a
+  // read, or two open tabs (or a refresh, or any future polling) would each
+  // silently consume the "since last visit" window before the user actually
+  // saw it. The frontend calls this once per genuine page visit, not once
+  // per fetch.
+  app.post("/api/activity/mark-visited", async (request, reply) => {
+    await db
+      .update(users)
+      .set({ lastActivityViewAt: new Date() })
+      .where(eq(users.id, request.user!.userId));
+    reply.send({ ok: true });
   });
 }

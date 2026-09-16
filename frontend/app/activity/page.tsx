@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   API_URL,
   fetchActivity,
   fetchCurrentUser,
+  markActivityVisited,
   type ActivityEntry,
   type ActivityResponse,
   type SessionUser,
@@ -80,6 +81,11 @@ export default function ActivityPage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
   const [activity, setActivity] = useState<ActivityResponse | "loading">("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Guards markActivityVisited() against firing twice for one real visit --
+  // React StrictMode double-invokes effects in dev, and without this a
+  // second call would consume the "since last visit" window before the user
+  // ever saw the first response's summary.
+  const hasMarkedVisited = useRef(false);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -90,6 +96,15 @@ export default function ActivityPage() {
       fetchActivity()
         .then(setActivity)
         .catch((err) => setLoadError(err.message));
+
+      if (!hasMarkedVisited.current) {
+        hasMarkedVisited.current = true;
+        markActivityVisited().catch(() => {
+          // Best-effort: failing to record this visit just means the next
+          // visit's "since last visit" window stays wider than it should --
+          // not worth surfacing an error banner over.
+        });
+      }
     }
   }, [user]);
 
