@@ -8,12 +8,23 @@ import {
   generateIntegrationToken,
   type GeneratedIntegrationToken,
   type IntegrationStatus,
+  type IntegrationType,
   type SessionUser,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
 
 const LABELS: Record<string, string> = {
   circleback: "Circleback",
+  email: "Email",
+};
+
+// Per-type instructions for the one-time "here's your webhook URL" card --
+// looped over by type below rather than a second copy of the whole card's JSX.
+const SETUP_INSTRUCTIONS: Record<string, string> = {
+  circleback:
+    "Paste the URL below into Circleback's automation settings (notes + action items are the most useful outputs to send; transcript is optional).",
+  email:
+    "Paste the URL below into your inbound email provider's webhook configuration (built against Postmark's inbound webhook shape -- see README) so forwarded mail lands here.",
 };
 
 function formatDateTime(value: string | null): string {
@@ -70,7 +81,7 @@ export default function IntegrationsPage() {
     setActionError(null);
     setCopied(false);
     try {
-      const result = await generateIntegrationToken(type as "circleback");
+      const result = await generateIntegrationToken(type as IntegrationType);
       setJustGenerated(result);
       load();
     } catch (err) {
@@ -144,8 +155,8 @@ export default function IntegrationsPage() {
             {LABELS[justGenerated.type] ?? justGenerated.type} webhook {justGenerated.rotated ? "rotated" : "generated"}
           </div>
           <div className="token-warning">
-            Copy this now -- the token won&rsquo;t be shown again. Paste the URL below into Circleback&rsquo;s automation
-            settings (notes + action items are the most useful outputs to send; transcript is optional).
+            Copy this now -- the token won&rsquo;t be shown again.{" "}
+            {SETUP_INSTRUCTIONS[justGenerated.type] ?? "Paste the URL below into the integration's webhook configuration."}
           </div>
           <div className="edit-field-label">Webhook URL</div>
           <div className="token-box">

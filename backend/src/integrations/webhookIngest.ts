@@ -4,6 +4,7 @@ import { webhookIntegrations, type IntegrationType } from "../db/schema.js";
 import { runInterpretationPipeline, type PipelineResult } from "../interpretation/pipeline.js";
 import { hashToken } from "./manage.js";
 import { parseCirclebackMeta } from "./circlebackPayload.js";
+import { parseEmailMeta } from "./emailPayload.js";
 
 interface MatchedIntegration {
   id: string;
@@ -86,6 +87,66 @@ export async function ingestCirclebackWebhook(
       // Circleback retries delivery on a non-200 response or a timeout, so a
       // repeat of a meeting we've already ingested (same org + externalId) is
       // an expected retry, not an error.
+      await db
+        .update(webhookIntegrations)
+        .set({ lastReceivedAt: new Date() })
+        .where(eq(webhookIntegrations.id, integration.id));
+      return { outcome: "duplicate" };
+    }
+    return { outcome: "pipeline_error", error: err };
+  }
+}
+
+export type EmailIngestOutcome =
+  | { outcome: "unauthorized" }
+  | { outcome: "duplicate" }
+  | ({ outcome: "ingested" } & PipelineResult)
+  | { outcome: "pipeline_error"; error: unknown };
+
+// Structurally identical to ingestCirclebackWebhook above -- same token ->
+// org lookup, same defensive-parse-then-handoff shape, same dedup/error
+// handling -- just for the "email" integration type and Postmark-shaped
+// payload. Kept as a separate function rather than parameterizing a shared
+// one, mirroring how little there'd be left to share once the payload
+// parser and the RawIncomingSource fields it feeds both differ per type.
+export async function ingestEmailWebhook(
+  db: Database,
+  rawToken: string,
+  rawBodyText: string,
+): Promise<EmailIngestOutcome> {
+  const integration = await findIntegrationByToken(db, "email", rawToken);
+  if (!integration) {
+    return { outcome: "unauthorized" };
+  }
+
+  const meta = parseEmailMeta(rawBodyText);
+
+  try {
+    const result = await runInterpretationPipeline(db, integration.organizationId, {
+      // Reuses source_type's existing "gmail" value rather than introducing
+      // a third overlapping "this is an email" enum value -- "gmail" already
+      // means "email-shaped ingestion" elsewhere in this codebase
+      // (seedFakeSuggestion.ts, runRealInterpretation.ts). The mismatch
+      // between that literal name and "any inbound email via Postmark" is
+      // pre-existing and out of scope to rename here.
+      type: "gmail",
+      externalId: meta.externalId,
+      subject: meta.subject,
+      from: meta.from,
+      body: meta.body,
+      receivedAt: meta.receivedAt,
+    });
+
+    await db
+      .update(webhookIntegrations)
+      .set({ lastReceivedAt: new Date() })
+      .where(eq(webhookIntegrations.id, integration.id));
+
+    return { outcome: "ingested", ...result };
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      // Same-org, same-message-id redelivery (a provider retry, or the same
+      // email forwarded twice) is an expected no-op, not an error.
       await db
         .update(webhookIntegrations)
         .set({ lastReceivedAt: new Date() })

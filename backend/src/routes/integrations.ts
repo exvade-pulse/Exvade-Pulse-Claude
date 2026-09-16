@@ -4,7 +4,7 @@ import { db } from "../db/client.js";
 import type { IntegrationType } from "../db/schema.js";
 import { generateIntegrationToken, listIntegrations } from "../integrations/manage.js";
 
-const VALID_TYPES: IntegrationType[] = ["circleback"];
+const VALID_TYPES: IntegrationType[] = ["circleback", "email"];
 
 export async function integrationRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);

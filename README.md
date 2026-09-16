@@ -392,6 +392,68 @@ Built:
     optional) — no code changes needed. Given the lack of real payload docs,
     the first live delivery is the point to double-check the field-name
     guessing above actually matches.
+- Real inbound-email ingestion, closing the kickoff spec's original "forward an
+  email, same as today" priority — until now the only way an email reached the
+  interpretation pipeline was running `npm run interpret:real -w backend` by
+  hand, one message at a time. Structurally identical to the Circleback
+  integration above, extended rather than parallel-built:
+  - `integration_type` gets a new `'email'` value (not `'postmark'`) —
+    [backend/src/db/schema.ts](backend/src/db/schema.ts). No inbound-email
+    provider is actually connected yet, so the value is named after the
+    category rather than today's guessed provider, meaning swapping providers
+    later doesn't need a migration — the same "don't bake in assumptions that
+    make a second source a rewrite" reasoning the Circleback work above already
+    established. `source_type`'s existing `'gmail'` value is reused for these
+    rows rather than adding a third overlapping "this is an email" enum
+    value, matching how `seedFakeSuggestion.ts`/`runRealInterpretation.ts`
+    already use `'gmail'` for email-shaped ingestion; the mismatch between that
+    literal name and "any inbound email via Postmark" is pre-existing and out
+    of scope to rename here.
+  - No official provider account is connected yet (same "future step" gap
+    Circleback had before a real automation was wired up), so this targets
+    **Postmark's inbound webhook JSON shape** — a well-documented, common
+    choice for "forward mail to an address, get a JSON webhook" absent a
+    specific provider being chosen yet.
+    [backend/src/integrations/emailPayload.ts](backend/src/integrations/emailPayload.ts)
+    guesses field names defensively the same way `circlebackPayload.ts` does
+    (`From`/`FromFull.Email`+`FromFull.Name`, `Subject`, `MessageID`, `Date`,
+    body preferring `TextBody` then a crude regex-stripped `HtmlBody`, falling
+    back to the full raw JSON if neither is present) — **we do not have
+    official Postmark reference docs loaded for this task**, so these field
+    names are a best guess from general knowledge of that shape and should be
+    verified against a real payload the first time a live provider is
+    connected, the same honest hedge as the Circleback caveat above. The full
+    raw JSON body is always stored verbatim as `sources.rawBody` regardless of
+    what the field-name guessing finds.
+  - The public ingestion endpoint —
+    `POST /api/public/webhooks/email?token=...` in
+    [backend/src/routes/webhooks.ts](backend/src/routes/webhooks.ts) →
+    `ingestEmailWebhook` in
+    [backend/src/integrations/webhookIngest.ts](backend/src/integrations/webhookIngest.ts) —
+    mirrors the Circleback route exactly: token-gated (not `requireAuth`,
+    since an email provider has no Exvade Pulse session), duplicate
+    `(organizationId, externalId)` delivery (by `MessageID`) answered 200
+    idempotently, a genuine downstream failure leaving the already-inserted
+    `sources` row in place and answering 5xx so the provider retries, and a
+    straight handoff into the existing `runInterpretationPipeline` — no
+    pipeline changes were needed here either.
+  - Admin token management and the `GET /api/integrations` list route
+    ([backend/src/integrations/manage.ts](backend/src/integrations/manage.ts),
+    [backend/src/routes/integrations.ts](backend/src/routes/integrations.ts))
+    needed no new logic — both were already parameterized by
+    `integration_type` rather than hardcoded to Circleback, so adding
+    `'email'` to the enum and to `integrations.ts`'s `VALID_TYPES` was enough
+    for both integration types to show up.
+  - Frontend: [frontend/app/integrations/page.tsx](frontend/app/integrations/page.tsx)
+    now renders both Circleback and Email as rows of the same table (looped
+    by type, not a duplicated page or duplicated card JSX), each with its own
+    label and its own one-time-token setup instructions.
+  - **To connect a real inbound-email provider:** an admin generates a token
+    on `/integrations`, copies the webhook URL, and configures a provider
+    (e.g. Postmark's inbound webhook settings) to forward mail to it — no code
+    changes needed. Given the lack of real payload docs, the first live
+    delivery is the point to double-check the field-name guessing above
+    actually matches.
 - An activity feed, making the `audit_log` table (written by nearly every
   mutating action — suggestion review, decision review, user management,
   integration token management) actually viewable instead of write-only:
@@ -436,11 +498,16 @@ Built:
   with the three new fields.
 
 Explicitly **not** built yet (next sessions):
-- Real Gmail ingestion (the pipeline exists and is exercised via
-  `npm run interpret:real -w backend`, but nothing yet calls it from a real
-  Gmail source automatically).
-- An async job queue for webhook ingestion (Circleback webhooks currently run
-  the interpretation pipeline synchronously in-request).
+- A real Gmail OAuth pull integration (the pipeline exists and is exercised via
+  `npm run interpret:real -w backend`, and inbound email now has a real
+  forward-to-address push path via the Postmark-shaped webhook above, but
+  nothing yet pulls from a live Gmail account automatically).
+- An actual inbound-email provider account connected to the new `/api/public/webhooks/email`
+  endpoint (the endpoint exists and is tested against a Postmark-shaped payload,
+  but no real provider has been wired up yet — see the email integration section
+  above).
+- An async job queue for webhook ingestion (Circleback and email webhooks
+  currently both run the interpretation pipeline synchronously in-request).
 - Styling polish beyond "readable and scannable."
 
 ## Security notes

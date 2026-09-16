@@ -68,7 +68,13 @@ export type UserRole = (typeof userRoleEnum.enumValues)[number];
 // Kept distinct from sourceTypeEnum: a webhook integration is a configured
 // credential (one per org per type), while source_type also covers ingestion
 // paths (like gmail) that may never get a webhook_integrations row at all.
-export const integrationTypeEnum = pgEnum("integration_type", ["circleback"]);
+// "email" rather than "postmark": no inbound-email provider is actually
+// connected yet (Postmark is just the concrete shape this slice targets, see
+// emailPayload.ts), and naming the enum value after the category rather than
+// today's guessed provider means swapping providers later doesn't require a
+// migration, matching how this app already avoids baking in assumptions that
+// would make adding a second source a rewrite.
+export const integrationTypeEnum = pgEnum("integration_type", ["circleback", "email"]);
 export type IntegrationType = (typeof integrationTypeEnum.enumValues)[number];
 
 export const organizations = pgTable("organizations", {

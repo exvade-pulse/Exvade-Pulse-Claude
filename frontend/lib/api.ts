@@ -374,7 +374,7 @@ export async function changeUserRole(email: string, role: UserRole): Promise<voi
   }
 }
 
-export type IntegrationType = "circleback";
+export type IntegrationType = "circleback" | "email";
 
 export interface IntegrationStatus {
   type: IntegrationType;
