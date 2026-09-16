@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { sources, suggestions } from "../db/schema.js";
+import { sources, suggestions, users } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 
 export async function suggestionRoutes(app: FastifyInstance) {
@@ -27,6 +27,12 @@ export async function suggestionRoutes(app: FastifyInstance) {
         confidence: suggestions.confidence,
         status: suggestions.status,
         createdAt: suggestions.createdAt,
+        reviewedAt: suggestions.reviewedAt,
+        // Resolved the same way activity.ts resolves auditLog.actorId -- a left
+        // join so a not-yet-reviewed suggestion (reviewedBy null) still returns
+        // a row instead of being dropped.
+        reviewerName: users.name,
+        reviewerEmail: users.email,
         source: {
           type: sources.type,
           externalId: sources.externalId,
@@ -35,6 +41,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
       })
       .from(suggestions)
       .innerJoin(sources, eq(sources.id, suggestions.sourceId))
+      .leftJoin(users, eq(users.id, suggestions.reviewedBy))
       .where(and(eq(suggestions.organizationId, organizationId), statusFilter))
       .orderBy(desc(suggestions.createdAt));
 

@@ -19,6 +19,9 @@ export interface Suggestion {
   confidence: number;
   status: string;
   createdAt: string;
+  reviewedAt: string | null;
+  reviewerName: string | null;
+  reviewerEmail: string | null;
   source: {
     type: string;
     externalId: string;
@@ -38,6 +41,18 @@ export async function fetchCurrentUser(): Promise<SessionUser | null> {
 // hand-edited since being proposed.
 export async function fetchPendingSuggestions(): Promise<Suggestion[]> {
   const res = await fetch(`${API_URL}/api/suggestions`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load suggestions (${res.status})`);
+  }
+  const body = (await res.json()) as { suggestions: Suggestion[] };
+  return body.suggestions;
+}
+
+// An explicit status narrows to exactly that status (see backend/src/routes/suggestions.ts) --
+// used for the review page's history view (approved/rejected), as opposed to
+// fetchPendingSuggestions's fixed pending+edited default.
+export async function fetchSuggestionsByStatus(status: "approved" | "rejected"): Promise<Suggestion[]> {
+  const res = await fetch(`${API_URL}/api/suggestions?status=${status}`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to load suggestions (${res.status})`);
   }

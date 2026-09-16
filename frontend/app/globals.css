@@ -458,6 +458,28 @@ body {
   white-space: nowrap;
 }
 
+.tab-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tab-btn {
+  border: 1px solid #ccc;
+  background: white;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: #444;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  border-color: #3730a3;
+  color: #3730a3;
+  background: #eef2ff;
+}
+
 .token-warning {
   background: #fff8e1;
   color: #6b5300;

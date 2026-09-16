@@ -369,6 +369,30 @@ Built:
   fallback for anything unmapped), a "View [entityType]" link into the
   Company Map detail pages when `entityType` is one of
   objective/initiative/project/task, and a relative timestamp.
+- Confidence tiering and a reviewed-history view on `/review`, closing two gaps
+  in the review queue: every suggestion carried a `confidence` score but the
+  queue rendered one flat list, and an approved/rejected suggestion vanished
+  from the page entirely with no way to see it again short of reading raw
+  `/activity` entries.
+  [frontend/app/review/page.tsx](frontend/app/review/page.tsx) now splits the
+  pending+edited queue into "Ready to approve" (confidence at or above a single
+  `CONFIDENCE_THRESHOLD` constant, `0.7`) and "Needs a closer look" (below it)
+  sections, each rendered only when it has at least one item; the threshold is
+  set from `interpret.ts`'s own system-prompt framing of confidence (0-1, "how
+  sure the model is that this specific target and diff are correct") since the
+  prompt draws no other line itself. A Pending/Approved/Rejected tab row toggles
+  between the live queue and a read-only history view for the other two
+  statuses — same title/diff/reasoning/source card, minus the approve/reject/edit
+  actions, plus who reviewed it and when. On the backend,
+  `GET /api/suggestions` ([backend/src/routes/suggestions.ts](backend/src/routes/suggestions.ts))
+  already filtered correctly on an explicit `?status=` (verified against the
+  existing code, not assumed, before touching it) and keeps defaulting to
+  pending+edited with no param; it now also left-joins `users` on
+  `suggestions.reviewedBy` (mirroring how `activity.ts` resolves `actorId`) to
+  return `reviewedAt`/`reviewerName`/`reviewerEmail` alongside every row.
+  [frontend/lib/api.ts](frontend/lib/api.ts) adds `fetchSuggestionsByStatus` next
+  to the existing `fetchPendingSuggestions`, and extends the `Suggestion` type
+  with the three new fields.
 
 Explicitly **not** built yet (next sessions):
 - Real Gmail ingestion (the pipeline exists and is exercised via
