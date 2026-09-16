@@ -11,7 +11,7 @@ export interface SessionUser {
 
 export interface Suggestion {
   id: string;
-  targetType: "objective" | "initiative" | "project" | "task";
+  targetType: "objective" | "initiative" | "project" | "task" | "decision";
   targetId: string | null;
   changeType: string;
   proposedDiff: Record<string, unknown>;

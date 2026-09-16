@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { auditLog, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { createDecision } from "../decisions/manage.js";
 
 export class SuggestionApplyError extends Error {}
 
@@ -11,20 +12,40 @@ const TABLE_BY_TARGET_TYPE = {
   task: tasks,
 } as const;
 
+// "decision" is a valid suggestion targetType but deliberately has no entry in
+// TABLE_BY_TARGET_TYPE: creating a decision isn't a drop-in "insert this table
+// with whitelisted fields" case like the other four (it needs org-scoped
+// relatedTaskId/sourceId validation and its own audit_log entry, which already
+// live in decisions/manage.ts's createDecision), so it's handled as its own
+// branch in approveSuggestion instead. ALLOWED_FIELDS/pickAllowedFields still
+// cover it, since interpret.ts's sanitization step whitelists every targetType
+// the model may propose, this one included.
+export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision";
+
 // Whitelists what a proposed_diff may set on each target type, so an AI-authored
 // (or hand-edited) diff can never smuggle in organization_id or other fields the
 // review flow doesn't own.
-export const ALLOWED_FIELDS: Record<keyof typeof TABLE_BY_TARGET_TYPE, string[]> = {
+export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
   objective: ["title", "description", "status", "priority"],
   initiative: ["objectiveId", "title", "description", "status", "priority"],
   project: ["initiativeId", "title", "description", "status"],
   task: ["projectId", "title", "description", "status", "latestUpdate", "nextAction"],
+  decision: [
+    "title",
+    "whyItMatters",
+    "relevantContext",
+    "suggestedNextStep",
+    "decider",
+    "stakeholders",
+    "dueDate",
+    "relatedTaskId",
+  ],
 };
 
 // Exported so the interpretation pipeline can sanitize a model-authored diff
 // against the same whitelist this module enforces at apply time -- one source
 // of truth for what each target type may set.
-export function pickAllowedFields(targetType: keyof typeof TABLE_BY_TARGET_TYPE, diff: Record<string, unknown>) {
+export function pickAllowedFields(targetType: SuggestionTargetType, diff: Record<string, unknown>) {
   const allowed = ALLOWED_FIELDS[targetType];
   const result: Record<string, unknown> = {};
   for (const key of allowed) {
@@ -55,28 +76,72 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
       throw new SuggestionApplyError(`Suggestion is already ${suggestion.status}`);
     }
 
-    const targetType = suggestion.targetType as keyof typeof TABLE_BY_TARGET_TYPE;
-    const table = TABLE_BY_TARGET_TYPE[targetType];
+    const targetType = suggestion.targetType as SuggestionTargetType;
     const fields = pickAllowedFields(targetType, suggestion.proposedDiff as Record<string, unknown>);
 
-    let resultTargetId = suggestion.targetId;
+    let resultTargetId: string;
 
-    if (suggestion.targetId) {
-      const [updated] = await tx
-        .update(table)
-        .set({ ...fields, updatedAt: new Date() } as never)
-        .where(and(eq(table.id, suggestion.targetId), eq(table.organizationId, params.organizationId)))
-        .returning({ id: table.id });
-
-      if (!updated) {
-        throw new SuggestionApplyError("Target row not found or not in this organization");
+    if (targetType === "decision") {
+      // Per interpret.ts's isKnownEntityId, a decision-type suggestion's
+      // targetId is always null -- there's no existing-decision context pool to
+      // match against in this implementation, so this is always a creation.
+      // Delegating to createDecision (rather than a generic insert here) keeps
+      // its org-scoped relatedTaskId/sourceId validation and decision.created
+      // audit_log write as the single source of truth for decision creation;
+      // duplicating that logic here would let this path silently drift out of
+      // sync with the manual POST /api/decisions route.
+      const diff = fields as {
+        title?: string;
+        whyItMatters?: string;
+        relevantContext?: string;
+        suggestedNextStep?: string;
+        decider?: string;
+        stakeholders?: string[];
+        dueDate?: string;
+        relatedTaskId?: string;
+      };
+      if (!diff.title || !diff.decider) {
+        throw new SuggestionApplyError("Decision suggestion is missing a required title or decider");
       }
+
+      const decision = await createDecision(tx, {
+        organizationId: params.organizationId,
+        actorId: params.reviewerId,
+        title: diff.title,
+        whyItMatters: diff.whyItMatters ?? null,
+        relevantContext: diff.relevantContext ?? null,
+        suggestedNextStep: diff.suggestedNextStep ?? null,
+        decider: diff.decider,
+        stakeholders: diff.stakeholders ?? [],
+        dueDate: diff.dueDate ? new Date(diff.dueDate) : null,
+        relatedTaskId: diff.relatedTaskId ?? null,
+        // Cited from the suggestion's own row, not the model-authored diff --
+        // ALLOWED_FIELDS deliberately excludes sourceId, since the suggestion
+        // already carries the real source it came from.
+        sourceId: suggestion.sourceId,
+      });
+      resultTargetId = decision.id;
     } else {
-      const [created] = await tx
-        .insert(table)
-        .values({ ...fields, organizationId: params.organizationId } as never)
-        .returning({ id: table.id });
-      resultTargetId = created.id;
+      const table = TABLE_BY_TARGET_TYPE[targetType];
+
+      if (suggestion.targetId) {
+        const [updated] = await tx
+          .update(table)
+          .set({ ...fields, updatedAt: new Date() } as never)
+          .where(and(eq(table.id, suggestion.targetId), eq(table.organizationId, params.organizationId)))
+          .returning({ id: table.id });
+
+        if (!updated) {
+          throw new SuggestionApplyError("Target row not found or not in this organization");
+        }
+        resultTargetId = updated.id;
+      } else {
+        const [created] = await tx
+          .insert(table)
+          .values({ ...fields, organizationId: params.organizationId } as never)
+          .returning({ id: table.id });
+        resultTargetId = created.id;
+      }
     }
 
     const [updatedSuggestion] = await tx
@@ -90,14 +155,19 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
       .where(eq(suggestions.id, suggestion.id))
       .returning();
 
-    await tx.insert(auditLog).values({
-      organizationId: params.organizationId,
-      actorId: params.reviewerId,
-      action: "suggestion.approved",
-      entityType: targetType,
-      entityId: resultTargetId,
-      details: { suggestionId: suggestion.id, appliedFields: fields },
-    });
+    // createDecision already writes its own decision.created audit_log entry;
+    // logging suggestion.approved here too would double the audit trail for one
+    // approval, so this generic entry is skipped for the decision branch.
+    if (targetType !== "decision") {
+      await tx.insert(auditLog).values({
+        organizationId: params.organizationId,
+        actorId: params.reviewerId,
+        action: "suggestion.approved",
+        entityType: targetType,
+        entityId: resultTargetId,
+        details: { suggestionId: suggestion.id, appliedFields: fields },
+      });
+    }
 
     return updatedSuggestion;
   });

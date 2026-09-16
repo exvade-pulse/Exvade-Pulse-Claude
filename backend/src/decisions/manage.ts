@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import type { Database } from "../db/client.js";
+import type { Database, DbOrTx } from "../db/client.js";
 import { auditLog, decisions, sources, tasks } from "../db/schema.js";
 
 export class DecisionError extends Error {
@@ -25,7 +25,11 @@ interface CreateParams {
   sourceId?: string | null;
 }
 
-export async function createDecision(db: Database, params: CreateParams) {
+// Accepts DbOrTx (not just Database) so suggestions/apply.ts's approveSuggestion
+// can call this from inside its own transaction -- via a postgres savepoint --
+// instead of duplicating this function's org-scoped validation and audit-log
+// write for the decision-suggestion approval path.
+export async function createDecision(db: DbOrTx, params: CreateParams) {
   return db.transaction(async (tx) => {
     if (params.relatedTaskId) {
       const [task] = await tx

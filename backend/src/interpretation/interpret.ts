@@ -41,7 +41,7 @@ const changeTypeSchema = z.enum([
   "deadline",
   "resolved",
 ]);
-const targetTypeSchema = z.enum(["objective", "initiative", "project", "task"]);
+const targetTypeSchema = z.enum(["objective", "initiative", "project", "task", "decision"]);
 
 // Only checks shape/types -- membership of targetId in the context we actually
 // handed the model, and whitelisting of proposedDiff's keys, happen afterward.
@@ -59,7 +59,7 @@ const suggestionToolInputSchema = z.object({
 const PROPOSE_SUGGESTION_TOOL: Anthropic.Tool = {
   name: "propose_suggestion",
   description:
-    "Propose one change to the company's objective/initiative/project/task hierarchy, based on the source content and the existing context you were given. Call this tool once per distinct topic the source contains -- most sources warrant exactly one call, but you may call it more than once for a source that genuinely spans multiple unrelated topics.",
+    "Propose one change to the company's objective/initiative/project/task hierarchy, or a new decision that needs a human call, based on the source content and the existing context you were given. Call this tool once per distinct topic the source contains -- most sources warrant exactly one call, but you may call it more than once for a source that genuinely spans multiple unrelated topics.",
   input_schema: {
     type: "object",
     properties: {
@@ -71,7 +71,8 @@ const PROPOSE_SUGGESTION_TOOL: Anthropic.Tool = {
       targetType: {
         type: "string",
         enum: targetTypeSchema.options,
-        description: "Which level of the hierarchy this change applies to.",
+        description:
+          "Which level of the hierarchy this change applies to, or 'decision' if the source describes something that needs a real human call rather than a hierarchy change.",
       },
       targetId: {
         type: ["string", "null"],
@@ -131,13 +132,18 @@ Strongly prefer matching the source to an EXISTING objective, initiative, projec
 
 Only propose creating something new (targetId: null) when nothing existing plausibly matches -- every unnecessary new_task/new project/etc. fragments the picture the company relies on and creates duplicate-tracking work for the human reviewer. When genuinely uncertain between "update this existing item" and "this is new", prefer the existing item and lower your confidence rather than defaulting to new.
 
+Not every source calls for a change to the objective/initiative/project/task tree. Some describe something that genuinely needs a human decision -- a real choice with consequences that a specific person or group needs to make, not just a status update or a routine next action. Propose a decision (targetType: "decision") for that kind of open question. For example: "the fractional CFO engagement's scope still needs to be clarified with leadership" is a decision -- someone has to actually choose an answer. "The firmware patch passed testing" is not a decision -- it is an operational update to the relevant task, even though it is worth recording. When genuinely unsure whether something is a decision or a routine update, prefer the routine update: decisions are for real open questions that need a human call, not for every piece of news.
+
 targetId rules:
 - If you are proposing an update to something that already exists, targetId MUST be the exact id string of that entity as given to you in the context above. Never invent, guess, or reformat an id.
 - If you are proposing something new, targetId MUST be null.
+- If you are proposing a decision, targetId MUST always be null. This implementation only supports proposing brand-new decisions -- you are never given a list of existing open decisions to match against, so a decision can never be treated as an update to something already tracked.
 
 proposedDiff rules -- each targetType only accepts these fields, anything else is discarded before it ever reaches the database:
 ${describeAllowedFields()}
 When creating a new project/initiative/task, proposedDiff must include the appropriate parent id field (initiativeId for a project, objectiveId for an initiative, projectId for a task) pointing at an existing parent from the context, plus a title. When updating an existing entity, only include the fields that are actually changing.
+
+When proposing a decision, proposedDiff must include title (phrased as a question or a clear decision statement -- e.g. "Which vendor should we choose for sensor boards?" or "Approve budget increase for Q4 hiring") and decider (your best guess at who should make this call -- a named person mentioned in the source, or a role like "Leadership" if no specific person is named). Include stakeholders (an array of other people who should weigh in or be informed) whenever the source names or implies any. Include whyItMatters, relevantContext, and suggestedNextStep whenever the source actually supports them -- leave a field out of proposedDiff entirely rather than inventing content the source doesn't support. dueDate and relatedTaskId are optional bonus fields: include them only when the source clearly implies one, don't force them.
 
 reasoning must be genuinely useful for a fast human scan: name what changed, cite the specific evidence from the source, and say why you picked this target (or why you concluded nothing existing matched). Do not write generic filler.
 
@@ -161,6 +167,12 @@ function isKnownEntityId(
   id: string,
   context: CompanyContext,
 ): boolean {
+  // Decisions have no context pool to validate against -- existing-decision
+  // matching is out of scope for this implementation (see SYSTEM_PROMPT), so a
+  // non-null decision targetId is always treated as unknown/invalid, the same
+  // as a hallucinated id would be for any other targetType.
+  if (targetType === "decision") return false;
+
   const pool: ContextEntity[] = {
     objective: context.objectives,
     initiative: context.initiatives,

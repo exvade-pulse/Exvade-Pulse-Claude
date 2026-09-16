@@ -3,8 +3,9 @@ import { eq } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { tasks, suggestions, sources } from "../db/schema.js";
+import { tasks, suggestions, sources, decisions } from "../db/schema.js";
 import { runInterpretationPipeline } from "../interpretation/pipeline.js";
+import { approveSuggestion } from "../suggestions/apply.js";
 import { setClaudeClientForTesting, type ClaudeClient } from "../interpretation/claudeClient.js";
 import { NOISE_FILTER_MODEL } from "../interpretation/noiseFilter.js";
 import { INTERPRETATION_MODEL } from "../interpretation/interpret.js";
@@ -291,6 +292,63 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
     const [sourceRow] = await db.select().from(sources).where(eq(sources.id, result.sourceId));
     expect(sourceRow.rawBody).toBe(redactedBody);
     expect(sourceRow.rawBody).not.toContain("Jane Testperson");
+  });
+
+  it("decision-shaped source: writes a decision-type suggestion with targetId null, and approving it creates a real decisions row", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "pipeline-decision.test" });
+
+    const fakeClient: ClaudeClient = {
+      createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
+        if (params.model === NOISE_FILTER_MODEL) {
+          return toolUseMessage("classify_source", { isNoise: false, reason: "Open question for leadership." });
+        }
+        expect(params.model).toBe(INTERPRETATION_MODEL);
+        return toolUseMessage("propose_suggestion", {
+          changeType: "decision",
+          targetType: "decision",
+          targetId: null,
+          proposedDiff: {
+            title: "Should we extend the fractional CFO engagement past Q4?",
+            decider: "Leadership",
+            stakeholders: ["Board of Directors", "Finance"],
+            whyItMatters: "Engagement expires end of quarter and no successor plan exists.",
+          },
+          reasoning: "Email asks leadership to decide whether to extend the CFO engagement.",
+          confidence: 0.7,
+        });
+      },
+    };
+    setClaudeClientForTesting(fakeClient);
+
+    const result = await runInterpretationPipeline(db, fixture.org.id, {
+      type: "gmail",
+      externalId: "ext-decision-1",
+      subject: "Fractional CFO engagement",
+      from: "coo@exvadebio.com",
+      body: "Our fractional CFO's engagement ends this quarter -- leadership needs to decide whether to extend it.",
+      receivedAt: new Date(),
+    });
+
+    expect(result.skippedAsNoise).toBe(false);
+    expect(result.suggestionIds).toHaveLength(1);
+
+    const [suggestion] = await db.select().from(suggestions).where(eq(suggestions.id, result.suggestionIds[0]));
+    expect(suggestion.targetType).toBe("decision");
+    expect(suggestion.targetId).toBeNull();
+
+    const approved = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+    expect(approved.targetId).not.toBeNull();
+
+    const [decisionRow] = await db.select().from(decisions).where(eq(decisions.id, approved.targetId!));
+    expect(decisionRow).toBeDefined();
+    expect(decisionRow.title).toBe("Should we extend the fractional CFO engagement past Q4?");
+    expect(decisionRow.status).toBe("open");
   });
 
   it("fails closed: on a redaction failure, keeps a source row with the safe placeholder body and creates no suggestion", async () => {

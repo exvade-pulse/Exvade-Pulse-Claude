@@ -326,8 +326,26 @@ Built:
   and the related task's title if set; a plain form creates one (title/decider/
   stakeholders/due date/narrative fields — `relatedTaskId`/`sourceId` are only
   settable via the API for now, no picker UI yet), and "Mark decided" resolves one
-  inline, dropping it out of the open list. Not wired into the Claude interpretation
-  pipeline yet — this pass is a human filling out a form, not AI-generated decisions.
+  inline, dropping it out of the open list. The Claude interpretation pipeline
+  ([backend/src/interpretation/interpret.ts](backend/src/interpretation/interpret.ts))
+  can now propose creating a decision, not just human-filled forms: `targetType`
+  gained a fifth value, `"decision"`, alongside objective/initiative/project/task,
+  and `SYSTEM_PROMPT` gives Claude a concrete signal for when a decision (rather
+  than an operational update) is the right call — "the fractional CFO scope needs
+  clarifying with leadership" is a decision, "the firmware patch passed testing" is
+  not. This is new-decision proposals only: `targetId` for a `"decision"`
+  suggestion must always be `null` (`isKnownEntityId` rejects any non-null
+  decision `targetId` outright, same failure path as a hallucinated task/objective
+  id), because the model is never handed a list of existing open decisions to
+  match against — matching a source to an already-open decision is a deliberate
+  follow-up, not built yet. Approving a decision-type suggestion
+  ([backend/src/suggestions/apply.ts](backend/src/suggestions/apply.ts)) does not
+  go through the generic insert-by-table path the other four target types use; it
+  calls `createDecision` directly (inside the same transaction, via a postgres
+  savepoint), so org-scoped `relatedTaskId`/`sourceId` validation and the
+  `decision.created` audit_log entry stay owned by
+  [backend/src/decisions/manage.ts](backend/src/decisions/manage.ts) instead of
+  being duplicated.
 
 - Real Circleback (meeting-transcript) ingestion via a signed, per-org webhook
   token, feeding the existing interpretation pipeline for real:

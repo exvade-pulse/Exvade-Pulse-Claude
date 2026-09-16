@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { auditLog, suggestions, tasks } from "../db/schema.js";
+import { auditLog, decisions, suggestions, tasks } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 
 const { db, client } = testDb();
@@ -162,6 +162,56 @@ describe("suggestion approval", () => {
         reviewerId: fixture.user.id,
       }),
     ).rejects.toBeInstanceOf(SuggestionApplyError);
+  });
+
+  it("approving a decision-type suggestion calls createDecision instead of the generic insert path, backfills targetId, and writes decision.created exactly once", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "decision-suggestion.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "decision",
+        targetId: null,
+        changeType: "decision",
+        proposedDiff: {
+          title: "Should we renegotiate the sensor vendor contract?",
+          decider: "Leadership",
+          stakeholders: ["Ops lead", "CFO"],
+          whyItMatters: "Current vendor's lead time threatens the trial timeline.",
+        },
+        reasoning: "Source describes an open question needing a leadership call.",
+        confidence: 0.75,
+      })
+      .returning();
+
+    const updated = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+
+    expect(updated.status).toBe("approved");
+    expect(updated.targetId).not.toBeNull();
+
+    const [decision] = await db.select().from(decisions).where(eq(decisions.id, updated.targetId!));
+    expect(decision).toBeDefined();
+    expect(decision.title).toBe("Should we renegotiate the sensor vendor contract?");
+    expect(decision.decider).toBe("Leadership");
+    expect(decision.stakeholders).toEqual(["Ops lead", "CFO"]);
+    expect(decision.status).toBe("open");
+    // Cited from the suggestion's own sourceId, not something the model has to propose.
+    expect(decision.sourceId).toBe(fixture.source.id);
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, decision.id));
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].action).toBe("decision.created");
+    expect(auditRows[0].actorId).toBe(fixture.user.id);
+
+    // No task/objective/etc. row should have been created via the generic path.
+    const allTasks = await db.select().from(tasks).where(eq(tasks.organizationId, fixture.org.id));
+    expect(allTasks).toHaveLength(0);
   });
 });
 

@@ -343,6 +343,56 @@ describe("interpretSource", () => {
     await expect(interpretSource(source, emptyContext(), client)).rejects.toBeInstanceOf(InterpretationError);
   });
 
+  it("accepts a decision proposal with targetId null and sanitizes proposedDiff to only decision-whitelisted fields", async () => {
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "decision",
+        targetType: "decision",
+        targetId: null,
+        proposedDiff: {
+          title: "Should we extend the fractional CFO engagement past Q4?",
+          decider: "Leadership",
+          stakeholders: ["Board of Directors", "Finance"],
+          whyItMatters: "Engagement expires end of quarter with no successor plan.",
+          resolution: "should-be-dropped", // not in the decision whitelist
+          status: "should-be-dropped", // not in the decision whitelist
+        },
+        reasoning: "Email asks leadership to weigh in on whether to extend the CFO engagement.",
+        confidence: 0.7,
+      }),
+    );
+
+    const drafts = await interpretSource(source, emptyContext(), client);
+
+    expect(drafts).toHaveLength(1);
+    const [draft] = drafts;
+    expect(draft.targetType).toBe("decision");
+    expect(draft.targetId).toBeNull();
+    expect(draft.proposedDiff).toEqual({
+      title: "Should we extend the fractional CFO engagement past Q4?",
+      decider: "Leadership",
+      stakeholders: ["Board of Directors", "Finance"],
+      whyItMatters: "Engagement expires end of quarter with no successor plan.",
+    });
+    expect(draft.proposedDiff.resolution).toBeUndefined();
+    expect(draft.proposedDiff.status).toBeUndefined();
+  });
+
+  it("rejects a decision proposal with a non-null targetId, since there is no existing-decision context to validate it against", async () => {
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "decision",
+        targetType: "decision",
+        targetId: randomUUID(),
+        proposedDiff: { title: "Some decision", decider: "Leadership" },
+        reasoning: "x",
+        confidence: 0.7,
+      }),
+    );
+
+    await expect(interpretSource(source, emptyContext(), client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
   it("caps accepted tool_use calls at MAX_SUGGESTIONS_PER_SOURCE, keeping only the first N", async () => {
     const projectId = randomUUID();
     const context: CompanyContext = {

@@ -42,6 +42,7 @@ export const targetTypeEnum = pgEnum("target_type", [
   "initiative",
   "project",
   "task",
+  "decision",
 ]);
 
 export const changeTypeEnum = pgEnum("change_type", [

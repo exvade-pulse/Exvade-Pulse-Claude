@@ -18,6 +18,7 @@ const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   initiative: "Initiative",
   project: "Project",
   task: "Task",
+  decision: "Decision",
 };
 
 // Foreign keys (objectiveId, projectId, ...) are implementation detail, not
@@ -50,7 +51,10 @@ const TAB_EMPTY_MESSAGE: Record<ReviewTab, string> = {
 function formatDiff(diff: Record<string, unknown>): string {
   return Object.entries(diff)
     .filter(([key]) => !HIDDEN_DIFF_KEYS.has(key))
-    .map(([key, value]) => `${key}: ${String(value)}`)
+    // Array.prototype.toString() (what String(value) falls back to) joins with
+    // a bare comma -- fine for most proposedDiff values, but a decision's
+    // stakeholders array reads as "Ops lead,CFO" without this.
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)
     .join("\n");
 }
 

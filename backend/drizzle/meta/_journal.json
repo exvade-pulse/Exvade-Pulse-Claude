@@ -43,6 +43,13 @@
       "when": 1789533188861,
       "tag": "0005_exotic_justin_hammer",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789534045395,
+      "tag": "0006_burly_rick_jones",
+      "breakpoints": true
     }
   ]
 }
