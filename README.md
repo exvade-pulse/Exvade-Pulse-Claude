@@ -232,8 +232,34 @@ Built:
   progress bar. The suggestions review UI moved to
   [frontend/app/review/page.tsx](frontend/app/review/page.tsx) (`/review`), with a
   minimal shared nav ([frontend/app/components/Nav.tsx](frontend/app/components/Nav.tsx))
-  linking the two. No drill-down into initiatives/projects/tasks yet — objective-level
-  cards only.
+  linking the two.
+- Drill-down detail pages for the full Objective → Initiative → Project → Task
+  hierarchy ("Company Map"), the piece deferred from the dashboard's first pass
+  above: [backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts) adds
+  `GET /api/objectives/:id`, `GET /api/initiatives/:id`, `GET /api/projects/:id`,
+  and `GET /api/tasks/:id`, each `requireAuth`-gated and org-scoped in the query
+  itself (not fetch-then-check-in-JS), returning the row's full detail plus its
+  immediate children (an objective's initiatives, an initiative's projects, a
+  project's full task rows including `latestUpdate`/`nextAction`) or, for a
+  project/initiative, its immediate parent for a breadcrumb. `GET /api/tasks/:id`
+  additionally resolves the full parent chain up to the objective in one join
+  (rather than three round trips) and lists that task's approved suggestions
+  (`target_type='task'`, `status='approved'`) for traceability back to the source
+  update that produced it. A malformed or nonexistent id, or one belonging to
+  another organization, 404s rather than 500ing or leaking existence. The frontend
+  adds one page per level —
+  [frontend/app/objectives/[id]/page.tsx](frontend/app/objectives/[id]/page.tsx),
+  [frontend/app/initiatives/[id]/page.tsx](frontend/app/initiatives/[id]/page.tsx),
+  [frontend/app/projects/[id]/page.tsx](frontend/app/projects/[id]/page.tsx),
+  [frontend/app/tasks/[id]/page.tsx](frontend/app/tasks/[id]/page.tsx) — each with a
+  text breadcrumb back up the chain, reusing the existing card/badge/chip classes
+  rather than introducing new styling. The project page's task list is the
+  densest/most useful view: each task row shows its status badge plus a truncated
+  latest-update and next-action snippet so the list is scannable without opening
+  every task. The dashboard's objective card title
+  ([frontend/app/page.tsx](frontend/app/page.tsx)) now links to `/objectives/:id`,
+  the actual drill-down entry point. A bad/stale id in the URL renders a plain
+  "not found" message instead of crashing the page.
 - A decisions registry, for things that need an explicit human call rather than a
   status update: `decisions` ([backend/src/db/schema.ts](backend/src/db/schema.ts))
   carries a `title`, three optional narrative fields (`whyItMatters`,
@@ -332,7 +358,6 @@ Explicitly **not** built yet (next sessions):
   Gmail source automatically).
 - An async job queue for webhook ingestion (Circleback webhooks currently run
   the interpretation pipeline synchronously in-request).
-- Drill-down from the dashboard into an objective's initiatives/projects/tasks.
 - Styling polish beyond "readable and scannable."
 
 ## Security notes

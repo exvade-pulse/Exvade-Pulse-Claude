@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   API_URL,
@@ -109,7 +110,9 @@ export default function DashboardPage() {
           <article className="card" key={o.id}>
             <div className="card-top">
               <div>
-                <p className="card-title">{o.title}</p>
+                <Link className="card-title card-title-link" href={`/objectives/${o.id}`}>
+                  {o.title}
+                </Link>
                 {o.description && <span className="muted">{o.description}</span>}
               </div>
               <div className="card-badges">

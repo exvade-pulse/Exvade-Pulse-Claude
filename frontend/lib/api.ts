@@ -174,6 +174,144 @@ export async function resolveDecision(id: string, resolution: string): Promise<D
   return body.decision;
 }
 
+export type StrategyStatus = "active" | "paused" | "completed" | "cancelled";
+export type Priority = "low" | "medium" | "high" | "critical";
+
+export interface ObjectiveDetail {
+  id: string;
+  title: string;
+  description: string | null;
+  status: StrategyStatus;
+  priority: Priority;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InitiativeSummary {
+  id: string;
+  title: string;
+  status: StrategyStatus;
+  priority: Priority;
+}
+
+export interface ObjectiveDetailResponse {
+  objective: ObjectiveDetail;
+  initiatives: InitiativeSummary[];
+}
+
+// A 404 is an expected, non-exceptional outcome here (stale link, bad id
+// typed into the URL) -- callers render a "not found" state for it rather
+// than catching a thrown error.
+export async function fetchObjective(id: string): Promise<ObjectiveDetailResponse | "not_found"> {
+  const res = await fetch(`${API_URL}/api/objectives/${id}`, { credentials: "include" });
+  if (res.status === 404) return "not_found";
+  if (!res.ok) {
+    throw new Error(`Failed to load objective (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface InitiativeDetail {
+  id: string;
+  title: string;
+  description: string | null;
+  status: StrategyStatus;
+  priority: Priority;
+  objectiveId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectSummary {
+  id: string;
+  title: string;
+  status: StrategyStatus;
+}
+
+export interface InitiativeDetailResponse {
+  initiative: InitiativeDetail;
+  objective: { id: string; title: string } | null;
+  projects: ProjectSummary[];
+}
+
+export async function fetchInitiative(id: string): Promise<InitiativeDetailResponse | "not_found"> {
+  const res = await fetch(`${API_URL}/api/initiatives/${id}`, { credentials: "include" });
+  if (res.status === 404) return "not_found";
+  if (!res.ok) {
+    throw new Error(`Failed to load initiative (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface ProjectDetail {
+  id: string;
+  title: string;
+  description: string | null;
+  status: StrategyStatus;
+  initiativeId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskSummary {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  latestUpdate: string | null;
+  nextAction: string | null;
+}
+
+export interface ProjectDetailResponse {
+  project: ProjectDetail;
+  initiative: { id: string; title: string } | null;
+  tasks: TaskSummary[];
+}
+
+export async function fetchProject(id: string): Promise<ProjectDetailResponse | "not_found"> {
+  const res = await fetch(`${API_URL}/api/projects/${id}`, { credentials: "include" });
+  if (res.status === 404) return "not_found";
+  if (!res.ok) {
+    throw new Error(`Failed to load project (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface TaskDetail {
+  id: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  latestUpdate: string | null;
+  nextAction: string | null;
+  projectId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApprovedTaskSuggestion {
+  id: string;
+  changeType: string;
+  reasoning: string;
+  reviewedAt: string | null;
+}
+
+export interface TaskDetailResponse {
+  task: TaskDetail;
+  project: { id: string; title: string } | null;
+  initiative: { id: string; title: string } | null;
+  objective: { id: string; title: string } | null;
+  approvedSuggestions: ApprovedTaskSuggestion[];
+}
+
+export async function fetchTask(id: string): Promise<TaskDetailResponse | "not_found"> {
+  const res = await fetch(`${API_URL}/api/tasks/${id}`, { credentials: "include" });
+  if (res.status === 404) return "not_found";
+  if (!res.ok) {
+    throw new Error(`Failed to load task (${res.status})`);
+  }
+  return res.json();
+}
+
 export interface AuthorizedUser {
   email: string;
   role: UserRole;

@@ -230,6 +230,64 @@ body {
   margin: 0 0 4px;
 }
 
+.card-title-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-title-link:hover {
+  text-decoration: underline;
+}
+
+.card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-link .card {
+  transition: border-color 0.1s ease;
+}
+
+.card-link:hover .card {
+  border-color: #3730a3;
+}
+
+.section-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+  margin: 20px 0 10px;
+}
+
+.breadcrumb {
+  font-size: 13px;
+  color: #666;
+  margin: 0 0 12px;
+}
+
+.breadcrumb a {
+  color: #3730a3;
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  text-decoration: underline;
+}
+
+.task-snippet {
+  font-size: 13px;
+  color: #555;
+  margin: 4px 0 0;
+}
+
+.task-snippet-label {
+  color: #888;
+  font-weight: 600;
+}
+
 .card-diff {
   font-size: 14px;
   color: #333;
