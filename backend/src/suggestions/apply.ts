@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { auditLog, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
-import { createDecision } from "../decisions/manage.js";
+import { createDecision, updateDecision } from "../decisions/manage.js";
 
 export class SuggestionApplyError extends Error {}
 
@@ -82,14 +82,6 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
     let resultTargetId: string;
 
     if (targetType === "decision") {
-      // Per interpret.ts's isKnownEntityId, a decision-type suggestion's
-      // targetId is always null -- there's no existing-decision context pool to
-      // match against in this implementation, so this is always a creation.
-      // Delegating to createDecision (rather than a generic insert here) keeps
-      // its org-scoped relatedTaskId/sourceId validation and decision.created
-      // audit_log write as the single source of truth for decision creation;
-      // duplicating that logic here would let this path silently drift out of
-      // sync with the manual POST /api/decisions route.
       const diff = fields as {
         title?: string;
         whyItMatters?: string;
@@ -100,27 +92,61 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         dueDate?: string;
         relatedTaskId?: string;
       };
-      if (!diff.title || !diff.decider) {
-        throw new SuggestionApplyError("Decision suggestion is missing a required title or decider");
-      }
 
-      const decision = await createDecision(tx, {
-        organizationId: params.organizationId,
-        actorId: params.reviewerId,
-        title: diff.title,
-        whyItMatters: diff.whyItMatters ?? null,
-        relevantContext: diff.relevantContext ?? null,
-        suggestedNextStep: diff.suggestedNextStep ?? null,
-        decider: diff.decider,
-        stakeholders: diff.stakeholders ?? [],
-        dueDate: diff.dueDate ? new Date(diff.dueDate) : null,
-        relatedTaskId: diff.relatedTaskId ?? null,
-        // Cited from the suggestion's own row, not the model-authored diff --
-        // ALLOWED_FIELDS deliberately excludes sourceId, since the suggestion
-        // already carries the real source it came from.
-        sourceId: suggestion.sourceId,
-      });
-      resultTargetId = decision.id;
+      if (suggestion.targetId === null) {
+        // Delegating to createDecision (rather than a generic insert here) keeps
+        // its org-scoped relatedTaskId/sourceId validation and decision.created
+        // audit_log write as the single source of truth for decision creation;
+        // duplicating that logic here would let this path silently drift out of
+        // sync with the manual POST /api/decisions route.
+        if (!diff.title || !diff.decider) {
+          throw new SuggestionApplyError("Decision suggestion is missing a required title or decider");
+        }
+
+        const decision = await createDecision(tx, {
+          organizationId: params.organizationId,
+          actorId: params.reviewerId,
+          title: diff.title,
+          whyItMatters: diff.whyItMatters ?? null,
+          relevantContext: diff.relevantContext ?? null,
+          suggestedNextStep: diff.suggestedNextStep ?? null,
+          decider: diff.decider,
+          stakeholders: diff.stakeholders ?? [],
+          dueDate: diff.dueDate ? new Date(diff.dueDate) : null,
+          relatedTaskId: diff.relatedTaskId ?? null,
+          // Cited from the suggestion's own row, not the model-authored diff --
+          // ALLOWED_FIELDS deliberately excludes sourceId, since the suggestion
+          // already carries the real source it came from.
+          sourceId: suggestion.sourceId,
+        });
+        resultTargetId = decision.id;
+      } else {
+        // A decision-shaped follow-up matched to an already-open decision (see
+        // interpret.ts's decision-matching guidance) -- delegates to
+        // updateDecision for the same reason the create branch delegates to
+        // createDecision: org-scoped validation and its own decision.updated
+        // audit_log entry stay owned by decisions/manage.ts. Only fields that
+        // were actually present in the (already-whitelisted) diff are passed
+        // through, so an update never blanks out decider/stakeholders/etc. that
+        // simply weren't part of this change.
+        const updateFields: Parameters<typeof updateDecision>[1]["fields"] = {};
+        if ("title" in fields) updateFields.title = diff.title;
+        if ("whyItMatters" in fields) updateFields.whyItMatters = diff.whyItMatters ?? null;
+        if ("relevantContext" in fields) updateFields.relevantContext = diff.relevantContext ?? null;
+        if ("suggestedNextStep" in fields) updateFields.suggestedNextStep = diff.suggestedNextStep ?? null;
+        if ("decider" in fields) updateFields.decider = diff.decider;
+        if ("stakeholders" in fields) updateFields.stakeholders = diff.stakeholders ?? [];
+        if ("dueDate" in fields) updateFields.dueDate = diff.dueDate ? new Date(diff.dueDate) : null;
+        if ("relatedTaskId" in fields) updateFields.relatedTaskId = diff.relatedTaskId ?? null;
+
+        const decision = await updateDecision(tx, {
+          organizationId: params.organizationId,
+          decisionId: suggestion.targetId,
+          actorId: params.reviewerId,
+          fields: updateFields,
+        });
+        resultTargetId = decision.id;
+      }
     } else {
       const table = TABLE_BY_TARGET_TYPE[targetType];
 
@@ -155,8 +181,9 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
       .where(eq(suggestions.id, suggestion.id))
       .returning();
 
-    // createDecision already writes its own decision.created audit_log entry;
-    // logging suggestion.approved here too would double the audit trail for one
+    // createDecision/updateDecision each already write their own
+    // decision.created/decision.updated audit_log entry; logging
+    // suggestion.approved here too would double the audit trail for one
     // approval, so this generic entry is skipped for the decision branch.
     if (targetType !== "decision") {
       await tx.insert(auditLog).values({

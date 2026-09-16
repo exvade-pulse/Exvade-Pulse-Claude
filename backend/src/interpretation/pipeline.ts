@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
+import { decisions, initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
 import { isNoiseSource } from "./noiseFilter.js";
 import { interpretSource, InterpretationError, type CompanyContext } from "./interpret.js";
 import {
@@ -29,7 +29,7 @@ export interface PipelineResult {
 }
 
 async function loadCompanyContext(db: Database, organizationId: string): Promise<CompanyContext> {
-  const [objectiveRows, initiativeRows, projectRows, taskRows] = await Promise.all([
+  const [objectiveRows, initiativeRows, projectRows, taskRows, decisionRows] = await Promise.all([
     db
       .select({ id: objectives.id, title: objectives.title, status: objectives.status })
       .from(objectives)
@@ -46,9 +46,27 @@ async function loadCompanyContext(db: Database, organizationId: string): Promise
       .select({ id: tasks.id, title: tasks.title, status: tasks.status })
       .from(tasks)
       .where(eq(tasks.organizationId, organizationId)),
+    // Only `open` decisions are offered as match candidates -- a `decided` one
+    // is closed and shouldn't be reopened by an interpretation match.
+    db
+      .select({
+        id: decisions.id,
+        title: decisions.title,
+        status: decisions.status,
+        decider: decisions.decider,
+        whyItMatters: decisions.whyItMatters,
+      })
+      .from(decisions)
+      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"))),
   ]);
 
-  return { objectives: objectiveRows, initiatives: initiativeRows, projects: projectRows, tasks: taskRows };
+  return {
+    objectives: objectiveRows,
+    initiatives: initiativeRows,
+    projects: projectRows,
+    tasks: taskRows,
+    decisions: decisionRows,
+  };
 }
 
 // The real ingestion entry point: given one raw source, redacts patient

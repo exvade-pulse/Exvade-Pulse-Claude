@@ -49,7 +49,7 @@ const source = {
 };
 
 function emptyContext(): CompanyContext {
-  return { objectives: [], initiatives: [], projects: [], tasks: [] };
+  return { objectives: [], initiatives: [], projects: [], tasks: [], decisions: [] };
 }
 
 describe("interpretSource", () => {
@@ -226,6 +226,7 @@ describe("interpretSource", () => {
       initiatives: [],
       projects: [],
       tasks: [],
+      decisions: [],
     };
     const client = stubClient(
       fakeToolUseMessage({
@@ -378,7 +379,63 @@ describe("interpretSource", () => {
     expect(draft.proposedDiff.status).toBeUndefined();
   });
 
-  it("rejects a decision proposal with a non-null targetId, since there is no existing-decision context to validate it against", async () => {
+  it("accepts a decision-update proposal whose targetId matches an existing open decision in context", async () => {
+    const decisionId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      decisions: [
+        {
+          id: decisionId,
+          title: "What should the fractional CFO engagement's scope be going forward?",
+          status: "open",
+          decider: "Leadership",
+          whyItMatters: "Engagement expires end of quarter with no successor plan.",
+        },
+      ],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "decision",
+        targetType: "decision",
+        targetId: decisionId,
+        proposedDiff: {
+          relevantContext: "Follow-up email asks for a status check on this exact open question.",
+          decider: "should-be-dropped-not-in-update", // not stripped by whitelist, but exercised separately in apply.ts tests
+        },
+        reasoning: "This is a follow-up on the already-open CFO scope decision, not a new one.",
+        confidence: 0.75,
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].targetType).toBe("decision");
+    expect(drafts[0].targetId).toBe(decisionId);
+  });
+
+  it("rejects a decision proposal whose targetId does not match any decision in the given context (hallucinated id)", async () => {
+    const context: CompanyContext = {
+      ...emptyContext(),
+      decisions: [
+        { id: randomUUID(), title: "Some other open decision", status: "open", decider: "Leadership", whyItMatters: null },
+      ],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "decision",
+        targetType: "decision",
+        targetId: randomUUID(),
+        proposedDiff: { title: "Some decision", decider: "Leadership" },
+        reasoning: "x",
+        confidence: 0.7,
+      }),
+    );
+
+    await expect(interpretSource(source, context, client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
+  it("rejects a decision proposal with a non-null targetId when no decisions are in context at all", async () => {
     const client = stubClient(
       fakeToolUseMessage({
         changeType: "decision",

@@ -4,6 +4,7 @@ import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
 import { auditLog, decisions, suggestions, tasks } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
+import { createDecision, DecisionError } from "../decisions/manage.js";
 
 const { db, client } = testDb();
 
@@ -212,6 +213,100 @@ describe("suggestion approval", () => {
     // No task/objective/etc. row should have been created via the generic path.
     const allTasks = await db.select().from(tasks).where(eq(tasks.organizationId, fixture.org.id));
     expect(allTasks).toHaveLength(0);
+  });
+
+  it("approving a decision-update suggestion (targetId set) updates only the whitelisted fields, writes decision.updated, and creates no second decision", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "decision-update-flow.test" });
+
+    const existingDecision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "What should the fractional CFO engagement's scope be going forward?",
+      decider: "Leadership",
+      stakeholders: ["Finance"],
+      whyItMatters: "Engagement expires end of quarter with no successor plan.",
+    });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "decision",
+        targetId: existingDecision.id,
+        changeType: "decision",
+        proposedDiff: {
+          relevantContext: "Leadership discussed this in Monday's meeting but hasn't decided.",
+          suggestedNextStep: "Get a written answer from the CEO by Friday.",
+        },
+        reasoning: "Follow-up on the already-open CFO scope decision, not a new one.",
+        confidence: 0.75,
+      })
+      .returning();
+
+    const updated = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+
+    expect(updated.status).toBe("approved");
+    expect(updated.targetId).toBe(existingDecision.id);
+
+    const [decision] = await db.select().from(decisions).where(eq(decisions.id, existingDecision.id));
+    expect(decision.relevantContext).toBe("Leadership discussed this in Monday's meeting but hasn't decided.");
+    expect(decision.suggestedNextStep).toBe("Get a written answer from the CEO by Friday.");
+    // Fields not present in this diff must stay untouched.
+    expect(decision.decider).toBe("Leadership");
+    expect(decision.stakeholders).toEqual(["Finance"]);
+    expect(decision.title).toBe("What should the fractional CFO engagement's scope be going forward?");
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, existingDecision.id));
+    const updateLog = auditRows.find((row) => row.action === "decision.updated");
+    expect(updateLog).toBeDefined();
+    expect(updateLog?.actorId).toBe(fixture.user.id);
+    expect(auditRows.some((row) => row.action === "decision.created")).toBe(true);
+    expect(auditRows.filter((row) => row.action === "suggestion.approved")).toHaveLength(0);
+
+    const allDecisions = await db.select().from(decisions).where(eq(decisions.organizationId, fixture.org.id));
+    expect(allDecisions).toHaveLength(1); // no second decision created
+  });
+
+  it("cannot approve a decision-update suggestion against a decision belonging to a different organization", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "decision-update-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "decision-update-org-b.test" });
+
+    const decisionB = await createDecision(db, {
+      organizationId: orgB.org.id,
+      actorId: orgB.user.id,
+      title: "Belongs to org B",
+      decider: "CEO",
+    });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: orgA.org.id,
+        sourceId: orgA.source.id,
+        targetType: "decision",
+        targetId: decisionB.id, // cross-org targetId, as if tampered or mismatched
+        changeType: "decision",
+        proposedDiff: { relevantContext: "Attempted cross-org update." },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    await expect(
+      approveSuggestion(db, {
+        organizationId: orgA.org.id,
+        suggestionId: suggestion.id,
+        reviewerId: orgA.user.id,
+      }),
+    ).rejects.toBeInstanceOf(DecisionError);
+
+    const [decisionRow] = await db.select().from(decisions).where(eq(decisions.id, decisionB.id));
+    expect(decisionRow.relevantContext).toBeNull();
   });
 });
 

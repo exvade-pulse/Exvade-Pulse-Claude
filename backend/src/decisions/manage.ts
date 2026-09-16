@@ -80,6 +80,74 @@ export async function createDecision(db: DbOrTx, params: CreateParams) {
   });
 }
 
+interface UpdateParams {
+  organizationId: string;
+  decisionId: string;
+  actorId: string;
+  fields: Partial<{
+    title: string;
+    whyItMatters: string | null;
+    relevantContext: string | null;
+    suggestedNextStep: string | null;
+    decider: string;
+    stakeholders: string[];
+    dueDate: Date | null;
+    relatedTaskId: string | null;
+  }>;
+}
+
+// Accepts DbOrTx for the same reason createDecision does -- approveSuggestion
+// calls this from inside its own transaction when a decision-shaped source
+// turns out to be a follow-up on an already-open decision rather than
+// something brand new (see interpret.ts's decision-matching guidance).
+export async function updateDecision(db: DbOrTx, params: UpdateParams) {
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(decisions)
+      .where(and(eq(decisions.id, params.decisionId), eq(decisions.organizationId, params.organizationId)));
+
+    if (!existing) {
+      throw new DecisionError("Decision not found", "not_found");
+    }
+    // A decided decision is closed; an interpretation match is only ever
+    // offered `open` decisions to begin with (see pipeline.ts), so reaching
+    // this with an already-decided target means the decision resolved after
+    // the suggestion was drafted -- reopening it via an inferred update would
+    // undo a deliberate human resolution.
+    if (existing.status !== "open") {
+      throw new DecisionError("Decision is already decided", "conflict");
+    }
+
+    if (params.fields.relatedTaskId) {
+      const [task] = await tx
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(and(eq(tasks.id, params.fields.relatedTaskId), eq(tasks.organizationId, params.organizationId)));
+      if (!task) {
+        throw new DecisionError("relatedTaskId does not belong to this organization", "not_found");
+      }
+    }
+
+    const [updated] = await tx
+      .update(decisions)
+      .set({ ...params.fields, updatedAt: new Date() })
+      .where(eq(decisions.id, existing.id))
+      .returning();
+
+    await tx.insert(auditLog).values({
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      action: "decision.updated",
+      entityType: "decision",
+      entityId: existing.id,
+      details: { updatedFields: params.fields },
+    });
+
+    return updated;
+  });
+}
+
 interface ResolveParams {
   organizationId: string;
   decisionId: string;

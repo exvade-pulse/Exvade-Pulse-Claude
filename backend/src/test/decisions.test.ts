@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
 import { auditLog, decisions, tasks } from "../db/schema.js";
-import { createDecision, resolveDecision, DecisionError } from "../decisions/manage.js";
+import { createDecision, resolveDecision, updateDecision, DecisionError } from "../decisions/manage.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 
@@ -161,6 +161,104 @@ describe("decisions module", () => {
         resolution: "Hijacked",
       }),
     ).rejects.toMatchObject({ code: "not_found" });
+  });
+  it("updating a decision changes only the given fields and writes a decision.updated audit_log row", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "update-decision.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Original title",
+      decider: "Leadership",
+      stakeholders: ["Finance"],
+      whyItMatters: "Original reason.",
+    });
+
+    const updated = await updateDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      fields: { relevantContext: "New context from a follow-up email." },
+    });
+
+    expect(updated.relevantContext).toBe("New context from a follow-up email.");
+    expect(updated.title).toBe("Original title"); // untouched field stays as-is
+    expect(updated.decider).toBe("Leadership");
+    expect(updated.stakeholders).toEqual(["Finance"]);
+
+    const [logRow] = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, decision.id), eq(auditLog.action, "decision.updated")));
+    expect(logRow).toBeDefined();
+    expect(logRow.actorId).toBe(fixture.user.id);
+  });
+
+  it("rejects updating a decision that belongs to a different organization", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "update-decision-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "update-decision-org-b.test" });
+
+    const decisionB = await createDecision(db, {
+      organizationId: orgB.org.id,
+      actorId: orgB.user.id,
+      title: "Belongs to org B",
+      decider: "CEO",
+    });
+
+    await expect(
+      updateDecision(db, {
+        organizationId: orgA.org.id,
+        decisionId: decisionB.id,
+        actorId: orgA.user.id,
+        fields: { relevantContext: "Hijacked" },
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("rejects updating an already-decided decision", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "update-decided.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Pick manufacturing partner",
+      decider: "CEO",
+    });
+    await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      resolution: "Chose Partner A",
+    });
+
+    await expect(
+      updateDecision(db, {
+        organizationId: fixture.org.id,
+        decisionId: decision.id,
+        actorId: fixture.user.id,
+        fields: { relevantContext: "Too late" },
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("rejects a relatedTaskId belonging to a different organization on update", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "update-decision-task-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "update-decision-task-b.test" });
+    const taskB = await insertTask(orgB.org.id, orgB.project.id, "Org B task");
+
+    const decision = await createDecision(db, {
+      organizationId: orgA.org.id,
+      actorId: orgA.user.id,
+      title: "Org A decision",
+      decider: "CEO",
+    });
+
+    await expect(
+      updateDecision(db, {
+        organizationId: orgA.org.id,
+        decisionId: decision.id,
+        actorId: orgA.user.id,
+        fields: { relatedTaskId: taskB.id },
+      }),
+    ).rejects.toBeInstanceOf(DecisionError);
   });
 });
 

@@ -26,11 +26,23 @@ export interface ContextEntity {
   status: string;
 }
 
+// Decisions are narrative, not just a title/status pair -- "the CFO scope
+// question" and "the CFO engagement renewal question" can only be recognized
+// as the same open decision if the model also sees why each one matters and
+// who is on the hook to decide, the way it can infer two task titles are the
+// same from title text alone. Extends ContextEntity rather than being a
+// standalone shape so isKnownEntityId's pool lookup stays uniform.
+export interface DecisionContextEntity extends ContextEntity {
+  decider: string;
+  whyItMatters: string | null;
+}
+
 export interface CompanyContext {
   objectives: ContextEntity[];
   initiatives: ContextEntity[];
   projects: ContextEntity[];
   tasks: ContextEntity[];
+  decisions: DecisionContextEntity[];
 }
 
 const changeTypeSchema = z.enum([
@@ -112,11 +124,25 @@ function buildContextSection(context: CompanyContext): string {
       ? `${label}: (none)`
       : `${label}:\n${items.map((item) => `- id=${item.id} status=${item.status} title="${item.title}"`).join("\n")}`;
 
+  // Richer than `section` above: matching a follow-up to the right open
+  // decision needs more than a title (see DecisionContextEntity), so each
+  // line also carries decider and, when present, whyItMatters.
+  const decisionsSection =
+    context.decisions.length === 0
+      ? "Existing open decisions: (none)"
+      : `Existing open decisions:\n${context.decisions
+          .map((decision) => {
+            const why = decision.whyItMatters ? ` whyItMatters="${decision.whyItMatters}"` : "";
+            return `- id=${decision.id} decider="${decision.decider}" title="${decision.title}"${why}`;
+          })
+          .join("\n")}`;
+
   return [
     section("Existing objectives", context.objectives),
     section("Existing initiatives", context.initiatives),
     section("Existing projects", context.projects),
     section("Existing open tasks", context.tasks),
+    decisionsSection,
   ].join("\n\n");
 }
 
@@ -134,16 +160,19 @@ Only propose creating something new (targetId: null) when nothing existing plaus
 
 Not every source calls for a change to the objective/initiative/project/task tree. Some describe something that genuinely needs a human decision -- a real choice with consequences that a specific person or group needs to make, not just a status update or a routine next action. Propose a decision (targetType: "decision") for that kind of open question. For example: "the fractional CFO engagement's scope still needs to be clarified with leadership" is a decision -- someone has to actually choose an answer. "The firmware patch passed testing" is not a decision -- it is an operational update to the relevant task, even though it is worth recording. When genuinely unsure whether something is a decision or a routine update, prefer the routine update: decisions are for real open questions that need a human call, not for every piece of news.
 
+Once you've concluded a source is decision-shaped, apply the exact same match-before-create principle as above: check whether it's really a follow-up on an EXISTING open decision (given to you in context above, each with its id, decider, and why it matters) before proposing a brand new one. Read the existing decisions' titles and whyItMatters carefully and look for the same underlying open question, even if the wording differs (e.g. "any update on the CFO scope question?" is very likely the same open question as an existing "What should the fractional CFO engagement's scope be going forward?"). If a plausible match exists, propose an update to it (targetId set to that decision's real id) rather than creating a duplicate decision for a question that's already open. Only propose a brand-new decision (targetId: null) when nothing existing plausibly matches. When genuinely uncertain between "update this existing decision" and "this is a new decision", prefer the existing decision and lower your confidence rather than defaulting to new.
+
 targetId rules:
-- If you are proposing an update to something that already exists, targetId MUST be the exact id string of that entity as given to you in the context above. Never invent, guess, or reformat an id.
-- If you are proposing something new, targetId MUST be null.
-- If you are proposing a decision, targetId MUST always be null. This implementation only supports proposing brand-new decisions -- you are never given a list of existing open decisions to match against, so a decision can never be treated as an update to something already tracked.
+- If you are proposing an update to something that already exists -- including a decision that matches one already open -- targetId MUST be the exact id string of that entity as given to you in the context above. Never invent, guess, or reformat an id.
+- If you are proposing something new -- including a brand-new decision -- targetId MUST be null.
 
 proposedDiff rules -- each targetType only accepts these fields, anything else is discarded before it ever reaches the database:
 ${describeAllowedFields()}
 When creating a new project/initiative/task, proposedDiff must include the appropriate parent id field (initiativeId for a project, objectiveId for an initiative, projectId for a task) pointing at an existing parent from the context, plus a title. When updating an existing entity, only include the fields that are actually changing.
 
-When proposing a decision, proposedDiff must include title (phrased as a question or a clear decision statement -- e.g. "Which vendor should we choose for sensor boards?" or "Approve budget increase for Q4 hiring") and decider (your best guess at who should make this call -- a named person mentioned in the source, or a role like "Leadership" if no specific person is named). Include stakeholders (an array of other people who should weigh in or be informed) whenever the source names or implies any. Include whyItMatters, relevantContext, and suggestedNextStep whenever the source actually supports them -- leave a field out of proposedDiff entirely rather than inventing content the source doesn't support. dueDate and relatedTaskId are optional bonus fields: include them only when the source clearly implies one, don't force them.
+When proposing a brand-new decision (targetId null), proposedDiff must include title (phrased as a question or a clear decision statement -- e.g. "Which vendor should we choose for sensor boards?" or "Approve budget increase for Q4 hiring") and decider (your best guess at who should make this call -- a named person mentioned in the source, or a role like "Leadership" if no specific person is named). Include stakeholders (an array of other people who should weigh in or be informed) whenever the source names or implies any. Include whyItMatters, relevantContext, and suggestedNextStep whenever the source actually supports them -- leave a field out of proposedDiff entirely rather than inventing content the source doesn't support. dueDate and relatedTaskId are optional bonus fields: include them only when the source clearly implies one, don't force them.
+
+When proposing an update to an existing decision (targetId set), only include the fields that actually changed based on new information in the source -- typically whyItMatters, relevantContext, and/or suggestedNextStep refreshed with what's new, and stakeholders if new people have entered the picture. Do not include decider in an update's proposedDiff: who owns a decision is a deliberate human call, not something to change via an inferred update.
 
 reasoning must be genuinely useful for a fast human scan: name what changed, cite the specific evidence from the source, and say why you picked this target (or why you concluded nothing existing matched). Do not write generic filler.
 
@@ -167,17 +196,12 @@ function isKnownEntityId(
   id: string,
   context: CompanyContext,
 ): boolean {
-  // Decisions have no context pool to validate against -- existing-decision
-  // matching is out of scope for this implementation (see SYSTEM_PROMPT), so a
-  // non-null decision targetId is always treated as unknown/invalid, the same
-  // as a hallucinated id would be for any other targetType.
-  if (targetType === "decision") return false;
-
   const pool: ContextEntity[] = {
     objective: context.objectives,
     initiative: context.initiatives,
     project: context.projects,
     task: context.tasks,
+    decision: context.decisions,
   }[targetType];
   return pool.some((entity) => entity.id === id);
 }

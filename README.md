@@ -333,19 +333,36 @@ Built:
   and `SYSTEM_PROMPT` gives Claude a concrete signal for when a decision (rather
   than an operational update) is the right call — "the fractional CFO scope needs
   clarifying with leadership" is a decision, "the firmware patch passed testing" is
-  not. This is new-decision proposals only: `targetId` for a `"decision"`
-  suggestion must always be `null` (`isKnownEntityId` rejects any non-null
-  decision `targetId` outright, same failure path as a hallucinated task/objective
-  id), because the model is never handed a list of existing open decisions to
-  match against — matching a source to an already-open decision is a deliberate
-  follow-up, not built yet. Approving a decision-type suggestion
+  not. Decisions now follow the same "prefer updating over duplicating" principle
+  used everywhere else in this pipeline: `CompanyContext` gained a `decisions` pool
+  (open decisions only — `pipeline.ts`'s `loadCompanyContext` queries
+  `status = 'open'` for the org), rendered in the prompt with each decision's
+  `decider` and `whyItMatters` alongside its id/title, since matching a follow-up
+  to the right open decision needs more than a bare title the way a task title
+  usually suffices. `SYSTEM_PROMPT` asks Claude to check for a plausible existing
+  open decision before proposing a new one (e.g. "any update on the CFO scope
+  question?" should match rather than duplicate an already-open "What should the
+  CFO engagement's scope be?"), and `isKnownEntityId` validates a non-null decision
+  `targetId` against that pool exactly like every other target type — a hallucinated
+  decision id is rejected the same way a hallucinated task/objective id is. An
+  update's `proposedDiff` is guided toward refreshing `whyItMatters`/
+  `relevantContext`/`suggestedNextStep`/`stakeholders`; the model is asked not to
+  include `decider` on an update, since reassigning who owns a decision is meant to
+  stay a deliberate human action rather than an AI inference (a reviewer can still
+  edit it in by hand before approving — `ALLOWED_FIELDS.decision` doesn't
+  distinguish create from update). Approving a decision-type suggestion
   ([backend/src/suggestions/apply.ts](backend/src/suggestions/apply.ts)) does not
-  go through the generic insert-by-table path the other four target types use; it
-  calls `createDecision` directly (inside the same transaction, via a postgres
-  savepoint), so org-scoped `relatedTaskId`/`sourceId` validation and the
-  `decision.created` audit_log entry stay owned by
-  [backend/src/decisions/manage.ts](backend/src/decisions/manage.ts) instead of
-  being duplicated.
+  go through the generic insert-by-table path the other four target types use;
+  it branches on `targetId`: `null` calls `createDecision` (unchanged), non-null
+  calls the new `updateDecision`
+  ([backend/src/decisions/manage.ts](backend/src/decisions/manage.ts)) — both
+  invoked inside the same transaction via a postgres savepoint, so org-scoped
+  `relatedTaskId`/`sourceId` validation and their own
+  `decision.created`/`decision.updated` audit_log entries stay owned by
+  decisions/manage.ts instead of being duplicated. `updateDecision` only touches
+  fields actually present in the (already-whitelisted) diff and refuses to update
+  a decision that's already `decided`, since reopening one via an inferred match
+  would undo a deliberate human resolution.
 
 - Real Circleback (meeting-transcript) ingestion via a signed, per-org webhook
   token, feeding the existing interpretation pipeline for real:

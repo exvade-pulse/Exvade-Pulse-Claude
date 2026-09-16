@@ -6,6 +6,7 @@ import { createFixtureOrg } from "./fixtures.js";
 import { tasks, suggestions, sources, decisions } from "../db/schema.js";
 import { runInterpretationPipeline } from "../interpretation/pipeline.js";
 import { approveSuggestion } from "../suggestions/apply.js";
+import { createDecision, resolveDecision } from "../decisions/manage.js";
 import { setClaudeClientForTesting, type ClaudeClient } from "../interpretation/claudeClient.js";
 import { NOISE_FILTER_MODEL } from "../interpretation/noiseFilter.js";
 import { INTERPRETATION_MODEL } from "../interpretation/interpret.js";
@@ -349,6 +350,77 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
     expect(decisionRow).toBeDefined();
     expect(decisionRow.title).toBe("Should we extend the fractional CFO engagement past Q4?");
     expect(decisionRow.status).toBe("open");
+  });
+
+  it("open decisions are included in the interpretation context; a decided one is excluded", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "pipeline-decision-context.test" });
+
+    const openDecision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "What should the fractional CFO engagement's scope be going forward?",
+      decider: "Leadership",
+      whyItMatters: "Engagement expires end of quarter with no successor plan.",
+    });
+    const decidedDecision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Already-settled decision",
+      decider: "CEO",
+    });
+    await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decidedDecision.id,
+      actorId: fixture.user.id,
+      resolution: "Settled last quarter.",
+    });
+
+    const fakeClient: ClaudeClient = {
+      createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
+        if (params.model === NOISE_FILTER_MODEL) {
+          return toolUseMessage("classify_source", { isNoise: false, reason: "Follow-up on an open question." });
+        }
+        expect(params.model).toBe(INTERPRETATION_MODEL);
+        const userContent = params.messages[0]?.content as string;
+        expect(userContent).toContain(openDecision.id);
+        expect(userContent).not.toContain(decidedDecision.id);
+        return toolUseMessage("propose_suggestion", {
+          changeType: "decision",
+          targetType: "decision",
+          targetId: openDecision.id,
+          proposedDiff: { relevantContext: "Still waiting on a final answer from leadership." },
+          reasoning: "This is a follow-up on the already-open CFO scope decision.",
+          confidence: 0.8,
+        });
+      },
+    };
+    setClaudeClientForTesting(fakeClient);
+
+    const result = await runInterpretationPipeline(db, fixture.org.id, {
+      type: "gmail",
+      externalId: "ext-decision-context-1",
+      subject: "Any update on the CFO scope question?",
+      from: "coo@exvadebio.com",
+      body: "Following up -- any update on the fractional CFO scope question?",
+      receivedAt: new Date(),
+    });
+
+    expect(result.suggestionIds).toHaveLength(1);
+    const [suggestion] = await db.select().from(suggestions).where(eq(suggestions.id, result.suggestionIds[0]));
+    expect(suggestion.targetType).toBe("decision");
+    expect(suggestion.targetId).toBe(openDecision.id);
+
+    const approved = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+    expect(approved.targetId).toBe(openDecision.id);
+
+    const allDecisions = await db.select().from(decisions).where(eq(decisions.organizationId, fixture.org.id));
+    expect(allDecisions).toHaveLength(2); // no third, duplicate decision was created
   });
 
   it("fails closed: on a redaction failure, keeps a source row with the safe placeholder body and creates no suggestion", async () => {
