@@ -622,6 +622,30 @@ Built:
   pending review below" or, honestly, "nothing operational was found in it"
   when the noise filter (which still fails open, same as every other source)
   screens it out.
+- Two Decision Center actions on `/decisions`: "Add information" and
+  "Assign", both restricted to `open` decisions (a decided one is closed —
+  `PATCH .../add-info` and `PATCH .../assign`
+  ([backend/src/routes/decisions.ts](backend/src/routes/decisions.ts)) both
+  409 on one, same conflict handling as `.../resolve`).
+  `addDecisionInfo`/`assignDecision`
+  ([backend/src/decisions/manage.ts](backend/src/decisions/manage.ts)) write
+  distinct `decision.info_added`/`decision.assigned` audit_log actions rather
+  than the generic `decision.updated` `updateDecision` already writes (that
+  one stays reserved for the AI-interpretation-match path) — so the Activity
+  feed can label them precisely rather than falling back to a humanized raw
+  action string. "Add information" *appends* a dated, attributed entry to
+  `relevantContext` (`[2026-09-16 — user@domain] note text`) instead of
+  overwriting it, since a decision can accumulate several rounds of new
+  information before anyone is ready to decide, and forcing a reviewer to
+  retype existing context to add one fact would be a good way to lose it by
+  accident. "Assign" sets `decider` (who is on the hook to decide) — distinct
+  from `stakeholders` (who needs to be consulted/informed), which these
+  actions don't touch. The frontend
+  ([frontend/app/decisions/page.tsx](frontend/app/decisions/page.tsx)) adds
+  both as inline forms alongside the existing "Mark decided" one, updating
+  only the changed field in local state on save rather than replacing the
+  whole card (the PATCH response is the raw `decisions` row, without the
+  `relatedTaskTitle`/`relatedTaskStatus` join the list endpoint adds).
 - Confidence tiering and a reviewed-history view on `/review`, closing two gaps
   in the review queue: every suggestion carried a `confidence` score but the
   queue rendered one flat list, and an approved/rejected suggestion vanished

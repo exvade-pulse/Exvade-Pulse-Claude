@@ -267,6 +267,36 @@ export interface ResolveDecisionResult {
   unblockedTask: { id: string; status: TaskStatus } | null;
 }
 
+export async function addDecisionInfo(id: string, note: string): Promise<Decision> {
+  const res = await fetch(`${API_URL}/api/decisions/${id}/add-info`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to add information");
+  }
+  const body = (await res.json()) as { decision: Decision };
+  return body.decision;
+}
+
+export async function assignDecision(id: string, decider: string): Promise<Decision> {
+  const res = await fetch(`${API_URL}/api/decisions/${id}/assign`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decider }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to assign decision");
+  }
+  const body = (await res.json()) as { decision: Decision };
+  return body.decision;
+}
+
 export async function resolveDecision(
   id: string,
   resolution: string,

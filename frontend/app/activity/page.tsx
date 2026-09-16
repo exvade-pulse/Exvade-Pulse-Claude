@@ -23,6 +23,8 @@ const ACTION_LABELS: Record<string, string> = {
   "suggestion.edited": "edited a suggestion",
   "suggestion.rejected": "rejected a suggestion",
   "decision.created": "created a decision",
+  "decision.info_added": "added information to a decision",
+  "decision.assigned": "assigned a decision",
   "decision.resolved": "resolved a decision",
   "user.authorized": "authorized a user",
   "user.role_changed": "changed a user's role",

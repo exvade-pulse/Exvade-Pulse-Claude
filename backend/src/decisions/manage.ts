@@ -148,6 +148,101 @@ export async function updateDecision(db: DbOrTx, params: UpdateParams) {
   });
 }
 
+interface AddInfoParams {
+  organizationId: string;
+  decisionId: string;
+  actorId: string;
+  // The submitting user's email, for the attribution line prefixed onto the
+  // appended note -- relevantContext has no per-entry author field of its
+  // own, so this is folded into the entry's own text.
+  actorLabel: string;
+  note: string;
+}
+
+// Appends rather than overwrites: relevantContext is a single text field, and
+// a decision can accumulate several rounds of new information before anyone
+// is ready to decide. Forcing a reviewer to retype the existing context just
+// to add one more fact would be both annoying and a good way to accidentally
+// drop earlier context.
+export async function addDecisionInfo(db: Database, params: AddInfoParams) {
+  return db.transaction(async (tx) => {
+    const [decision] = await tx
+      .select()
+      .from(decisions)
+      .where(and(eq(decisions.id, params.decisionId), eq(decisions.organizationId, params.organizationId)));
+
+    if (!decision) {
+      throw new DecisionError("Decision not found", "not_found");
+    }
+    if (decision.status !== "open") {
+      throw new DecisionError("Decision is already decided", "conflict");
+    }
+
+    const entry = `[${new Date().toISOString().slice(0, 10)} — ${params.actorLabel}] ${params.note}`;
+    const relevantContext = decision.relevantContext ? `${decision.relevantContext}\n\n${entry}` : entry;
+
+    const [updated] = await tx
+      .update(decisions)
+      .set({ relevantContext, updatedAt: new Date() })
+      .where(eq(decisions.id, decision.id))
+      .returning();
+
+    await tx.insert(auditLog).values({
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      action: "decision.info_added",
+      entityType: "decision",
+      entityId: decision.id,
+      details: { note: params.note },
+    });
+
+    return updated;
+  });
+}
+
+interface AssignParams {
+  organizationId: string;
+  decisionId: string;
+  actorId: string;
+  decider: string;
+}
+
+// Reassigns who is on the hook to decide -- distinct from stakeholders (who
+// needs to be consulted/informed, not who owns making the call).
+export async function assignDecision(db: Database, params: AssignParams) {
+  return db.transaction(async (tx) => {
+    const [decision] = await tx
+      .select()
+      .from(decisions)
+      .where(and(eq(decisions.id, params.decisionId), eq(decisions.organizationId, params.organizationId)));
+
+    if (!decision) {
+      throw new DecisionError("Decision not found", "not_found");
+    }
+    if (decision.status !== "open") {
+      throw new DecisionError("Decision is already decided", "conflict");
+    }
+
+    const previousDecider = decision.decider;
+    const [updated] = await tx
+      .update(decisions)
+      .set({ decider: params.decider, updatedAt: new Date() })
+      .where(eq(decisions.id, decision.id))
+      .returning();
+
+    await tx.insert(auditLog).values({
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      action: "decision.assigned",
+      entityType: "decision",
+      entityId: decision.id,
+      details: { previousDecider, decider: params.decider },
+    });
+
+    return updated;
+  });
+}
+
 interface ResolveParams {
   organizationId: string;
   decisionId: string;

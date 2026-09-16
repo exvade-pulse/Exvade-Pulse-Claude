@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, tasks } from "../db/schema.js";
-import { createDecision, resolveDecision, DecisionError } from "../decisions/manage.js";
+import { addDecisionInfo, assignDecision, createDecision, resolveDecision, DecisionError } from "../decisions/manage.js";
 
 export async function decisionRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
@@ -92,6 +92,61 @@ export async function decisionRoutes(app: FastifyInstance) {
       throw err;
     }
   });
+
+  app.patch<{ Params: { id: string }; Body: { note?: string } }>(
+    "/api/decisions/:id/add-info",
+    async (request, reply) => {
+      const note = request.body?.note?.trim();
+      if (!note) {
+        reply.code(400).send({ error: "note is required" });
+        return;
+      }
+
+      try {
+        const decision = await addDecisionInfo(db, {
+          organizationId: request.user!.organizationId,
+          decisionId: request.params.id,
+          actorId: request.user!.userId,
+          actorLabel: request.user!.email,
+          note,
+        });
+        reply.send({ decision });
+      } catch (err) {
+        if (err instanceof DecisionError) {
+          reply.code(err.code === "not_found" ? 404 : 409).send({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.patch<{ Params: { id: string }; Body: { decider?: string } }>(
+    "/api/decisions/:id/assign",
+    async (request, reply) => {
+      const decider = request.body?.decider?.trim();
+      if (!decider) {
+        reply.code(400).send({ error: "decider is required" });
+        return;
+      }
+
+      try {
+        const decision = await assignDecision(db, {
+          organizationId: request.user!.organizationId,
+          decisionId: request.params.id,
+          actorId: request.user!.userId,
+          decider,
+        });
+        reply.send({ decision });
+      } catch (err) {
+        if (err instanceof DecisionError) {
+          reply.code(err.code === "not_found" ? 404 : 409).send({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
 
   app.patch<{ Params: { id: string }; Body: { resolution?: string; alsoUnblockTask?: boolean } }>(
     "/api/decisions/:id/resolve",

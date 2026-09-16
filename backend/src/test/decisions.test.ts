@@ -3,7 +3,14 @@ import { and, eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
 import { auditLog, decisions, tasks } from "../db/schema.js";
-import { createDecision, resolveDecision, updateDecision, DecisionError } from "../decisions/manage.js";
+import {
+  addDecisionInfo,
+  assignDecision,
+  createDecision,
+  resolveDecision,
+  updateDecision,
+  DecisionError,
+} from "../decisions/manage.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 
@@ -360,6 +367,133 @@ describe("decisions module", () => {
       }),
     ).rejects.toBeInstanceOf(DecisionError);
   });
+
+  it("addDecisionInfo appends an attributed, dated entry rather than overwriting existing context", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "add-info-append.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Needs a call",
+      decider: "CEO",
+      relevantContext: "Original context from the meeting.",
+    });
+
+    const updated = await addDecisionInfo(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      actorLabel: fixture.user.email,
+      note: "Vendor confirmed pricing is firm through end of quarter.",
+    });
+
+    expect(updated.relevantContext).toContain("Original context from the meeting.");
+    expect(updated.relevantContext).toContain("Vendor confirmed pricing is firm through end of quarter.");
+    expect(updated.relevantContext).toContain(fixture.user.email);
+
+    const [logRow] = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, decision.id), eq(auditLog.action, "decision.info_added")));
+    expect(logRow).toBeDefined();
+  });
+
+  it("addDecisionInfo on a decision with no prior context sets it, rather than prefixing a stray blank line", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "add-info-empty.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Needs a call",
+      decider: "CEO",
+    });
+
+    const updated = await addDecisionInfo(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      actorLabel: fixture.user.email,
+      note: "First piece of context.",
+    });
+
+    expect(updated.relevantContext).not.toMatch(/^\s/);
+    expect(updated.relevantContext).toContain("First piece of context.");
+  });
+
+  it("addDecisionInfo rejects a decision that has already been decided", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "add-info-conflict.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Already handled",
+      decider: "CEO",
+    });
+    await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      resolution: "Done",
+    });
+
+    await expect(
+      addDecisionInfo(db, {
+        organizationId: fixture.org.id,
+        decisionId: decision.id,
+        actorId: fixture.user.id,
+        actorLabel: fixture.user.email,
+        note: "Too late",
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
+
+  it("assignDecision changes the decider and writes an audit_log row with the previous value", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "assign-decision.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Needs an owner",
+      decider: "Unassigned",
+    });
+
+    const updated = await assignDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      decider: "Sean Meehan, CEO",
+    });
+
+    expect(updated.decider).toBe("Sean Meehan, CEO");
+
+    const [logRow] = await db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, decision.id), eq(auditLog.action, "decision.assigned")));
+    expect(logRow).toBeDefined();
+    expect(logRow.details).toMatchObject({ previousDecider: "Unassigned", decider: "Sean Meehan, CEO" });
+  });
+
+  it("assignDecision rejects a decision that has already been decided", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "assign-conflict.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Already handled",
+      decider: "CEO",
+    });
+    await resolveDecision(db, {
+      organizationId: fixture.org.id,
+      decisionId: decision.id,
+      actorId: fixture.user.id,
+      resolution: "Done",
+    });
+
+    await expect(
+      assignDecision(db, {
+        organizationId: fixture.org.id,
+        decisionId: decision.id,
+        actorId: fixture.user.id,
+        decider: "Too late",
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
 });
 
 describe("GET/POST /api/decisions", () => {
@@ -597,6 +731,90 @@ describe("GET/POST /api/decisions", () => {
       },
     });
     expect(rejected.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it("PATCH .../add-info appends the note and returns 400 for a blank one", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "api-add-info.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Needs a call",
+      decider: "CEO",
+    });
+
+    const app = await buildApp();
+    const token = await signSession({
+      userId: fixture.user.id,
+      organizationId: fixture.org.id,
+      email: fixture.user.email,
+      role: fixture.authorization.role,
+    });
+
+    const blank = await app.inject({
+      method: "PATCH",
+      url: `/api/decisions/${decision.id}/add-info`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { note: "   " },
+    });
+    expect(blank.statusCode).toBe(400);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/decisions/${decision.id}/add-info`,
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { note: "New info from the vendor call." },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { decision: { relevantContext: string | null } };
+    expect(body.decision.relevantContext).toContain("New info from the vendor call.");
+  });
+
+  it("PATCH .../assign changes the decider and 404s for another organization's decision", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "api-assign-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "api-assign-b.test" });
+
+    const decisionA = await createDecision(db, {
+      organizationId: orgA.org.id,
+      actorId: orgA.user.id,
+      title: "Needs an owner",
+      decider: "Unassigned",
+    });
+    const decisionB = await createDecision(db, {
+      organizationId: orgB.org.id,
+      actorId: orgB.user.id,
+      title: "Org B decision",
+      decider: "Unassigned",
+    });
+
+    const app = await buildApp();
+    const tokenA = await signSession({
+      userId: orgA.user.id,
+      organizationId: orgA.org.id,
+      email: orgA.user.email,
+      role: orgA.authorization.role,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/decisions/${decisionA.id}/assign`,
+      cookies: { [SESSION_COOKIE_NAME]: tokenA },
+      payload: { decider: "Sean Meehan, CEO" },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { decision: { decider: string } };
+    expect(body.decision.decider).toBe("Sean Meehan, CEO");
+
+    const crossOrg = await app.inject({
+      method: "PATCH",
+      url: `/api/decisions/${decisionB.id}/assign`,
+      cookies: { [SESSION_COOKIE_NAME]: tokenA },
+      payload: { decider: "Hijacked via API" },
+    });
+    expect(crossOrg.statusCode).toBe(404);
 
     await app.close();
   });

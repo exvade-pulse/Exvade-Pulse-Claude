@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import {
   API_URL,
+  addDecisionInfo,
+  assignDecision,
   createDecision,
   fetchCurrentUser,
   fetchOpenDecisions,
@@ -46,6 +48,14 @@ export default function DecisionsPage() {
   const [resolutionDraft, setResolutionDraft] = useState("");
   const [alsoUnblockTask, setAlsoUnblockTask] = useState(false);
   const [savingResolution, setSavingResolution] = useState(false);
+
+  const [addingInfoId, setAddingInfoId] = useState<string | null>(null);
+  const [infoDraft, setInfoDraft] = useState("");
+  const [savingInfo, setSavingInfo] = useState(false);
+
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+  const [assignDraft, setAssignDraft] = useState("");
+  const [savingAssign, setSavingAssign] = useState(false);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -95,6 +105,56 @@ export default function DecisionsPage() {
     setResolutionDraft("");
     setAlsoUnblockTask(false);
     setResolvingId(id);
+  }
+
+  function startAddInfo(id: string) {
+    setActionError(null);
+    setInfoDraft("");
+    setAddingInfoId(id);
+  }
+
+  async function submitAddInfo(id: string) {
+    if (!infoDraft.trim()) {
+      setActionError("Note text is required.");
+      return;
+    }
+    setSavingInfo(true);
+    setActionError(null);
+    try {
+      const updated = await addDecisionInfo(id, infoDraft);
+      setDecisions((prev) => prev.map((d) => (d.id === id ? { ...d, relevantContext: updated.relevantContext } : d)));
+      setAddingInfoId(null);
+      setInfoDraft("");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setSavingInfo(false);
+    }
+  }
+
+  function startAssign(id: string, currentDecider: string) {
+    setActionError(null);
+    setAssignDraft(currentDecider);
+    setAssigningId(id);
+  }
+
+  async function submitAssign(id: string) {
+    if (!assignDraft.trim()) {
+      setActionError("Decider is required.");
+      return;
+    }
+    setSavingAssign(true);
+    setActionError(null);
+    try {
+      const updated = await assignDecision(id, assignDraft);
+      setDecisions((prev) => prev.map((d) => (d.id === id ? { ...d, decider: updated.decider } : d)));
+      setAssigningId(null);
+      setAssignDraft("");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setSavingAssign(false);
+    }
   }
 
   async function submitResolve(id: string) {
@@ -233,6 +293,8 @@ export default function DecisionsPage() {
       {decisions.map((d) => {
         const overdue = isOverdue(d.dueDate);
         const isResolving = resolvingId === d.id;
+        const isAddingInfo = addingInfoId === d.id;
+        const isAssigning = assigningId === d.id;
         return (
           <article className="card" key={d.id}>
             <div className="card-top">
@@ -268,7 +330,9 @@ export default function DecisionsPage() {
               {d.relevantContext && (
                 <div>
                   <p className="decision-section-label">Relevant context</p>
-                  <p className="decision-section-body">{d.relevantContext}</p>
+                  <p className="decision-section-body" style={{ whiteSpace: "pre-wrap" }}>
+                    {d.relevantContext}
+                  </p>
                 </div>
               )}
               {d.suggestedNextStep && (
@@ -324,8 +388,54 @@ export default function DecisionsPage() {
                   </button>
                 </div>
               </div>
+            ) : isAddingInfo ? (
+              <div className="edit-form">
+                <label className="edit-field">
+                  <span className="edit-field-label">New information</span>
+                  <input
+                    className="edit-input"
+                    value={infoDraft}
+                    onChange={(e) => setInfoDraft(e.target.value)}
+                    placeholder="What's new since this was created?"
+                  />
+                </label>
+                <div className="card-actions">
+                  <button className="decision-btn save" disabled={savingInfo} onClick={() => submitAddInfo(d.id)}>
+                    Save
+                  </button>
+                  <button className="decision-btn cancel" disabled={savingInfo} onClick={() => setAddingInfoId(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : isAssigning ? (
+              <div className="edit-form">
+                <label className="edit-field">
+                  <span className="edit-field-label">Decider</span>
+                  <input
+                    className="edit-input"
+                    value={assignDraft}
+                    onChange={(e) => setAssignDraft(e.target.value)}
+                    placeholder="Who is on the hook to decide?"
+                  />
+                </label>
+                <div className="card-actions">
+                  <button className="decision-btn save" disabled={savingAssign} onClick={() => submitAssign(d.id)}>
+                    Save
+                  </button>
+                  <button className="decision-btn cancel" disabled={savingAssign} onClick={() => setAssigningId(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="card-actions">
+                <button className="decision-btn" onClick={() => startAddInfo(d.id)}>
+                  Add information
+                </button>
+                <button className="decision-btn" onClick={() => startAssign(d.id, d.decider)}>
+                  Assign
+                </button>
                 <button className="decision-btn approve" onClick={() => startResolve(d.id)}>
                   Mark decided
                 </button>
