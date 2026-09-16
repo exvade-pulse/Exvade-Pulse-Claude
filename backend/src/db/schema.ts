@@ -35,7 +35,7 @@ export const taskStatusEnum = pgEnum("task_status", [
   "blocked",
 ]);
 
-export const sourceTypeEnum = pgEnum("source_type", ["gmail", "circleback"]);
+export const sourceTypeEnum = pgEnum("source_type", ["gmail", "circleback", "document"]);
 
 export const targetTypeEnum = pgEnum("target_type", [
   "objective",

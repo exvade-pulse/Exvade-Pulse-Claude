@@ -29,6 +29,13 @@
       "when": 1789507733261,
       "tag": "0003_first_roland_deschain",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789523541562,
+      "tag": "0004_naive_klaw",
+      "breakpoints": true
     }
   ]
 }

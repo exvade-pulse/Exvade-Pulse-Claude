@@ -30,7 +30,9 @@ function hasUniqueViolationCode(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "23505";
 }
 
-function isUniqueViolation(err: unknown): boolean {
+// Exported for importHistoricalMinutes.ts, which needs the same
+// already-ingested-is-a-no-op treatment for its own externalId conflicts.
+export function isUniqueViolation(err: unknown): boolean {
   if (hasUniqueViolationCode(err)) return true;
   if (err instanceof Error && err.cause) return hasUniqueViolationCode(err.cause);
   return false;

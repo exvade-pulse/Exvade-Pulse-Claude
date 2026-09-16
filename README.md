@@ -92,6 +92,35 @@ it over the standard Postgres wire protocol, not just Neon's HTTP driver).
 
    Frontend at http://localhost:3000, backend at http://localhost:3001.
 
+## One-time historical import
+
+A batch script for importing a folder of real historical meeting-minutes documents
+(`.docx`/`.pdf`) through the same ingestion pipeline as every other source, in
+chronological order (oldest first — suggestions are reviewed in the order this
+script runs in, so importing out of order risks a newer update being approved
+before, and then overwritten by, an older one):
+
+```bash
+npm run import:minutes -w backend -- path/to/folder --dry-run
+```
+
+**Always dry-run first.** It scans the folder recursively, extracts text, resolves
+each document's date (from the filename primarily, falling back to the document's
+own content), sorts them, and prints the full planned order plus anything it
+couldn't confidently date — with zero Claude API calls and zero database writes.
+Once the order and date coverage look right, drop `--dry-run` to actually ingest:
+
+```bash
+npm run import:minutes -w backend -- path/to/folder
+```
+
+Requires `ANTHROPIC_API_KEY`. Re-running the same command is safe — already-ingested
+files are skipped, not duplicated (see
+[backend/src/scripts/importHistoricalMinutes.ts](backend/src/scripts/importHistoricalMinutes.ts)),
+so an interrupted run can just be re-run. `path/to/folder` defaults to
+`C:\Users\meeha\Documents\ExvadePulse-Import`, a local folder deliberately kept
+outside this repo so real company documents are never at risk of being committed.
+
 ## Tests & typecheck
 
 ```bash
@@ -162,6 +191,11 @@ Built:
   - [backend/src/scripts/runRealInterpretation.ts](backend/src/scripts/runRealInterpretation.ts) —
     a script (`npm run interpret:real -w backend`) to exercise the real
     pipeline locally against one raw email-shaped input.
+  - [backend/src/scripts/importHistoricalMinutes.ts](backend/src/scripts/importHistoricalMinutes.ts) —
+    a one-time batch script (`npm run import:minutes -w backend`, see
+    [One-time historical import](#one-time-historical-import)) that feeds a folder
+    of real historical `.docx`/`.pdf` meeting minutes through the same pipeline,
+    oldest first.
   - The original hardcoded/fake interpretation function
     ([backend/src/interpretation/fakeInterpret.ts](backend/src/interpretation/fakeInterpret.ts),
     still used by `npm run seed:fake`) is kept around for fast, offline tests

@@ -12,16 +12,20 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "seed:fake": "tsx src/scripts/seedFakeSuggestion.ts",
-    "interpret:real": "tsx src/scripts/runRealInterpretation.ts"
+    "interpret:real": "tsx src/scripts/runRealInterpretation.ts",
+    "import:minutes": "tsx src/scripts/importHistoricalMinutes.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^10.0.2",
+    "chrono-node": "^2.10.1",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.2.0",
     "jose": "^5.9.6",
+    "mammoth": "^1.12.3",
+    "pdf-parse": "^2.4.5",
     "postgres": "^3.4.5",
     "zod": "^4.6.5"
   },

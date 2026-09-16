@@ -8,9 +8,10 @@ import {
   RedactionError,
   REDACTION_FAILURE_PLACEHOLDER_BODY,
 } from "./redactPatientIdentifiers.js";
+import { getClaudeClient, type ClaudeClient } from "./claudeClient.js";
 
 export interface RawIncomingSource {
-  type: "gmail" | "circleback";
+  type: "gmail" | "circleback" | "document";
   externalId: string;
   subject: string;
   from: string;
@@ -65,10 +66,15 @@ export async function runInterpretationPipeline(
   db: Database,
   organizationId: string,
   raw: RawIncomingSource,
+  // Defaulted (not required) so every existing caller and test is unaffected;
+  // the batch import script overrides this with a retry-wrapping client, since
+  // it needs to survive rate limits across ~200 docs without pipeline.ts's own
+  // fail-open/fail-closed handling mistaking a 429 for a genuine failure.
+  claudeClient: ClaudeClient = getClaudeClient(),
 ): Promise<PipelineResult> {
   let redactedBody: string;
   try {
-    redactedBody = await redactPatientIdentifiers(raw.body);
+    redactedBody = await redactPatientIdentifiers(raw.body, claudeClient);
   } catch (err) {
     if (!(err instanceof RedactionError)) throw err;
     console.error(`Patient-identifier redaction failed for an incoming ${raw.type} source (external id ${raw.externalId}); storing a safe placeholder instead of raw content:`, err.message);
@@ -98,7 +104,7 @@ export async function runInterpretationPipeline(
     })
     .returning();
 
-  const noiseCheck = await isNoiseSource({ subject: raw.subject, from: raw.from, body: redactedBody });
+  const noiseCheck = await isNoiseSource({ subject: raw.subject, from: raw.from, body: redactedBody }, claudeClient);
   if (noiseCheck.isNoise) {
     return { sourceId: source.id, suggestionId: null, skippedAsNoise: true };
   }
@@ -109,6 +115,7 @@ export async function runInterpretationPipeline(
     const draft = await interpretSource(
       { subject: raw.subject, from: raw.from, body: redactedBody, receivedAt: raw.receivedAt },
       context,
+      claudeClient,
     );
 
     const [suggestion] = await db
