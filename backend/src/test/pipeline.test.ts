@@ -16,6 +16,12 @@ function toolUseMessage(name: string, input: unknown): Anthropic.Message {
   return { content: [{ type: "tool_use", id: "t1", name, input }] } as unknown as Anthropic.Message;
 }
 
+function multiToolUseMessage(name: string, inputs: unknown[]): Anthropic.Message {
+  return {
+    content: inputs.map((input, i) => ({ type: "tool_use", id: `t${i + 1}`, name, input })),
+  } as unknown as Anthropic.Message;
+}
+
 // Redaction and interpretation are both forced tool-use calls on the same
 // underlying model (REDACTION_MODEL === INTERPRETATION_MODEL, both
 // "claude-sonnet-5"), so tests must dispatch on the forced tool name, not the
@@ -69,7 +75,7 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
     });
 
     expect(result.skippedAsNoise).toBe(true);
-    expect(result.suggestionId).toBeNull();
+    expect(result.suggestionIds).toEqual([]);
 
     const [sourceRow] = await db.select().from(sources).where(eq(sources.id, result.sourceId));
     expect(sourceRow).toBeDefined();
@@ -123,12 +129,80 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
     });
 
     expect(result.skippedAsNoise).toBe(false);
-    expect(result.suggestionId).not.toBeNull();
+    expect(result.suggestionIds).toHaveLength(1);
 
-    const [suggestion] = await db.select().from(suggestions).where(eq(suggestions.id, result.suggestionId!));
+    const [suggestion] = await db.select().from(suggestions).where(eq(suggestions.id, result.suggestionIds[0]));
     expect(suggestion.targetId).toBe(existingTask.id);
     expect(suggestion.targetType).toBe("task");
     expect(suggestion.proposedDiff).toEqual({ status: "needs_attention", latestUpdate: "Happened again today." });
+  });
+
+  it("multi-topic source: writes one suggestions row per parallel propose_suggestion call", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "pipeline-multi.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({
+        organizationId: fixture.org.id,
+        projectId: fixture.project.id,
+        title: "Rig #3 sensor dropout",
+        status: "active",
+      })
+      .returning();
+
+    const fakeClient: ClaudeClient = {
+      createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
+        if (params.model === NOISE_FILTER_MODEL) {
+          return toolUseMessage("classify_source", { isNoise: false, reason: "Weekly update, several topics." });
+        }
+        expect(params.model).toBe(INTERPRETATION_MODEL);
+        return multiToolUseMessage("propose_suggestion", [
+          {
+            changeType: "operational_update",
+            targetType: "task",
+            targetId: existingTask.id,
+            proposedDiff: { latestUpdate: "Still dropping readings." },
+            reasoning: "Engineering section matches the existing rig #3 task.",
+            confidence: 0.8,
+          },
+          {
+            changeType: "context",
+            targetType: "objective",
+            targetId: fixture.objective.id,
+            proposedDiff: { description: "Grant reviewers requested more bench data." },
+            reasoning: "Grants section references this objective.",
+            confidence: 0.6,
+          },
+          {
+            changeType: "new_task",
+            targetType: "task",
+            targetId: null,
+            proposedDiff: { projectId: fixture.project.id, title: "Order replacement wiring harness" },
+            reasoning: "Finance section approved a new parts order, unrelated to the other two topics.",
+            confidence: 0.55,
+          },
+        ]);
+      },
+    };
+    setClaudeClientForTesting(fakeClient);
+
+    const result = await runInterpretationPipeline(db, fixture.org.id, {
+      type: "gmail",
+      externalId: "ext-multi-1",
+      subject: "Weekly company update",
+      from: "lead@exvadebio.com",
+      body: "Engineering: rig #3 still dropping readings. Grants: reviewers want more bench data. Finance: approved a new wiring harness order.",
+      receivedAt: new Date(),
+    });
+
+    expect(result.skippedAsNoise).toBe(false);
+    expect(result.suggestionIds).toHaveLength(3);
+
+    const suggestionRows = await db.select().from(suggestions).where(eq(suggestions.sourceId, result.sourceId));
+    expect(suggestionRows).toHaveLength(3);
+    expect(suggestionRows.map((s) => s.targetType).sort()).toEqual(["objective", "task", "task"]);
   });
 
   it("keeps the source row but writes no suggestion when interpretation returns an untrustworthy response", async () => {
@@ -164,7 +238,7 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
     });
 
     expect(result.skippedAsNoise).toBe(false);
-    expect(result.suggestionId).toBeNull();
+    expect(result.suggestionIds).toEqual([]);
 
     const [sourceRow] = await db.select().from(sources).where(eq(sources.id, result.sourceId));
     expect(sourceRow).toBeDefined();
@@ -242,7 +316,7 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
     });
 
     expect(result.skippedAsNoise).toBe(false);
-    expect(result.suggestionId).toBeNull();
+    expect(result.suggestionIds).toEqual([]);
 
     const [sourceRow] = await db.select().from(sources).where(eq(sources.id, result.sourceId));
     expect(sourceRow).toBeDefined();

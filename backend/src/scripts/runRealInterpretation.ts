@@ -101,8 +101,8 @@ async function main() {
 
   if (result.skippedAsNoise) {
     console.log(`Source ${result.sourceId} classified as noise -- no suggestion created.`);
-  } else if (result.suggestionId) {
-    console.log(`Created suggestion ${result.suggestionId} from source ${result.sourceId}.`);
+  } else if (result.suggestionIds.length > 0) {
+    console.log(`Created ${result.suggestionIds.length} suggestion(s) (${result.suggestionIds.join(", ")}) from source ${result.sourceId}.`);
   } else {
     console.log(`Source ${result.sourceId} kept, but interpretation failed -- see error above. No suggestion created.`);
   }

@@ -1,12 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { interpretSource, InterpretationError, INTERPRETATION_MODEL, type CompanyContext } from "../interpretation/interpret.js";
+import {
+  interpretSource,
+  InterpretationError,
+  INTERPRETATION_MODEL,
+  MAX_SUGGESTIONS_PER_SOURCE,
+  type CompanyContext,
+} from "../interpretation/interpret.js";
 import type { ClaudeClient } from "../interpretation/claudeClient.js";
 
 function fakeToolUseMessage(input: unknown): Anthropic.Message {
   return {
     content: [{ type: "tool_use", id: "tool_1", name: "propose_suggestion", input }],
+  } as unknown as Anthropic.Message;
+}
+
+function fakeMultiToolUseMessage(inputs: unknown[]): Anthropic.Message {
+  return {
+    content: inputs.map((input, i) => ({
+      type: "tool_use",
+      id: `tool_${i + 1}`,
+      name: "propose_suggestion",
+      input,
+    })),
   } as unknown as Anthropic.Message;
 }
 
@@ -57,7 +74,7 @@ describe("interpretSource", () => {
     await interpretSource(source, context, client);
 
     expect(capture.params?.model).toBe(INTERPRETATION_MODEL);
-    expect(capture.params?.tool_choice).toEqual({ type: "tool", name: "propose_suggestion" });
+    expect(capture.params?.tool_choice).toEqual({ type: "any" });
     const userContent = capture.params?.messages[0]?.content as string;
     expect(userContent).toContain(taskId);
     expect(userContent).toContain("Rig #3 sensor dropout");
@@ -86,8 +103,10 @@ describe("interpretSource", () => {
       }),
     );
 
-    const draft = await interpretSource(source, context, client);
+    const drafts = await interpretSource(source, context, client);
 
+    expect(drafts).toHaveLength(1);
+    const [draft] = drafts;
     expect(draft.targetType).toBe("task");
     expect(draft.targetId).toBe(taskId);
     expect(draft.proposedDiff).toEqual({
@@ -115,10 +134,11 @@ describe("interpretSource", () => {
       }),
     );
 
-    const draft = await interpretSource(source, context, client);
+    const drafts = await interpretSource(source, context, client);
 
-    expect(draft.targetId).toBeNull();
-    expect(draft.proposedDiff.projectId).toBe(projectId);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].targetId).toBeNull();
+    expect(drafts[0].proposedDiff.projectId).toBe(projectId);
   });
 
   it("throws when the model does not call the tool", async () => {
@@ -197,5 +217,132 @@ describe("interpretSource", () => {
     );
 
     await expect(interpretSource(source, context, client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
+  it("returns multiple suggestions when Claude makes several parallel tool_use calls across different targetTypes", async () => {
+    const objectiveId = randomUUID();
+    const projectId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      objectives: [{ id: objectiveId, title: "Advance regulatory strategy", status: "active" }],
+      projects: [{ id: projectId, title: "Bench testing protocol", status: "active" }],
+    };
+    const client = stubClient(
+      fakeMultiToolUseMessage([
+        {
+          changeType: "operational_update",
+          targetType: "objective",
+          targetId: objectiveId,
+          proposedDiff: { description: "FDA pre-sub meeting scheduled for next month." },
+          reasoning: "Regulatory update mentioned in the weekly digest.",
+          confidence: 0.8,
+        },
+        {
+          changeType: "new_task",
+          targetType: "task",
+          targetId: null,
+          proposedDiff: { projectId, title: "Order replacement sensor harness" },
+          reasoning: "Engineering section calls out a new parts order, unrelated to the regulatory update.",
+          confidence: 0.65,
+        },
+        {
+          changeType: "context",
+          targetType: "project",
+          targetId: projectId,
+          proposedDiff: { description: "Grant reviewers requested additional bench data." },
+          reasoning: "Grants section references this project's bench testing data.",
+          confidence: 0.6,
+        },
+      ]),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(3);
+    expect(drafts.map((d) => d.targetType)).toEqual(["objective", "task", "project"]);
+  });
+
+  it("drops one invalid item among several valid ones, keeping the valid ones", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const client = stubClient(
+      fakeMultiToolUseMessage([
+        {
+          changeType: "operational_update",
+          targetType: "task",
+          targetId: taskId,
+          proposedDiff: { latestUpdate: "Still happening." },
+          reasoning: "Matches the existing task.",
+          confidence: 0.8,
+        },
+        {
+          // Hallucinated targetId not present in context -- should be dropped.
+          changeType: "operational_update",
+          targetType: "task",
+          targetId: randomUUID(),
+          proposedDiff: { status: "blocked" },
+          reasoning: "x",
+          confidence: 0.5,
+        },
+      ]),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].targetId).toBe(taskId);
+  });
+
+  it("throws InterpretationError when every item in a multi-item response fails validation", async () => {
+    const client = stubClient(
+      fakeMultiToolUseMessage([
+        {
+          changeType: "operational_update",
+          targetType: "task",
+          targetId: randomUUID(),
+          proposedDiff: { status: "blocked" },
+          reasoning: "x",
+          confidence: 0.5,
+        },
+        {
+          changeType: "not_a_real_change_type",
+          targetType: "task",
+          targetId: null,
+          proposedDiff: {},
+          reasoning: "x",
+          confidence: 0.5,
+        },
+      ]),
+    );
+
+    await expect(interpretSource(source, emptyContext(), client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
+  it("caps accepted tool_use calls at MAX_SUGGESTIONS_PER_SOURCE, keeping only the first N", async () => {
+    const projectId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      projects: [{ id: projectId, title: "Bench testing protocol", status: "active" }],
+    };
+    const overCount = MAX_SUGGESTIONS_PER_SOURCE + 3;
+    const inputs = Array.from({ length: overCount }, (_, i) => ({
+      changeType: "new_task",
+      targetType: "task",
+      targetId: null,
+      proposedDiff: { projectId, title: `Task ${i}` },
+      reasoning: `Reasoning for task ${i}.`,
+      confidence: 0.5,
+    }));
+    const client = stubClient(fakeMultiToolUseMessage(inputs));
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(MAX_SUGGESTIONS_PER_SOURCE);
+    expect(drafts.map((d) => (d.proposedDiff as { title: string }).title)).toEqual(
+      Array.from({ length: MAX_SUGGESTIONS_PER_SOURCE }, (_, i) => `Task ${i}`),
+    );
   });
 });

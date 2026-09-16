@@ -6,6 +6,11 @@ import type { SuggestionDraft } from "./fakeInterpret.js";
 
 export const INTERPRETATION_MODEL = "claude-sonnet-5";
 
+// Defensive ceiling on how many propose_suggestion calls a single response can
+// yield -- protects pipeline.ts (and the human reviewer's queue) from a
+// degenerate response, without ever being expected to bind in normal use.
+export const MAX_SUGGESTIONS_PER_SOURCE = 8;
+
 export class InterpretationError extends Error {}
 
 export interface InterpretSourceInput {
@@ -54,7 +59,7 @@ const suggestionToolInputSchema = z.object({
 const PROPOSE_SUGGESTION_TOOL: Anthropic.Tool = {
   name: "propose_suggestion",
   description:
-    "Propose exactly one change to the company's objective/initiative/project/task hierarchy, based on the source content and the existing context you were given.",
+    "Propose one change to the company's objective/initiative/project/task hierarchy, based on the source content and the existing context you were given. Call this tool once per distinct topic the source contains -- most sources warrant exactly one call, but you may call it more than once for a source that genuinely spans multiple unrelated topics.",
   input_schema: {
     type: "object",
     properties: {
@@ -116,7 +121,9 @@ function buildContextSection(context: CompanyContext): string {
 
 const SYSTEM_PROMPT = `You are the interpretation engine for Exvade Pulse, an internal ops tool for a clinical-stage medical device company. Exvade Pulse ingests operational communications (emails, meeting transcripts) and turns them into proposed changes to a structured hierarchy: Objectives -> Initiatives -> Projects -> Tasks. Every change you propose is reviewed by a human before it takes effect -- you are drafting a suggestion, not making the change yourself.
 
-You will be given the company's current open objectives/initiatives/projects/tasks (each with its real id, title, and status) and one new raw source (an email or transcript excerpt). Decide the single most useful change to propose in response to that source, then call the propose_suggestion tool exactly once with your answer.
+You will be given the company's current open objectives/initiatives/projects/tasks (each with its real id, title, and status) and one new raw source (an email or transcript excerpt). Decide the most useful change(s) to propose in response to that source, then call the propose_suggestion tool with your answer.
+
+Most sources are about a single topic and warrant exactly one propose_suggestion call. Some sources, though -- a weekly company update, a broad meeting-minutes doc -- genuinely cover several unrelated workstreams (e.g. finance, engineering, regulatory, and grants all in one document). For a source like that, call propose_suggestion once per genuinely distinct topic/target, so each gets its own clear diff and reasoning instead of one call vaguely trying to cover everything. This is NOT license to fragment a single coherent update into many redundant calls -- one call per genuinely distinct topic or target, never one call per sentence or per minor detail within the same topic. When in doubt about whether two things are "the same topic," they usually are; only split when the topics are truly unrelated to each other.
 
 The hardest and most important part of this job: deciding whether the source is about something already being tracked, or is genuinely new.
 
@@ -163,39 +170,26 @@ function isKnownEntityId(
   return pool.some((entity) => entity.id === id);
 }
 
-export async function interpretSource(
-  source: InterpretSourceInput,
+// Validates and sanitizes a single tool_use block's input. Returns the clean
+// draft, or a reason string if this particular item should be dropped --
+// never throws, so one bad item in a multi-item response doesn't take down
+// the rest (see interpretSource).
+function validateSuggestionInput(
+  input: unknown,
   context: CompanyContext,
-  claudeClient: ClaudeClient = getClaudeClient(),
-): Promise<SuggestionDraft> {
-  const response = await claudeClient.createMessage({
-    model: INTERPRETATION_MODEL,
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    tool_choice: { type: "tool", name: PROPOSE_SUGGESTION_TOOL.name },
-    tools: [PROPOSE_SUGGESTION_TOOL],
-    messages: [{ role: "user", content: buildUserMessage(source, context) }],
-  });
-
-  const toolUse = response.content.find(
-    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
-  );
-  if (!toolUse) {
-    throw new InterpretationError("Claude did not return a structured suggestion (no tool_use block in response).");
-  }
-
-  const parsed = suggestionToolInputSchema.safeParse(toolUse.input);
+): { draft: SuggestionDraft } | { reason: string } {
+  const parsed = suggestionToolInputSchema.safeParse(input);
   if (!parsed.success) {
-    throw new InterpretationError(`Claude's suggestion failed schema validation: ${parsed.error.message}`);
+    return { reason: `failed schema validation: ${parsed.error.message}` };
   }
   const draft = parsed.data;
 
   // Defensive: never trust that targetId actually refers to a real row we
   // showed the model, even though it passed schema validation as a UUID.
   if (draft.targetId !== null && !isKnownEntityId(draft.targetType, draft.targetId, context)) {
-    throw new InterpretationError(
-      `Claude proposed targetId "${draft.targetId}" for targetType "${draft.targetType}", which was not among the ids provided in context.`,
-    );
+    return {
+      reason: `targetId "${draft.targetId}" for targetType "${draft.targetType}" was not among the ids provided in context`,
+    };
   }
 
   // Re-sanitize proposedDiff through the same whitelist apply.ts enforces, so
@@ -204,11 +198,67 @@ export async function interpretSource(
   const sanitizedDiff = pickAllowedFields(draft.targetType, draft.proposedDiff);
 
   return {
-    changeType: draft.changeType,
-    targetType: draft.targetType,
-    targetId: draft.targetId,
-    proposedDiff: sanitizedDiff,
-    reasoning: draft.reasoning,
-    confidence: draft.confidence,
+    draft: {
+      changeType: draft.changeType,
+      targetType: draft.targetType,
+      targetId: draft.targetId,
+      proposedDiff: sanitizedDiff,
+      reasoning: draft.reasoning,
+      confidence: draft.confidence,
+    },
   };
+}
+
+// Returns one to several SuggestionDrafts for a single source. Most sources
+// yield exactly one; a genuinely multi-topic source (see SYSTEM_PROMPT) may
+// yield several parallel tool_use blocks in the same response. tool_choice
+// "any" forces at least one propose_suggestion call while leaving Claude's
+// default parallel tool use enabled, so it can emit more than one when
+// warranted -- unlike the old forced-single-tool choice, which capped it at
+// exactly one no matter what the source contained.
+export async function interpretSource(
+  source: InterpretSourceInput,
+  context: CompanyContext,
+  claudeClient: ClaudeClient = getClaudeClient(),
+): Promise<SuggestionDraft[]> {
+  const response = await claudeClient.createMessage({
+    model: INTERPRETATION_MODEL,
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
+    tool_choice: { type: "any" },
+    tools: [PROPOSE_SUGGESTION_TOOL],
+    messages: [{ role: "user", content: buildUserMessage(source, context) }],
+  });
+
+  const toolUses = response.content.filter(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+  );
+  if (toolUses.length === 0) {
+    throw new InterpretationError("Claude did not return a structured suggestion (no tool_use block in response).");
+  }
+
+  const accepted = toolUses.slice(0, MAX_SUGGESTIONS_PER_SOURCE);
+  if (toolUses.length > MAX_SUGGESTIONS_PER_SOURCE) {
+    console.warn(
+      `Claude returned ${toolUses.length} propose_suggestion calls for one source, exceeding the cap of ${MAX_SUGGESTIONS_PER_SOURCE}; only the first ${MAX_SUGGESTIONS_PER_SOURCE} were kept.`,
+    );
+  }
+
+  const drafts: SuggestionDraft[] = [];
+  for (const toolUse of accepted) {
+    const result = validateSuggestionInput(toolUse.input, context);
+    if ("draft" in result) {
+      drafts.push(result.draft);
+    } else {
+      console.error(`Dropping one of ${accepted.length} propose_suggestion calls for a source: ${result.reason}`);
+    }
+  }
+
+  if (drafts.length === 0) {
+    throw new InterpretationError(
+      `Claude returned ${accepted.length} propose_suggestion call(s), but every one failed validation.`,
+    );
+  }
+
+  return drafts;
 }

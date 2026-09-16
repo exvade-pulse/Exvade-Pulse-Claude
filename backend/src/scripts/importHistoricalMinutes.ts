@@ -378,9 +378,10 @@ async function runRealImport(folderPath: string): Promise<void> {
       if (result.skippedAsNoise) {
         counts.noise++;
         console.log(`${label} -> classified as noise`);
-      } else if (result.suggestionId) {
-        counts.created++;
-        console.log(`${label} -> suggestion created (${result.suggestionId})`);
+      } else if (result.suggestionIds.length > 0) {
+        counts.created += result.suggestionIds.length;
+        const plural = result.suggestionIds.length === 1 ? "" : "s";
+        console.log(`${label} -> ${result.suggestionIds.length} suggestion${plural} created (${result.suggestionIds.join(", ")})`);
       } else {
         counts.interpretationFailed++;
         console.log(`${label} -> interpretation failed, no suggestion (source kept for review)`);

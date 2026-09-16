@@ -21,7 +21,10 @@ export interface RawIncomingSource {
 
 export interface PipelineResult {
   sourceId: string;
-  suggestionId: string | null;
+  // One source can now yield more than one suggestion (a genuinely
+  // multi-topic document) -- empty when interpretation failed or found
+  // nothing worth proposing, same as suggestionId === null used to mean.
+  suggestionIds: string[];
   skippedAsNoise: boolean;
 }
 
@@ -90,7 +93,7 @@ export async function runInterpretationPipeline(
       })
       .returning();
 
-    return { sourceId: source.id, suggestionId: null, skippedAsNoise: false };
+    return { sourceId: source.id, suggestionIds: [], skippedAsNoise: false };
   }
 
   const [source] = await db
@@ -106,37 +109,46 @@ export async function runInterpretationPipeline(
 
   const noiseCheck = await isNoiseSource({ subject: raw.subject, from: raw.from, body: redactedBody }, claudeClient);
   if (noiseCheck.isNoise) {
-    return { sourceId: source.id, suggestionId: null, skippedAsNoise: true };
+    return { sourceId: source.id, suggestionIds: [], skippedAsNoise: true };
   }
 
   const context = await loadCompanyContext(db, organizationId);
 
   try {
-    const draft = await interpretSource(
+    const drafts = await interpretSource(
       { subject: raw.subject, from: raw.from, body: redactedBody, receivedAt: raw.receivedAt },
       context,
       claudeClient,
     );
 
-    const [suggestion] = await db
-      .insert(suggestions)
-      .values({
-        organizationId,
-        sourceId: source.id,
-        targetType: draft.targetType,
-        targetId: draft.targetId,
-        changeType: draft.changeType,
-        proposedDiff: draft.proposedDiff,
-        reasoning: draft.reasoning,
-        confidence: draft.confidence,
-      })
-      .returning();
+    // One transaction for the whole batch of drafts from this source, so a
+    // multi-topic source's suggestions either all land or none do.
+    const inserted = await db.transaction(async (tx) => {
+      const rows = [];
+      for (const draft of drafts) {
+        const [suggestion] = await tx
+          .insert(suggestions)
+          .values({
+            organizationId,
+            sourceId: source.id,
+            targetType: draft.targetType,
+            targetId: draft.targetId,
+            changeType: draft.changeType,
+            proposedDiff: draft.proposedDiff,
+            reasoning: draft.reasoning,
+            confidence: draft.confidence,
+          })
+          .returning();
+        rows.push(suggestion);
+      }
+      return rows;
+    });
 
-    return { sourceId: source.id, suggestionId: suggestion.id, skippedAsNoise: false };
+    return { sourceId: source.id, suggestionIds: inserted.map((s) => s.id), skippedAsNoise: false };
   } catch (err) {
     if (err instanceof InterpretationError) {
       console.error(`Interpretation failed for source ${source.id}:`, err.message);
-      return { sourceId: source.id, suggestionId: null, skippedAsNoise: false };
+      return { sourceId: source.id, suggestionIds: [], skippedAsNoise: false };
     }
     throw err;
   }
