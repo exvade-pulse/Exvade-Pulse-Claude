@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { readdirSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { APIError } from "@anthropic-ai/sdk";
 import { parse as chronoParse } from "chrono-node";
 import mammoth from "mammoth";
@@ -424,7 +425,14 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Guard against running main() as a side effect of import -- the test file
+// imports this module's pure-logic exports directly, and without this check
+// every test run would silently trigger a real (non-dry-run) import against
+// DEFAULT_IMPORT_FOLDER, burning real Claude API credits and writing to
+// whichever database TEST_DATABASE_URL/DATABASE_URL currently resolves to.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
