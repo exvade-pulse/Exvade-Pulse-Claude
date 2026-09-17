@@ -7,6 +7,7 @@ import { emptyTaskCounts, type TaskCounts } from "../tasks/rollup.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
 import { blockingDecisionsForTasks } from "../tasks/blockingDecisions.js";
 import { taskSourceCounts } from "../tasks/sourceCounts.js";
+import { visibilityFilter } from "../access/visibility.js";
 
 // Shared by needs-attention's in-memory sort: critical/high/medium/low, an
 // objective-level-only field (see schema.ts's task table -- tasks have no
@@ -105,7 +106,11 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/api/dashboard/needs-attention", async (request, reply) => {
     const organizationId = request.user!.organizationId;
 
-    const rows = await taskParentChainQuery(db, organizationId, inArray(tasks.status, ["blocked", "needs_attention"]));
+    const rows = await taskParentChainQuery(
+      db,
+      organizationId,
+      and(inArray(tasks.status, ["blocked", "needs_attention"]), visibilityFilter(request.user!.role, tasks.visibility)),
+    );
 
     // Sort-only priority lookup: a batched query keyed by objective id rather
     // than pulling objectives.priority into the join above, so
@@ -169,7 +174,11 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/api/dashboard/recent-progress", async (request, reply) => {
     const organizationId = request.user!.organizationId;
 
-    const rows = await taskParentChainQuery(db, organizationId, inArray(tasks.status, ["completed", "resolved"]))
+    const rows = await taskParentChainQuery(
+      db,
+      organizationId,
+      and(inArray(tasks.status, ["completed", "resolved"]), visibilityFilter(request.user!.role, tasks.visibility)),
+    )
       .orderBy(desc(tasks.updatedAt))
       .limit(10);
 

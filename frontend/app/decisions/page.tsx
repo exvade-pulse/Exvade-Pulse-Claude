@@ -9,11 +9,14 @@ import {
   fetchCurrentUser,
   fetchOpenDecisions,
   resolveDecision,
+  setDecisionVisibility,
   type Decision,
   type SessionUser,
+  type Visibility,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
 import { SourceToggle } from "../components/SourceToggle";
+import { VisibilityControl } from "../components/VisibilityControl";
 
 const EMPTY_FORM = {
   title: "",
@@ -155,6 +158,11 @@ export default function DecisionsPage() {
     } finally {
       setSavingAssign(false);
     }
+  }
+
+  async function handleVisibilityChange(id: string, next: Visibility) {
+    await setDecisionVisibility(id, next);
+    setDecisions((prev) => prev.map((d) => (d.id === id ? { ...d, visibility: next } : d)));
   }
 
   async function submitResolve(id: string) {
@@ -302,12 +310,19 @@ export default function DecisionsPage() {
                 <p className="card-title">{d.title}</p>
                 <span className="muted">Decider: {d.decider}</span>
               </div>
-              {d.dueDate && (
-                <span className={overdue ? "due-overdue" : "muted"}>
-                  Due {formatDueDate(d.dueDate)}
-                  {overdue ? " (overdue)" : ""}
-                </span>
-              )}
+              <div className="card-badges">
+                <VisibilityControl
+                  visibility={d.visibility}
+                  isAdmin={user.role === "admin"}
+                  onChange={(next) => handleVisibilityChange(d.id, next)}
+                />
+                {d.dueDate && (
+                  <span className={overdue ? "due-overdue" : "muted"}>
+                    Due {formatDueDate(d.dueDate)}
+                    {overdue ? " (overdue)" : ""}
+                  </span>
+                )}
+              </div>
             </div>
 
             {d.stakeholders.length > 0 && (

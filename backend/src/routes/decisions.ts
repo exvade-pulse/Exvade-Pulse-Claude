@@ -1,9 +1,29 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, sql } from "drizzle-orm";
-import { requireAuth } from "../auth/middleware.js";
+import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { decisions, tasks } from "../db/schema.js";
+import { decisions, tasks, visibilityEnum, type UserRole, type Visibility } from "../db/schema.js";
 import { addDecisionInfo, assignDecision, createDecision, resolveDecision, DecisionError } from "../decisions/manage.js";
+import { canViewVisibility, visibilityFilter } from "../access/visibility.js";
+import { UUID_RE } from "./uuid.js";
+
+const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
+
+// A lightweight pre-check for the three action routes below (add-info/
+// assign/resolve): each of them delegates to decisions/manage.ts, whose
+// functions don't take the caller's role (they're also called from the
+// suggestion-approval path, which has no "caller" in that sense) -- so
+// visibility is enforced here, at the HTTP boundary, before manage.ts's own
+// org-scoped fetch even runs. Returns true only when the decision exists AND
+// the caller can see it; the caller should 404 either way it fails, so a
+// member probing a real but restricted id can't distinguish the two cases.
+async function isDecisionViewable(organizationId: string, decisionId: string, role: UserRole): Promise<boolean> {
+  const [row] = await db
+    .select({ visibility: decisions.visibility })
+    .from(decisions)
+    .where(and(eq(decisions.id, decisionId), eq(decisions.organizationId, organizationId)));
+  return row !== undefined && canViewVisibility(role, row.visibility);
+}
 
 export async function decisionRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
@@ -26,6 +46,7 @@ export async function decisionRoutes(app: FastifyInstance) {
         stakeholders: decisions.stakeholders,
         status: decisions.status,
         dueDate: decisions.dueDate,
+        visibility: decisions.visibility,
         resolution: decisions.resolution,
         decidedAt: decisions.decidedAt,
         relatedTaskId: decisions.relatedTaskId,
@@ -39,7 +60,13 @@ export async function decisionRoutes(app: FastifyInstance) {
       })
       .from(decisions)
       .leftJoin(tasks, eq(tasks.id, decisions.relatedTaskId))
-      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, status as never)))
+      .where(
+        and(
+          eq(decisions.organizationId, organizationId),
+          eq(decisions.status, status as never),
+          visibilityFilter(request.user!.role, decisions.visibility),
+        ),
+      )
       // Soonest due date first; decisions with no due date sort last, not first.
       .orderBy(sql`${decisions.dueDate} is null`, decisions.dueDate);
 
@@ -101,6 +128,10 @@ export async function decisionRoutes(app: FastifyInstance) {
         reply.code(400).send({ error: "note is required" });
         return;
       }
+      if (!(await isDecisionViewable(request.user!.organizationId, request.params.id, request.user!.role))) {
+        reply.code(404).send({ error: "Decision not found" });
+        return;
+      }
 
       try {
         const decision = await addDecisionInfo(db, {
@@ -127,6 +158,10 @@ export async function decisionRoutes(app: FastifyInstance) {
       const decider = request.body?.decider?.trim();
       if (!decider) {
         reply.code(400).send({ error: "decider is required" });
+        return;
+      }
+      if (!(await isDecisionViewable(request.user!.organizationId, request.params.id, request.user!.role))) {
+        reply.code(404).send({ error: "Decision not found" });
         return;
       }
 
@@ -156,6 +191,10 @@ export async function decisionRoutes(app: FastifyInstance) {
         reply.code(400).send({ error: "resolution is required" });
         return;
       }
+      if (!(await isDecisionViewable(request.user!.organizationId, request.params.id, request.user!.role))) {
+        reply.code(404).send({ error: "Decision not found" });
+        return;
+      }
 
       try {
         const { decision, unblockedTask } = await resolveDecision(db, {
@@ -173,6 +212,39 @@ export async function decisionRoutes(app: FastifyInstance) {
         }
         throw err;
       }
+    },
+  );
+
+  // Admin-only, same reasoning as tasks.visibility's PATCH route in
+  // companyMap.ts: a deliberate human call, never something an AI suggestion
+  // can set (ALLOWED_FIELDS.decision omits it too).
+  app.patch<{ Params: { id: string }; Body: { visibility?: string } }>(
+    "/api/decisions/:id/visibility",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const organizationId = request.user!.organizationId;
+      const { id } = request.params;
+      if (!UUID_RE.test(id)) {
+        reply.code(404).send({ error: "Decision not found" });
+        return;
+      }
+      const visibility = request.body?.visibility;
+      if (!visibility || !VALID_VISIBILITIES.has(visibility)) {
+        reply.code(400).send({ error: "visibility must be one of: team, leadership, restricted" });
+        return;
+      }
+
+      const [updated] = await db
+        .update(decisions)
+        .set({ visibility: visibility as Visibility, updatedAt: new Date() })
+        .where(and(eq(decisions.id, id), eq(decisions.organizationId, organizationId)))
+        .returning({ id: decisions.id, visibility: decisions.visibility });
+
+      if (!updated) {
+        reply.code(404).send({ error: "Decision not found" });
+        return;
+      }
+      reply.send({ decision: updated });
     },
   );
 }

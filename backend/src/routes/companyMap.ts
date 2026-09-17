@@ -1,12 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { and, count, desc, eq } from "drizzle-orm";
-import { requireAuth } from "../auth/middleware.js";
+import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { decisions, initiatives, objectives, projects, suggestions, tasks, visibilityEnum, type Visibility } from "../db/schema.js";
 import { emptyTaskCounts } from "../tasks/rollup.js";
 import { blockingDecisionsForTasks } from "../tasks/blockingDecisions.js";
 import { taskSourceCounts } from "../tasks/sourceCounts.js";
+import { canViewVisibility, visibilityFilter } from "../access/visibility.js";
 import { UUID_RE } from "./uuid.js";
+
+const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
 
 export async function companyMapRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
@@ -65,7 +68,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
           owner: tasks.owner,
         })
         .from(tasks)
-        .where(eq(tasks.organizationId, organizationId))
+        .where(and(eq(tasks.organizationId, organizationId), visibilityFilter(request.user!.role, tasks.visibility)))
         .orderBy(tasks.title),
     ]);
 
@@ -227,7 +230,13 @@ export async function companyMapRoutes(app: FastifyInstance) {
         owner: tasks.owner,
       })
       .from(tasks)
-      .where(and(eq(tasks.projectId, id), eq(tasks.organizationId, organizationId)))
+      .where(
+        and(
+          eq(tasks.projectId, id),
+          eq(tasks.organizationId, organizationId),
+          visibilityFilter(request.user!.role, tasks.visibility),
+        ),
+      )
       .orderBy(tasks.title);
 
     // Same rollup shape as the initiative endpoint above, scoped to this
@@ -258,7 +267,10 @@ export async function companyMapRoutes(app: FastifyInstance) {
       .from(tasks)
       .where(and(eq(tasks.id, id), eq(tasks.organizationId, organizationId)));
 
-    if (!task) {
+    if (!task || !canViewVisibility(request.user!.role, task.visibility)) {
+      // Same 404 either way -- a member requesting a restricted task's real
+      // id must not be able to distinguish "doesn't exist" from "exists but
+      // you can't see it", the same principle org-isolation already applies.
       reply.code(404).send({ error: "Task not found" });
       return;
     }
@@ -313,4 +325,38 @@ export async function companyMapRoutes(app: FastifyInstance) {
       blockingDecision: blockingDecision ?? null,
     });
   });
+
+  // Admin-only: raising or lowering who can see a task is a deliberate human
+  // call, and specifically not something the AI interpretation pipeline can
+  // ever do (visibility is deliberately absent from suggestions/apply.ts's
+  // ALLOWED_FIELDS) -- this is the only way it changes.
+  app.patch<{ Params: { id: string }; Body: { visibility?: string } }>(
+    "/api/tasks/:id/visibility",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const organizationId = request.user!.organizationId;
+      const { id } = request.params;
+      if (!UUID_RE.test(id)) {
+        reply.code(404).send({ error: "Task not found" });
+        return;
+      }
+      const visibility = request.body?.visibility;
+      if (!visibility || !VALID_VISIBILITIES.has(visibility)) {
+        reply.code(400).send({ error: "visibility must be one of: team, leadership, restricted" });
+        return;
+      }
+
+      const [updated] = await db
+        .update(tasks)
+        .set({ visibility: visibility as Visibility, updatedAt: new Date() })
+        .where(and(eq(tasks.id, id), eq(tasks.organizationId, organizationId)))
+        .returning({ id: tasks.id, visibility: tasks.visibility });
+
+      if (!updated) {
+        reply.code(404).send({ error: "Task not found" });
+        return;
+      }
+      reply.send({ task: updated });
+    },
+  );
 }

@@ -95,6 +95,19 @@ export const entityNodeTypeEnum = pgEnum("entity_node_type", [
 ]);
 export type EntityNodeType = (typeof entityNodeTypeEnum.enumValues)[number];
 
+// Access boundary for a task/decision. "team" (the default) is visible to
+// every authenticated member of the org; "leadership" and "restricted" are
+// both visible to admins only -- this app has exactly two roles today
+// (member/admin, see userRoleEnum), so a third distinct enforcement tier for
+// "restricted" would have to mean something invented (e.g. a per-item
+// allowlist of specific viewers) that doesn't exist anywhere else in this
+// schema. Kept as three named levels anyway, matching the vocabulary a real
+// reviewer would use, rather than collapsing to a boolean -- if a genuine
+// third access tier is ever needed, "restricted" is already the natural
+// place to layer stricter enforcement in without a rename.
+export const visibilityEnum = pgEnum("visibility", ["team", "leadership", "restricted"]);
+export type Visibility = (typeof visibilityEnum.enumValues)[number];
+
 export const relationTypeEnum = pgEnum("relation_type", [
   "depends_on",
   "blocks",
@@ -218,6 +231,10 @@ export const tasks = pgTable("tasks", {
   latestUpdate: text("latest_update"),
   nextAction: text("next_action"),
   owner: text("owner"),
+  // Deliberately not in suggestions/apply.ts's ALLOWED_FIELDS -- AI
+  // processing must never be the thing that widens (or narrows) who can see
+  // a task, only a human admin can, via a dedicated endpoint.
+  visibility: visibilityEnum("visibility").notNull().default("team"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -315,6 +332,9 @@ export const decisions = pgTable("decisions", {
   // Optional citation back to the source (email/transcript) this decision came
   // from, mirroring suggestions.sourceId.
   sourceId: uuid("source_id").references(() => sources.id),
+  // Same visibilityEnum as tasks.visibility -- see its comment. Not in
+  // ALLOWED_FIELDS.decision either, for the same reason.
+  visibility: visibilityEnum("visibility").notNull().default("team"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

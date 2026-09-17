@@ -996,8 +996,46 @@ Built:
   of two separate from/to entity pickers. **Not yet wired into `/decisions`**
   (its cards, not per-id detail pages, would need their own integration) --
   the API fully supports `decision` as either side of a relationship today,
-  only the dedicated UI section there is deferred. Per-task/decision
-  visibility levels (Team/Leadership/Restricted) remain unbuilt.
+  only the dedicated UI section there is deferred.
+- **Per-task/decision visibility levels (Team/Leadership/Restricted).** A
+  `visibility` enum column (default `team`) on `tasks` and `decisions`
+  ([backend/src/db/schema.ts](backend/src/db/schema.ts)), deliberately
+  excluded from `ALLOWED_FIELDS`
+  ([backend/src/suggestions/apply.ts](backend/src/suggestions/apply.ts)) so
+  no AI suggestion can ever change it -- visibility is a human-only, admin-only
+  call. This app has exactly two roles (`member`/`admin`), so the mapping is
+  honest rather than invented: `team` is visible to anyone, and
+  **both** `leadership` and `restricted` gate on `admin`
+  ([backend/src/access/visibility.ts](backend/src/access/visibility.ts)'s
+  `canViewVisibility`) -- there's no real third role to give `leadership` its
+  own distinct audience, so rather than fabricate one, the two upper levels
+  currently collapse to the same enforcement and exist as separate values
+  for future role granularity and for labeling intent in the UI today.
+  `visibilityFilter` splices an `eq(column, "team")` predicate (or no filter,
+  for an admin) into every list/detail query that touches tasks or
+  decisions -- dashboard (`needs-attention`/`recent-progress`), the Company
+  Map tree and project task list, `/api/tasks/:id`, `GET /api/decisions`,
+  search, the weekly report, and the suggestion review queue (a suggestion
+  targeting a restricted task/decision is hidden from a member's queue, and
+  the approve/edit/reject routes 404 rather than 403 if a member tries one
+  directly, so a probing request can't distinguish "restricted" from
+  "doesn't exist"). Two admin-only routes,
+  `PATCH /api/tasks/:id/visibility` and `PATCH /api/decisions/:id/visibility`
+  ([backend/src/routes/companyMap.ts](backend/src/routes/companyMap.ts),
+  [backend/src/routes/decisions.ts](backend/src/routes/decisions.ts)), are
+  the only way to change it. The frontend adds a shared
+  [VisibilityControl](frontend/app/components/VisibilityControl.tsx) --
+  an admin gets a live `<select>` on the task detail page and each decision
+  card; a member sees nothing for `team` items (the common case) and a
+  plain read-only badge for the rare `leadership`/`restricted` item an admin
+  chose to still surface to them by other means. Two known, deliberate gaps
+  rather than bugs: the aggregate task-status counts (dashboard's
+  status-summary strip, and the Objective/Initiative/Project `taskCounts`
+  rollups) still count restricted tasks toward their totals -- unfiltered
+  counts, not unfiltered content; and a task's surfaced `blockingDecision`
+  (title + link, shown when a task is blocked on an open decision) isn't
+  itself visibility-checked, so a restricted decision's title could appear
+  on an otherwise-visible task's page.
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via
   `npm run interpret:real -w backend`, and inbound email now has a real
   forward-to-address push path via the Postmark-shaped webhook above, but

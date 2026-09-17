@@ -5,6 +5,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, initiatives, objectives, projects, tasks } from "../db/schema.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
+import { visibilityFilter } from "../access/visibility.js";
 
 // Capped per entity type rather than paginated -- this backs a quick
 // jump-to-it search, not a browsing view. If any one type routinely fills
@@ -87,7 +88,10 @@ export async function searchRoutes(app: FastifyInstance) {
       taskParentChainQuery(
         db,
         organizationId,
-        anyIlike(pattern, tasks.title, tasks.description, tasks.latestUpdate, tasks.nextAction),
+        and(
+          anyIlike(pattern, tasks.title, tasks.description, tasks.latestUpdate, tasks.nextAction),
+          visibilityFilter(request.user!.role, tasks.visibility),
+        ),
       )
         .orderBy(tasks.title)
         .limit(RESULTS_PER_TYPE),
@@ -104,6 +108,7 @@ export async function searchRoutes(app: FastifyInstance) {
               decisions.relevantContext,
               decisions.suggestedNextStep,
             ),
+            visibilityFilter(request.user!.role, decisions.visibility),
           ),
         )
         .orderBy(decisions.title)

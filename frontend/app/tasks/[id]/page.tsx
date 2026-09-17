@@ -3,10 +3,19 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { API_URL, fetchCurrentUser, fetchTask, type SessionUser, type TaskDetailResponse } from "../../../lib/api";
+import {
+  API_URL,
+  fetchCurrentUser,
+  fetchTask,
+  setTaskVisibility,
+  type SessionUser,
+  type TaskDetailResponse,
+  type Visibility,
+} from "../../../lib/api";
 import { formatDiff } from "../../../lib/formatDiff";
 import { Nav } from "../../components/Nav";
 import { RelationshipsPanel } from "../../components/RelationshipsPanel";
+import { VisibilityControl } from "../../components/VisibilityControl";
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -30,6 +39,11 @@ export default function TaskDetailPage() {
         .catch((err) => setLoadError(err.message));
     }
   }, [user, id]);
+
+  async function handleVisibilityChange(next: Visibility) {
+    await setTaskVisibility(id, next);
+    setData((prev) => (prev === "loading" || prev === "not_found" ? prev : { ...prev, task: { ...prev.task, visibility: next } }));
+  }
 
   if (user === "loading") {
     return (
@@ -111,6 +125,11 @@ export default function TaskDetailPage() {
                 {data.task.owner && <span className="owner-line">Owner: {data.task.owner}</span>}
               </div>
               <div className="card-badges">
+                <VisibilityControl
+                  visibility={data.task.visibility}
+                  isAdmin={user.role === "admin"}
+                  onChange={handleVisibilityChange}
+                />
                 <span className="badge">{data.task.status}</span>
               </div>
             </div>

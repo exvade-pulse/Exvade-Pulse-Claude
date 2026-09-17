@@ -208,6 +208,11 @@ export async function editSuggestion(id: string, proposedDiff: Record<string, un
   return body.suggestion;
 }
 
+// "leadership" and "restricted" both currently gate on the admin role --
+// this app has exactly two roles, so there's no distinct enforcement tier
+// between them yet (see backend/src/access/visibility.ts).
+export type Visibility = "team" | "leadership" | "restricted";
+
 export interface Decision {
   id: string;
   title: string;
@@ -226,8 +231,22 @@ export interface Decision {
   // relevant option to offer without a second fetch per decision.
   relatedTaskStatus: TaskStatus | null;
   sourceId: string | null;
+  visibility: Visibility;
   createdAt: string;
   updatedAt: string;
+}
+
+export async function setDecisionVisibility(id: string, visibility: Visibility): Promise<void> {
+  const res = await fetch(`${API_URL}/api/decisions/${id}/visibility`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to change visibility");
+  }
 }
 
 // No status query param: the backend defaults to "open" -- decisions still
@@ -442,8 +461,22 @@ export interface TaskDetail {
   nextAction: string | null;
   owner: string | null;
   projectId: string;
+  visibility: Visibility;
   createdAt: string;
   updatedAt: string;
+}
+
+export async function setTaskVisibility(id: string, visibility: Visibility): Promise<void> {
+  const res = await fetch(`${API_URL}/api/tasks/${id}/visibility`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to change visibility");
+  }
 }
 
 export interface ApprovedTaskSuggestion {

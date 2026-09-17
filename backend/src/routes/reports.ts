@@ -4,6 +4,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, sources, suggestions, tasks } from "../db/schema.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
+import { visibilityFilter } from "../access/visibility.js";
 
 const WEEK_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -52,10 +53,20 @@ export async function reportRoutes(app: FastifyInstance) {
     const decisionsNeeded = await db
       .select({ id: decisions.id, title: decisions.title, decider: decisions.decider, dueDate: decisions.dueDate })
       .from(decisions)
-      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open")))
+      .where(
+        and(
+          eq(decisions.organizationId, organizationId),
+          eq(decisions.status, "open"),
+          visibilityFilter(request.user!.role, decisions.visibility),
+        ),
+      )
       .orderBy(sql`${decisions.dueDate} is null`, decisions.dueDate);
 
-    const blockerRows = await taskParentChainQuery(db, organizationId, eq(tasks.status, "blocked"));
+    const blockerRows = await taskParentChainQuery(
+      db,
+      organizationId,
+      and(eq(tasks.status, "blocked"), visibilityFilter(request.user!.role, tasks.visibility)),
+    );
     const blockers = blockerRows
       .map((row) => ({
         id: row.id,
@@ -73,7 +84,11 @@ export async function reportRoutes(app: FastifyInstance) {
     const updatedRows = await taskParentChainQuery(
       db,
       organizationId,
-      and(gte(tasks.updatedAt, weekStart), lt(tasks.updatedAt, weekEndExclusive)),
+      and(
+        gte(tasks.updatedAt, weekStart),
+        lt(tasks.updatedAt, weekEndExclusive),
+        visibilityFilter(request.user!.role, tasks.visibility),
+      ),
     );
 
     const updatedTaskIds = updatedRows.map((row) => row.id);

@@ -220,6 +220,17 @@ body {
   color: #a33;
 }
 
+.badge-restricted {
+  background: #fdecea;
+  color: #a33;
+}
+
+.visibility-select {
+  font-size: 12px;
+  padding: 3px 6px;
+  width: auto;
+}
+
 .badge-priority-high {
   background: #fff4e0;
   color: #8a5a00;
