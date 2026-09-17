@@ -36,6 +36,7 @@ export const taskStatusEnum = pgEnum("task_status", [
 ]);
 
 export const sourceTypeEnum = pgEnum("source_type", ["gmail", "circleback", "document", "manual"]);
+export type SourceType = (typeof sourceTypeEnum.enumValues)[number];
 
 export const targetTypeEnum = pgEnum("target_type", [
   "objective",

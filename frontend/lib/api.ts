@@ -521,6 +521,7 @@ export interface IntegrationStatus {
   configured: boolean;
   createdAt: string | null;
   lastReceivedAt: string | null;
+  totalSuggestions: number;
 }
 
 export interface GeneratedIntegrationToken {
@@ -540,6 +541,22 @@ export async function fetchIntegrations(): Promise<IntegrationStatus[] | "forbid
   }
   const body = (await res.json()) as { integrations: IntegrationStatus[] };
   return body.integrations;
+}
+
+export interface IntegrationActivityItem {
+  id: string;
+  externalId: string;
+  receivedAt: string;
+  suggestionCount: number;
+}
+
+export async function fetchIntegrationActivity(type: IntegrationType): Promise<IntegrationActivityItem[]> {
+  const res = await fetch(`${API_URL}/api/integrations/${type}/activity`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load ${type} activity (${res.status})`);
+  }
+  const body = (await res.json()) as { activity: IntegrationActivityItem[] };
+  return body.activity;
 }
 
 export async function generateIntegrationToken(type: IntegrationType): Promise<GeneratedIntegrationToken> {

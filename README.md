@@ -544,6 +544,25 @@ Built:
     changes needed. Given the lack of real payload docs, the first live
     delivery is the point to double-check the field-name guessing above
     actually matches.
+  - **A per-integration activity log**, closing the gap where `/integrations`
+    could show *that* an integration last received something but not *what*.
+    `GET /api/integrations` now also returns `totalSuggestions` per type
+    (all-time count of suggestions whose source is that integration's own
+    `sources.type`), and a new `GET /api/integrations/:type/activity`
+    returns its most recent 20 sources, newest first, each tagged with its
+    own suggestion count. Both live in
+    [backend/src/integrations/manage.ts](backend/src/integrations/manage.ts):
+    `SOURCE_TYPE_BY_INTEGRATION` is the explicit `IntegrationType ->
+    sources.type` mapping (`email` -> `gmail`, matching webhookIngest.ts's
+    existing reuse of that value) that both new queries key off, and
+    `listIntegrationActivity`'s per-source suggestion count is a batch
+    lookup (one query for up to 20 sources), not N+1. A suggestion count of
+    0 on an item is reported as-is rather than guessing whether that item
+    was noise-filtered or failed interpretation -- that verdict isn't
+    persisted anywhere after the fact, only the count itself is a fact. The
+    frontend ([frontend/app/integrations/page.tsx](frontend/app/integrations/page.tsx))
+    adds a "Suggestions" column and a per-row "View activity" toggle that
+    lazy-loads the log for just that integration type.
 - A "What changed" activity feed, making the `audit_log` table (written by
   nearly every mutating action — suggestion review, decision review, user
   management, integration token management) actually viewable instead of

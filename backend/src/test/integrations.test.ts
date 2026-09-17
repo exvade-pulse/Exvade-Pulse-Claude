@@ -193,6 +193,144 @@ describe("POST /api/integrations/:type/token", () => {
   });
 });
 
+describe("GET /api/integrations totalSuggestions and GET /api/integrations/:type/activity", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  async function insertSourceWithSuggestions(
+    organizationId: string,
+    type: "circleback" | "gmail" | "document",
+    externalId: string,
+    receivedAt: Date,
+    suggestionCount: number,
+  ) {
+    const [source] = await db
+      .insert(sources)
+      .values({ organizationId, type, externalId, receivedAt, rawBody: "body" })
+      .returning();
+    for (let i = 0; i < suggestionCount; i++) {
+      await db.insert(suggestions).values({
+        organizationId,
+        sourceId: source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { title: `Task ${i}` },
+        reasoning: "test",
+        confidence: 0.8,
+      });
+    }
+    return source;
+  }
+
+  it("totalSuggestions on GET /api/integrations counts only suggestions from that integration's own source type", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "int-total-suggestions.test" });
+
+    await insertSourceWithSuggestions(fixture.org.id, "circleback", "cb-1", new Date(), 2);
+    await insertSourceWithSuggestions(fixture.org.id, "gmail", "em-1", new Date(), 1);
+    // A document-import source's suggestions must not be attributed to either webhook integration.
+    await insertSourceWithSuggestions(fixture.org.id, "document", "doc-1", new Date(), 5);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/integrations",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { integrations: Array<{ type: string; totalSuggestions: number }> };
+    expect(body.integrations.find((i) => i.type === "circleback")?.totalSuggestions).toBe(2);
+    expect(body.integrations.find((i) => i.type === "email")?.totalSuggestions).toBe(1);
+  });
+
+  it("returns 401 unauthenticated and 403 for a non-admin member", async () => {
+    const app = await buildApp();
+    const noSession = await app.inject({ method: "GET", url: "/api/integrations/circleback/activity" });
+    expect(noSession.statusCode).toBe(401);
+
+    const memberFixture = await createFixtureOrg(db, { domain: "int-activity-member.test", role: "member" });
+    const asMember = await app.inject({
+      method: "GET",
+      url: "/api/integrations/circleback/activity",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(memberFixture) },
+    });
+    expect(asMember.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it("400s for an unknown integration type", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "int-activity-bad-type.test" });
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/integrations/not-a-real-type/activity",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("returns only this integration's own sources, newest first, each with its suggestion count -- org-isolated", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "int-activity-happy.test" });
+    const otherOrg = await createFixtureOrg(db, { domain: "int-activity-other-org.test" });
+
+    const older = await insertSourceWithSuggestions(
+      fixture.org.id,
+      "circleback",
+      "cb-older",
+      new Date("2026-01-01"),
+      1,
+    );
+    const newer = await insertSourceWithSuggestions(
+      fixture.org.id,
+      "circleback",
+      "cb-newer",
+      new Date("2026-02-01"),
+      3,
+    );
+    // Wrong source type for this integration -- must not appear in circleback's activity.
+    await insertSourceWithSuggestions(fixture.org.id, "gmail", "em-unrelated", new Date("2026-03-01"), 1);
+    // Another org's circleback source must never leak in.
+    await insertSourceWithSuggestions(otherOrg.org.id, "circleback", "cb-other-org", new Date("2026-03-01"), 1);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/integrations/circleback/activity",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      activity: Array<{ id: string; externalId: string; suggestionCount: number }>;
+    };
+    expect(body.activity.map((a) => a.id)).toEqual([newer.id, older.id]);
+    expect(body.activity.find((a) => a.id === newer.id)?.suggestionCount).toBe(3);
+    expect(body.activity.find((a) => a.id === older.id)?.suggestionCount).toBe(1);
+  });
+
+  it("a source with zero suggestions still appears, with suggestionCount 0", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "int-activity-zero.test" });
+    const noiseSource = await insertSourceWithSuggestions(fixture.org.id, "circleback", "cb-noise", new Date(), 0);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/integrations/circleback/activity",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as { activity: Array<{ id: string; suggestionCount: number }> };
+    expect(body.activity.find((a) => a.id === noiseSource.id)?.suggestionCount).toBe(0);
+  });
+});
+
 describe("POST /api/public/webhooks/circleback", () => {
   beforeEach(async () => {
     await truncateAll(db);

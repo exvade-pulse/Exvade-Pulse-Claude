@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import {
   API_URL,
   fetchCurrentUser,
+  fetchIntegrationActivity,
   fetchIntegrations,
   generateIntegrationToken,
   type GeneratedIntegrationToken,
+  type IntegrationActivityItem,
   type IntegrationStatus,
   type IntegrationType,
   type SessionUser,
@@ -47,6 +49,10 @@ export default function IntegrationsPage() {
   const [busyType, setBusyType] = useState<string | null>(null);
   const [justGenerated, setJustGenerated] = useState<GeneratedIntegrationToken | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const [openActivityType, setOpenActivityType] = useState<string | null>(null);
+  const [activity, setActivity] = useState<IntegrationActivityItem[] | "loading">("loading");
+  const [activityError, setActivityError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -89,6 +95,19 @@ export default function IntegrationsPage() {
     } finally {
       setBusyType(null);
     }
+  }
+
+  function toggleActivity(type: string) {
+    if (openActivityType === type) {
+      setOpenActivityType(null);
+      return;
+    }
+    setOpenActivityType(type);
+    setActivity("loading");
+    setActivityError(null);
+    fetchIntegrationActivity(type as IntegrationType)
+      .then(setActivity)
+      .catch((err) => setActivityError(err.message));
   }
 
   async function handleCopy() {
@@ -178,12 +197,15 @@ export default function IntegrationsPage() {
                 <th>Source</th>
                 <th>Status</th>
                 <th>Last received</th>
+                <th>Suggestions</th>
+                <th></th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => {
                 const busy = busyType === row.type;
+                const activityOpen = openActivityType === row.type;
                 return (
                   <tr key={row.type}>
                     <td>{LABELS[row.type] ?? row.type}</td>
@@ -195,6 +217,12 @@ export default function IntegrationsPage() {
                       )}
                     </td>
                     <td>{formatDateTime(row.lastReceivedAt)}</td>
+                    <td>{row.totalSuggestions}</td>
+                    <td>
+                      <button className="decision-btn" onClick={() => toggleActivity(row.type)}>
+                        {activityOpen ? "Hide activity" : "View activity"}
+                      </button>
+                    </td>
                     <td>
                       <button
                         className="decision-btn save"
@@ -210,6 +238,32 @@ export default function IntegrationsPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {openActivityType && (
+        <>
+          <h2 className="section-title">{LABELS[openActivityType] ?? openActivityType} activity</h2>
+          {activityError && <div className="error-banner">{activityError}</div>}
+          {activity === "loading" && <p className="muted">Loading&hellip;</p>}
+          {activity !== "loading" && activity.length === 0 && !activityError && (
+            <p className="empty-state">No activity yet.</p>
+          )}
+          {activity !== "loading" && activity.length > 0 && (
+            <div className="card task-list">
+              {activity.map((item) => (
+                <div className="task-row" key={item.id}>
+                  <div className="task-row-top">
+                    <span className="task-row-title">{item.externalId}</span>
+                    <span className="chip" title="Suggestions generated from this item">
+                      {item.suggestionCount} suggestion{item.suggestionCount === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <span className="muted task-row-time">Received {formatDateTime(item.receivedAt)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </main>
   );
