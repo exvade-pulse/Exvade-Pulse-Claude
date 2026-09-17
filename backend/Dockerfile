@@ -26,4 +26,8 @@ COPY --from=build /app/backend/dist backend/dist
 
 WORKDIR /app/backend
 EXPOSE 3001
-CMD ["node", "dist/index.js"]
+# Migrations run on every container start, not just via a host-specific
+# pre-deploy hook (Fly's release_command, Render's paid-only Pre-Deploy
+# Command) -- this way the image works the same everywhere. Safe to repeat:
+# Drizzle's migrator tracks what's already applied and skips it.
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]
