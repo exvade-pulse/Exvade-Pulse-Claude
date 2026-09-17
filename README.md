@@ -13,7 +13,7 @@ This repo currently contains a **vertical slice**, not the full app — see
 
 - **Backend:** Fastify + TypeScript, Drizzle ORM, Postgres
 - **Frontend:** Next.js (App Router)
-- **Auth:** Google OAuth, restricted to one Workspace domain
+- **Auth:** Google OAuth, invite-only past a one-time home-domain bootstrap
 - **CI:** GitHub Actions (typecheck, tests, build) — see [.github/workflows/ci.yml](.github/workflows/ci.yml)
 
 ## Project layout
