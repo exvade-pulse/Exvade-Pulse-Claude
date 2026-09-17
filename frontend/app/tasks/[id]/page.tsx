@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { API_URL, fetchCurrentUser, fetchTask, type SessionUser, type TaskDetailResponse } from "../../../lib/api";
 import { formatDiff } from "../../../lib/formatDiff";
 import { Nav } from "../../components/Nav";
+import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -153,6 +154,8 @@ export default function TaskDetailPage() {
               ))}
             </>
           )}
+
+          <RelationshipsPanel entityType="task" entityId={data.task.id} />
         </>
       )}
     </main>

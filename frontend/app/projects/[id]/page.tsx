@@ -11,6 +11,7 @@ import {
   type SessionUser,
 } from "../../../lib/api";
 import { Nav } from "../../components/Nav";
+import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 import { TaskStatusChips } from "../../components/TaskStatusChips";
 
 const SNIPPET_LENGTH = 100;
@@ -136,6 +137,8 @@ export default function ProjectDetailPage() {
               </article>
             </Link>
           ))}
+
+          <RelationshipsPanel entityType="project" entityId={data.project.id} />
         </>
       )}
     </main>

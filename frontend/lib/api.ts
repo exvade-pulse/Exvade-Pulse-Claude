@@ -832,6 +832,116 @@ export async function fetchSearch(q: string): Promise<SearchResponse> {
   return res.json();
 }
 
+export type EntityNodeType = "objective" | "initiative" | "project" | "task" | "decision" | "company_entity";
+
+export const RELATION_TYPES = [
+  "depends_on",
+  "blocks",
+  "informs",
+  "affects",
+  "part_of",
+  "funded_by",
+  "performed_by",
+  "awaiting_response_from",
+  "coupled_with",
+  "constrains",
+] as const;
+export type RelationType = (typeof RELATION_TYPES)[number];
+
+export interface CompanyEntity {
+  id: string;
+  name: string;
+  kind: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchCompanyEntities(): Promise<CompanyEntity[]> {
+  const res = await fetch(`${API_URL}/api/company-entities`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load company entities (${res.status})`);
+  }
+  const body = (await res.json()) as { entities: CompanyEntity[] };
+  return body.entities;
+}
+
+export interface CreateCompanyEntityInput {
+  name: string;
+  kind?: string | null;
+  notes?: string | null;
+}
+
+export async function createCompanyEntity(input: CreateCompanyEntityInput): Promise<CompanyEntity> {
+  const res = await fetch(`${API_URL}/api/company-entities`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to create company entity");
+  }
+  const body = (await res.json()) as { entity: CompanyEntity };
+  return body.entity;
+}
+
+export interface EntityRelationship {
+  id: string;
+  relationType: RelationType;
+  direction: "outgoing" | "incoming";
+  otherType: EntityNodeType;
+  otherId: string;
+  otherName: string;
+  note: string | null;
+  createdAt: string;
+}
+
+export async function fetchRelationships(entityType: EntityNodeType, entityId: string): Promise<EntityRelationship[]> {
+  const res = await fetch(`${API_URL}/api/relationships?entityType=${entityType}&entityId=${entityId}`, {
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to load relationships (${res.status})`);
+  }
+  const body = (await res.json()) as { relationships: EntityRelationship[] };
+  return body.relationships;
+}
+
+export interface CreateRelationshipInput {
+  fromType: EntityNodeType;
+  fromId: string;
+  toType: EntityNodeType;
+  toId: string;
+  relationType: RelationType;
+  note?: string | null;
+}
+
+export async function createRelationship(input: CreateRelationshipInput): Promise<void> {
+  const res = await fetch(`${API_URL}/api/relationships`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to create relationship");
+  }
+}
+
+export async function deleteRelationship(id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/relationships/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to delete relationship");
+  }
+}
+
 export async function revokeUser(email: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/users/${encodeURIComponent(email)}`, {
     method: "DELETE",

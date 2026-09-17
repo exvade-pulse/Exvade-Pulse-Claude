@@ -79,6 +79,36 @@ export type UserRole = (typeof userRoleEnum.enumValues)[number];
 export const integrationTypeEnum = pgEnum("integration_type", ["circleback", "email"]);
 export type IntegrationType = (typeof integrationTypeEnum.enumValues)[number];
 
+// Every kind of node a relationship can point at -- the four hierarchy
+// levels, decisions, and company_entity (an external org/person tracked only
+// for its relationships, see companyEntities below). Deliberately the same
+// closed set on both ends of a relationship rather than a free-text type, so
+// a relationship can always be resolved back to a real row without guessing
+// which table to query.
+export const entityNodeTypeEnum = pgEnum("entity_node_type", [
+  "objective",
+  "initiative",
+  "project",
+  "task",
+  "decision",
+  "company_entity",
+]);
+export type EntityNodeType = (typeof entityNodeTypeEnum.enumValues)[number];
+
+export const relationTypeEnum = pgEnum("relation_type", [
+  "depends_on",
+  "blocks",
+  "informs",
+  "affects",
+  "part_of",
+  "funded_by",
+  "performed_by",
+  "awaiting_response_from",
+  "coupled_with",
+  "constrains",
+]);
+export type RelationType = (typeof relationTypeEnum.enumValues)[number];
+
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
@@ -301,6 +331,52 @@ export const auditLog = pgTable("audit_log", {
   entityId: uuid("entity_id"),
   details: jsonb("details"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// External orgs/people worth tracking for their relationships to real work
+// (Duke, FDA, NIH, a vendor, a named collaborator) -- not part of the
+// Objective/Initiative/Project/Task hierarchy itself, and not a company
+// "user" (they have no login). `kind` is deliberately free text, not an
+// enum: a real-world entity often doesn't sort cleanly into one bucket (Duke
+// is a clinical trial site, a university, and informally a "collaborator"
+// all at once), so forcing a fixed category would misrepresent more entities
+// than it would usefully classify.
+export const companyEntities = pgTable("company_entities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  kind: text("kind"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// A typed, directed edge between any two nodes in the Company Map --
+// Objective/Initiative/Project/Task/Decision/CompanyEntity on either end
+// (see entityNodeTypeEnum). fromId/toId are deliberately plain uuids with no
+// FK constraint, the same pattern suggestions.targetId already uses, since a
+// single column can't carry a foreign key to six different tables depending
+// on the sibling type column -- existence and org-scoping are validated in
+// application code instead (see relationships/manage.ts). Human-curated, not
+// AI-proposed: createdBy is required, and nothing in the interpretation
+// pipeline writes here.
+export const entityRelationships = pgTable("entity_relationships", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  fromType: entityNodeTypeEnum("from_type").notNull(),
+  fromId: uuid("from_id").notNull(),
+  toType: entityNodeTypeEnum("to_type").notNull(),
+  toId: uuid("to_id").notNull(),
+  relationType: relationTypeEnum("relation_type").notNull(),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid("created_by")
+    .notNull()
+    .references(() => users.id),
 });
 
 export const organizationsRelations = relations(organizations, ({ many }) => ({

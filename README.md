@@ -952,10 +952,52 @@ Built:
   against accidental regression, not against the model getting it wrong).
   Whether it actually improves real interpretation quality can only be
   judged once the real historical batch run happens.
-- A typed relationship graph between Company Map entities (depends on/
-  blocks/informs/funded by/etc.), first-class external Company Entities
-  (vendors, regulators, funders), and per-task/decision visibility levels
-  (Team/Leadership/Restricted).
+- **A typed relationship graph between Company Map entities, plus
+  first-class external Company Entities** (Duke, FDA, NIH, a vendor -- orgs
+  and people worth tracking for their relationships to real work, but not
+  part of the Objective/Initiative/Project/Task hierarchy and not an app
+  user). Two new tables
+  ([backend/src/db/schema.ts](backend/src/db/schema.ts)):
+  `company_entities` (`name`, free-text `kind` -- deliberately not an enum,
+  since a real entity like Duke is a trial site, a university, and a
+  collaborator all at once, so a fixed category would misrepresent more
+  entities than it would classify -- and `notes`), and `entity_relationships`
+  (a directed, typed edge between any two nodes: `fromType`/`fromId` ->
+  `toType`/`toId`, both drawn from a six-member `entity_node_type` enum --
+  the four hierarchy levels, `decision`, and `company_entity` -- plus a
+  10-member `relation_type` enum lifted directly from the design doc this
+  session was auditing against: depends_on, blocks, informs, affects,
+  part_of, funded_by, performed_by, awaiting_response_from, coupled_with,
+  constrains). `fromId`/`toId` are deliberately plain uuids with no FK
+  constraint (a single column can't reference six different tables), so
+  [backend/src/relationships/manage.ts](backend/src/relationships/manage.ts)'s
+  `createRelationship` validates both ends exist and belong to the caller's
+  org in application code before the edge is allowed, and rejects a
+  self-referential edge. This graph is **human-curated, not AI-proposed** --
+  `createdBy` is required and nothing in the interpretation pipeline writes
+  here, a deliberate scope line for this session. `listRelationshipsForEntity`
+  returns every edge touching one entity from either side, oriented relative
+  to it (`direction: "outgoing" | "incoming"`), with the other side's
+  name/title batch-resolved (one query per type present, not N+1) rather
+  than making the frontend resolve six different id spaces itself.
+  `GET/POST /api/company-entities` and `GET/POST/DELETE /api/relationships`
+  ([backend/src/routes/entities.ts](backend/src/routes/entities.ts),
+  [backend/src/routes/relationships.ts](backend/src/routes/relationships.ts))
+  are `requireAuth`-gated like decisions (not admin-only). The frontend adds
+  a `/company-entities` list+add page and a shared
+  [RelationshipsPanel](frontend/app/components/RelationshipsPanel.tsx) --
+  wired into all four Company Map detail pages (objective/initiative/
+  project/task) -- that lists existing relationships and a mini form to add
+  one: pick a relation type, a target type, then a target chosen by name
+  from a live-fetched list (the Company Map tree flattened client-side for
+  the four hierarchy types, `fetchOpenDecisions` for decisions,
+  `fetchCompanyEntities` for entities) rather than typing a raw id, plus a
+  single checkbox to reverse which side is "this" vs. "the target" instead
+  of two separate from/to entity pickers. **Not yet wired into `/decisions`**
+  (its cards, not per-id detail pages, would need their own integration) --
+  the API fully supports `decision` as either side of a relationship today,
+  only the dedicated UI section there is deferred. Per-task/decision
+  visibility levels (Team/Leadership/Restricted) remain unbuilt.
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via
   `npm run interpret:real -w backend`, and inbound email now has a real
   forward-to-address push path via the Postmark-shaped webhook above, but

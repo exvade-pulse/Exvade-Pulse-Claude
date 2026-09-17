@@ -11,6 +11,7 @@ import {
   type SessionUser,
 } from "../../../lib/api";
 import { Nav } from "../../components/Nav";
+import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 import { TaskStatusChips } from "../../components/TaskStatusChips";
 
 export default function InitiativeDetailPage() {
@@ -120,6 +121,8 @@ export default function InitiativeDetailPage() {
               </article>
             </Link>
           ))}
+
+          <RelationshipsPanel entityType="initiative" entityId={data.initiative.id} />
         </>
       )}
     </main>

@@ -11,6 +11,7 @@ import {
   type SessionUser,
 } from "../../../lib/api";
 import { Nav } from "../../components/Nav";
+import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 
 export default function ObjectiveDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -112,6 +113,8 @@ export default function ObjectiveDetailPage() {
               </article>
             </Link>
           ))}
+
+          <RelationshipsPanel entityType="objective" entityId={data.objective.id} />
         </>
       )}
     </main>
