@@ -104,6 +104,125 @@ describe("suggestion approval", () => {
     expect(allTasks).toHaveLength(1); // no new task was created
   });
 
+  it("approving a context suggestion on a task sets description/owner but silently drops status/latestUpdate/nextAction, even if the AI included them", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "context-field-gate.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({
+        organizationId: fixture.org.id,
+        projectId: fixture.project.id,
+        title: "Original title",
+        status: "active",
+        latestUpdate: "Original latest update",
+      })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: existingTask.id,
+        changeType: "context",
+        // A context suggestion should never legally carry these current-state
+        // fields, but this proves they're stripped even if the AI (or a
+        // hand-edit) put them there -- the enforcement must not just be a
+        // prompt convention.
+        proposedDiff: {
+          description: "Background: this stalled because of a vendor delay, not a design issue.",
+          owner: "Sean Meehan",
+          status: "blocked",
+          latestUpdate: "This should never be applied",
+          nextAction: "This should never be applied either",
+        },
+        reasoning: "Email adds background color, not a state change.",
+        confidence: 0.7,
+      })
+      .returning();
+
+    await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, existingTask.id));
+    expect(task.description).toBe("Background: this stalled because of a vendor delay, not a design issue.");
+    expect(task.owner).toBe("Sean Meehan");
+    expect(task.status).toBe("active"); // untouched -- context can't change current state
+    expect(task.latestUpdate).toBe("Original latest update"); // untouched
+    expect(task.nextAction).toBeNull(); // untouched
+  });
+
+  it("editSuggestion re-applies the same context restriction, so a hand-edit can't add current-state fields to a context suggestion", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "context-field-gate-edit.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "active" })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: existingTask.id,
+        changeType: "context",
+        proposedDiff: { description: "Some background." },
+        reasoning: "test",
+        confidence: 0.7,
+      })
+      .returning();
+
+    const edited = await editSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      actorId: fixture.user.id,
+      diff: { status: "blocked", latestUpdate: "Trying to sneak this in" },
+    });
+
+    expect(edited.proposedDiff).not.toHaveProperty("status");
+    expect(edited.proposedDiff).not.toHaveProperty("latestUpdate");
+    expect(edited.proposedDiff).toMatchObject({ description: "Some background." });
+  });
+
+  it("an operational_update suggestion is unaffected by the context restriction and can still set status/latestUpdate", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "operational-update-unaffected.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "active" })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: existingTask.id,
+        changeType: "operational_update",
+        proposedDiff: { status: "blocked", latestUpdate: "Genuinely blocked now" },
+        reasoning: "test",
+        confidence: 0.8,
+      })
+      .returning();
+
+    await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, existingTask.id));
+    expect(task.status).toBe("blocked");
+    expect(task.latestUpdate).toBe("Genuinely blocked now");
+  });
+
   it("rejecting a suggestion marks it rejected and never touches the target tables", async () => {
     const fixture = await createFixtureOrg(db, { domain: "reject-flow.test" });
 
@@ -343,7 +462,11 @@ describe("suggestion approval", () => {
           sourceId: fixture.source.id,
           targetType,
           targetId: null,
-          changeType: "context",
+          // new_task (not context): context suggestions are restricted to
+          // description/owner and can never create a new row (see the
+          // context-field-gate tests above) -- this test is about owner
+          // pass-through on creation, unrelated to context semantics.
+          changeType: "new_task",
           proposedDiff,
           reasoning: "test",
           confidence: 0.5,

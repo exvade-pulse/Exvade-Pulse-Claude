@@ -844,8 +844,39 @@ Built:
   button builds a plain-text (not HTML) rendering of the already-fetched JSON
   client-side and copies it via `navigator.clipboard.writeText`, with a
   transient "Copied" label on the button itself rather than a toast.
+- **Context suggestions can no longer overwrite a task/objective/initiative/
+  project's current operational state.** Closes a real gap: `context`
+  (Info Share) suggestions were only conventionally supposed to add
+  background, not change `status`/`latestUpdate`/`nextAction` -- but nothing
+  in code actually enforced that, so an AI-authored (or hand-edited) context
+  suggestion could legally set `latestUpdate` exactly like an
+  `operational_update` one could.
+  [backend/src/suggestions/apply.ts](backend/src/suggestions/apply.ts)'s
+  `pickAllowedFields` now takes `changeType` as well as `targetType`: when
+  `changeType === "context"` on one of the four hierarchy types, the
+  whitelist narrows from the normal `ALLOWED_FIELDS` set down to just
+  `description`/`owner` (`CONTEXT_ONLY_FIELDS`) -- `decision` is untouched,
+  since it already has its own changeType vocabulary and a dedicated
+  `relevantContext` field for this. Enforced at all three call sites that
+  ever sanitize a diff (`interpret.ts`'s post-tool-call sanitization,
+  `approveSuggestion`, and `editSuggestion`), so it holds regardless of
+  whether the offending field came from the model or from a reviewer's edit.
+  [interpret.ts](backend/src/interpretation/interpret.ts)'s `SYSTEM_PROMPT`
+  now also explicitly explains the operational_update-vs-context
+  distinction and which fields context is restricted to, so the model is
+  steered toward the right changeType up front rather than relying on
+  fields being silently stripped after the fact.
 
 Explicitly **not** built yet (next sessions):
+- Evidence grounding for AI-proposed owner/status/dates (verifying a quoted
+  claim actually appears in the source before it reaches the review queue),
+  cross-source deduplication (a newer source enriching an existing pending
+  suggestion instead of creating a second review card), explicit temporal/
+  negation reasoning ("planned ≠ happened", recognizing a correction rather
+  than reinforcement), a typed relationship graph between Company Map
+  entities (depends on/blocks/informs/funded by/etc.), first-class external
+  Company Entities (vendors, regulators, funders), and per-task/decision
+  visibility levels (Team/Leadership/Restricted).
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via
   `npm run interpret:real -w backend`, and inbound email now has a real
   forward-to-address push path via the Postmark-shaped webhook above, but

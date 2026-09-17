@@ -46,11 +46,30 @@ export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
   ],
 };
 
+// Fields a "context" (Info Share) suggestion may touch on the four hierarchy
+// types -- deliberately excludes every current-state field (status,
+// latestUpdate, nextAction, priority) so approving one can only add
+// background, never silently become the entity's current operational state.
+// "decision" is not in this map: it has its own changeType vocabulary and a
+// dedicated relevantContext field, so this restriction doesn't apply to it.
+const CONTEXT_ONLY_FIELDS: Partial<Record<SuggestionTargetType, string[]>> = {
+  objective: ["description", "owner"],
+  initiative: ["description", "owner"],
+  project: ["description", "owner"],
+  task: ["description", "owner"],
+};
+
 // Exported so the interpretation pipeline can sanitize a model-authored diff
 // against the same whitelist this module enforces at apply time -- one source
-// of truth for what each target type may set.
-export function pickAllowedFields(targetType: SuggestionTargetType, diff: Record<string, unknown>) {
-  const allowed = ALLOWED_FIELDS[targetType];
+// of truth for what each target type may set. changeType narrows the
+// whitelist further for "context": see CONTEXT_ONLY_FIELDS above.
+export function pickAllowedFields(
+  targetType: SuggestionTargetType,
+  changeType: string,
+  diff: Record<string, unknown>,
+) {
+  const contextFields = changeType === "context" ? CONTEXT_ONLY_FIELDS[targetType] : undefined;
+  const allowed = contextFields ?? ALLOWED_FIELDS[targetType];
   const result: Record<string, unknown> = {};
   for (const key of allowed) {
     if (key in diff) {
@@ -81,7 +100,11 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
     }
 
     const targetType = suggestion.targetType as SuggestionTargetType;
-    const fields = pickAllowedFields(targetType, suggestion.proposedDiff as Record<string, unknown>);
+    const fields = pickAllowedFields(
+      targetType,
+      suggestion.changeType,
+      suggestion.proposedDiff as Record<string, unknown>,
+    );
 
     let resultTargetId: string;
 
@@ -231,7 +254,7 @@ export async function editSuggestion(db: Database, params: EditParams) {
 
     const targetType = suggestion.targetType as keyof typeof TABLE_BY_TARGET_TYPE;
     const merged = { ...(suggestion.proposedDiff as Record<string, unknown>), ...params.diff };
-    const sanitized = pickAllowedFields(targetType, merged);
+    const sanitized = pickAllowedFields(targetType, suggestion.changeType, merged);
 
     const [updatedSuggestion] = await tx
       .update(suggestions)

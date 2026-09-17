@@ -139,6 +139,38 @@ describe("interpretSource", () => {
     expect(draft.proposedDiff.reviewedBy).toBeUndefined();
   });
 
+  it("strips status/latestUpdate/nextAction from a context-changeType draft, keeping only description/owner", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "context",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: {
+          description: "Vendor confirmed the root cause was a bad harness batch, not firmware.",
+          owner: "Sean Meehan",
+          status: "resolved",
+          latestUpdate: "This must not survive sanitization",
+          nextAction: "Neither must this",
+        },
+        reasoning: "Background info on an already-tracked task, not a state change.",
+        confidence: 0.7,
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff).toEqual({
+      description: "Vendor confirmed the root cause was a bad harness batch, not firmware.",
+      owner: "Sean Meehan",
+    });
+  });
+
   it("accepts a new_task proposal with targetId null", async () => {
     const projectId = randomUUID();
     const context: CompanyContext = {

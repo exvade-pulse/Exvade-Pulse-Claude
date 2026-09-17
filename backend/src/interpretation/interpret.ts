@@ -166,8 +166,13 @@ targetId rules:
 - If you are proposing an update to something that already exists -- including a decision that matches one already open -- targetId MUST be the exact id string of that entity as given to you in the context above. Never invent, guess, or reformat an id.
 - If you are proposing something new -- including a brand-new decision -- targetId MUST be null.
 
+operational_update vs. context -- pick carefully, since this changes which fields your diff is allowed to touch:
+- operational_update: the thing's actual current state changed -- status moved, there's a new latest-update or next-action. Use this when the source describes what IS true now.
+- context: the source adds useful background, history, or color on an objective/initiative/project/task, but does NOT itself change what's currently true right now (e.g. someone explains *why* a task is stalled, or gives detail behind a status that's already recorded). A context suggestion on an objective/initiative/project/task may only set description and owner -- status/latestUpdate/nextAction/priority are silently discarded even if you include them, because a context share must never overwrite the thing's actual current state. If the source genuinely does describe a state change, use operational_update instead, not context.
+
 proposedDiff rules -- each targetType only accepts these fields, anything else is discarded before it ever reaches the database:
 ${describeAllowedFields()}
+(a "context" changeType is further restricted per the operational_update vs. context rule above.)
 When creating a new project/initiative/task, proposedDiff must include the appropriate parent id field (initiativeId for a project, objectiveId for an initiative, projectId for a task) pointing at an existing parent from the context, plus a title. When updating an existing entity, only include the fields that are actually changing.
 
 owner (objective/initiative/project/task only) is who's responsible for that work -- include it only when the source clearly names a specific person as doing or owning it, e.g. "Sean is handling the vendor switch." Never guess: don't default to the email's sender or any other weak proxy, and leave owner out of proposedDiff entirely when the source doesn't support it.
@@ -233,7 +238,7 @@ function validateSuggestionInput(
   // Re-sanitize proposedDiff through the same whitelist apply.ts enforces, so
   // a malformed or adversarial tool response can't smuggle extra fields
   // through even before it gets anywhere near a DB write.
-  const sanitizedDiff = pickAllowedFields(draft.targetType, draft.proposedDiff);
+  const sanitizedDiff = pickAllowedFields(draft.targetType, draft.changeType, draft.proposedDiff);
 
   return {
     draft: {
