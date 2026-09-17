@@ -6,7 +6,7 @@ import { authorizeUser, changeUserRole, listAuthorizedUsers, revokeUser, UserMan
 
 function errorStatus(code: UserManageError["code"]): number {
   switch (code) {
-    case "invalid_domain":
+    case "invalid_email":
       return 400;
     case "self_target":
       return 409;

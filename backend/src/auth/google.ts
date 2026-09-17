@@ -10,9 +10,9 @@ export function buildGoogleAuthUrl(state: string): string {
   url.searchParams.set("redirect_uri", config.google.callbackUrl);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "openid email profile");
-  // hd narrows the Google account chooser to the workspace domain; the backend
-  // still re-verifies the email domain after token exchange since hd is only a hint.
-  url.searchParams.set("hd", config.allowedDomain);
+  // No `hd` param: sign-in isn't restricted to one Workspace domain anymore
+  // (see auth/identity.ts) -- an invited account on any domain needs to be
+  // able to pick its own Google account here, not just ones on the home domain.
   url.searchParams.set("state", state);
   url.searchParams.set("prompt", "select_account");
   return url.toString();

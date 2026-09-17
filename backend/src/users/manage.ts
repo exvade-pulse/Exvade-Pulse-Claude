@@ -1,12 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { auditLog, authorizedUsers, organizations, users, type UserRole } from "../db/schema.js";
-import { emailDomain } from "../auth/google.js";
+import { auditLog, authorizedUsers, users, type UserRole } from "../db/schema.js";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class UserManageError extends Error {
-  code: "invalid_domain" | "self_target" | "not_found";
+  code: "invalid_email" | "self_target" | "not_found";
 
-  constructor(message: string, code: "invalid_domain" | "self_target" | "not_found") {
+  constructor(message: string, code: "invalid_email" | "self_target" | "not_found") {
     super(message);
     this.code = code;
   }
@@ -42,13 +43,17 @@ interface AuthorizeParams {
   role: UserRole;
 }
 
+// Deliberately not restricted to the org's own email domain: an admin can
+// invite anyone -- a contractor, an advisor, someone on a different company's
+// domain entirely -- since auth/identity.ts's sign-in gate now honors an
+// explicit authorized_users row regardless of domain. The only requirement
+// left is that it looks like an email address at all.
 export async function authorizeUser(db: Database, params: AuthorizeParams) {
-  return db.transaction(async (tx) => {
-    const [org] = await tx.select().from(organizations).where(eq(organizations.id, params.organizationId));
-    if (!org || emailDomain(params.email) !== org.domain) {
-      throw new UserManageError(`Only ${org?.domain ?? "the organization's"} accounts can be authorized`, "invalid_domain");
-    }
+  if (!EMAIL_RE.test(params.email)) {
+    throw new UserManageError("That doesn't look like a valid email address", "invalid_email");
+  }
 
+  return db.transaction(async (tx) => {
     const [record] = await tx
       .insert(authorizedUsers)
       .values({

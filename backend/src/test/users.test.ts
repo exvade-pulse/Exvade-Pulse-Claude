@@ -2,10 +2,11 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { authorizedUsers, users } from "../db/schema.js";
+import { authorizedUsers, organizations, users } from "../db/schema.js";
 import { findOrCreateUserForGoogleIdentity, SignInRejectedError } from "../auth/identity.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
+import { config } from "../config.js";
 
 const { db, client } = testDb();
 
@@ -18,13 +19,13 @@ describe("bootstrap and allowlist enforcement", () => {
     await truncateAll(db);
   });
 
-  it("the first person to sign in from a new domain bootstraps the org and becomes admin", async () => {
-    const identity = { googleId: "g-1", email: "first@bootstrap.test", name: "First Person" };
+  it("the first person to sign in from the home domain bootstraps the org and becomes admin", async () => {
+    const identity = { googleId: "g-1", email: `first@${config.allowedDomain}`, name: "First Person" };
 
     const result = await findOrCreateUserForGoogleIdentity(db, identity);
 
     expect(result.role).toBe("admin");
-    expect(result.org.domain).toBe("bootstrap.test");
+    expect(result.org.domain).toBe(config.allowedDomain);
     expect(result.user.email).toBe(identity.email);
 
     const [authorization] = await db
@@ -36,14 +37,14 @@ describe("bootstrap and allowlist enforcement", () => {
     expect(authorization.invitedBy).toBeNull();
   });
 
-  it("a second person at the same org who is NOT on the allowlist is rejected", async () => {
+  it("a second person on the home domain who is NOT on the allowlist is rejected", async () => {
     await findOrCreateUserForGoogleIdentity(db, {
       googleId: "g-1",
-      email: "first@second-person.test",
+      email: `first@${config.allowedDomain}`,
       name: "First Person",
     });
 
-    const uninvited = { googleId: "g-2", email: "uninvited@second-person.test", name: "Uninvited" };
+    const uninvited = { googleId: "g-2", email: `uninvited@${config.allowedDomain}`, name: "Uninvited" };
     await expect(findOrCreateUserForGoogleIdentity(db, uninvited)).rejects.toBeInstanceOf(SignInRejectedError);
 
     const [row] = await db.select().from(users).where(eq(users.email, uninvited.email));
@@ -53,26 +54,59 @@ describe("bootstrap and allowlist enforcement", () => {
   it("a person who IS on the allowlist gets a users row created with the correct role on first sign-in", async () => {
     const bootstrap = await findOrCreateUserForGoogleIdentity(db, {
       googleId: "g-1",
-      email: "admin@allowlisted.test",
+      email: `admin@${config.allowedDomain}`,
       name: "Admin",
     });
 
     await db.insert(authorizedUsers).values({
       organizationId: bootstrap.org.id,
-      email: "member@allowlisted.test",
+      email: `member@${config.allowedDomain}`,
       role: "member",
       invitedBy: bootstrap.user.id,
     });
 
     const result = await findOrCreateUserForGoogleIdentity(db, {
       googleId: "g-2",
-      email: "member@allowlisted.test",
+      email: `member@${config.allowedDomain}`,
       name: "Member Person",
     });
 
     expect(result.role).toBe("member");
-    const [row] = await db.select().from(users).where(eq(users.email, "member@allowlisted.test"));
+    const [row] = await db.select().from(users).where(eq(users.email, `member@${config.allowedDomain}`));
     expect(row).toBeDefined();
+  });
+
+  it("a brand-new, non-home domain can no longer self-bootstrap its own org", async () => {
+    const identity = { googleId: "g-1", email: "stranger@some-other-company.test", name: "Stranger" };
+
+    await expect(findOrCreateUserForGoogleIdentity(db, identity)).rejects.toBeInstanceOf(SignInRejectedError);
+
+    const [row] = await db.select().from(users).where(eq(users.email, identity.email));
+    expect(row).toBeUndefined();
+    const [org] = await db.select().from(organizations).where(eq(organizations.domain, "some-other-company.test"));
+    expect(org).toBeUndefined();
+  });
+
+  it("an explicitly invited email on a different domain joins the inviting org with its assigned role, bypassing the home-domain gate", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "invites-outsiders.test" });
+    await db.insert(authorizedUsers).values({
+      organizationId: fixture.org.id,
+      email: "contractor@gmail.com",
+      role: "member",
+      invitedBy: fixture.user.id,
+    });
+
+    const result = await findOrCreateUserForGoogleIdentity(db, {
+      googleId: "g-contractor",
+      email: "contractor@gmail.com",
+      name: "Contractor",
+    });
+
+    expect(result.role).toBe("member");
+    expect(result.org.id).toBe(fixture.org.id);
+    const [row] = await db.select().from(users).where(eq(users.email, "contractor@gmail.com"));
+    expect(row).toBeDefined();
+    expect(row.organizationId).toBe(fixture.org.id);
   });
 });
 
@@ -189,7 +223,7 @@ describe("GET/POST/PATCH/DELETE /api/users", () => {
     await app.close();
   });
 
-  it("POST /api/users rejects an email outside the org's domain", async () => {
+  it("POST /api/users can authorize an email outside the org's own domain (a contractor, an advisor)", async () => {
     const fixture = await createFixtureOrg(db, { domain: "domain-check.test" });
     const app = await buildApp();
     const token = await tokenFor(fixture);
@@ -198,14 +232,34 @@ describe("GET/POST/PATCH/DELETE /api/users", () => {
       method: "POST",
       url: "/api/users",
       cookies: { [SESSION_COOKIE_NAME]: token },
-      payload: { email: "outsider@not-the-domain.test", role: "member" },
+      payload: { email: "outsider@some-other-company.test", role: "member" },
     });
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(201);
 
     const [row] = await db
       .select()
       .from(authorizedUsers)
-      .where(eq(authorizedUsers.email, "outsider@not-the-domain.test"));
+      .where(eq(authorizedUsers.email, "outsider@some-other-company.test"));
+    expect(row).toBeDefined();
+    expect(row.organizationId).toBe(fixture.org.id);
+
+    await app.close();
+  });
+
+  it("POST /api/users rejects a malformed email", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "bad-email.test" });
+    const app = await buildApp();
+    const token = await tokenFor(fixture);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/users",
+      cookies: { [SESSION_COOKIE_NAME]: token },
+      payload: { email: "not-an-email", role: "member" },
+    });
+    expect(response.statusCode).toBe(400);
+
+    const [row] = await db.select().from(authorizedUsers).where(eq(authorizedUsers.email, "not-an-email"));
     expect(row).toBeUndefined();
 
     await app.close();
@@ -290,13 +344,21 @@ describe("GET/POST/PATCH/DELETE /api/users", () => {
     const body = list.json() as { users: Array<{ email: string }> };
     expect(body.users.map((u) => u.email)).not.toContain(orgB.user.email);
 
+    // Domain no longer implies org membership, so orgA's admin authorizing an
+    // email that happens to share orgB's domain succeeds -- but it must land
+    // in orgA, never orgB, which is the actual isolation guarantee here.
     const crossOrgAuthorize = await app.inject({
       method: "POST",
       url: "/api/users",
       cookies: { [SESSION_COOKIE_NAME]: tokenA },
       payload: { email: "someone@iso-users-b.test", role: "member" },
     });
-    expect(crossOrgAuthorize.statusCode).toBe(400);
+    expect(crossOrgAuthorize.statusCode).toBe(201);
+    const [crossOrgRow] = await db
+      .select()
+      .from(authorizedUsers)
+      .where(eq(authorizedUsers.email, "someone@iso-users-b.test"));
+    expect(crossOrgRow.organizationId).toBe(orgA.org.id);
 
     const crossOrgRevoke = await app.inject({
       method: "DELETE",

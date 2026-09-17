@@ -152,7 +152,7 @@ export default function UsersPage() {
             type="email"
             value={newEmail}
             onChange={(e) => setNewEmail(e.target.value)}
-            placeholder="name@exvadebio.com"
+            placeholder="name@company.com"
           />
         </label>
         <label className="edit-field">

@@ -184,17 +184,27 @@ Built:
   each carry a nullable `owner` (free text, "who's responsible") -- see the
   Company Map bullet below for why it's a single field rather than a
   `decisions`-style `stakeholders` array.
-- Google OAuth restricted to one Workspace domain, JWT session cookie.
-- An allowlist + roles gate on top of that OAuth flow, replacing "any account on
-  the domain auto-provisions": `authorized_users`
+- Google OAuth, invite-only past a one-time bootstrap, JWT session cookie.
+  `ALLOWED_GOOGLE_DOMAIN` names one "home" Workspace domain whose very
+  first-ever signer bootstraps the organization and becomes its admin
+  ([backend/src/auth/identity.ts](backend/src/auth/identity.ts)'s
+  `findOrCreateUserForGoogleIdentity`). Every sign-in after that -- home
+  domain or not -- requires an explicit `authorized_users` row for that exact
+  email; an invite is honored regardless of what domain the email is on, so
+  an admin can bring in a contractor or advisor on a personal Gmail address
+  without that domain getting its own organization. (The Google OAuth `hd`
+  parameter, which would narrow the account chooser to one domain, is
+  deliberately left unset for this reason.) An email with no invite and no
+  claim to the home-domain bootstrap is rejected outright, full stop -- there
+  is no self-service org creation past that first admin.
+- An allowlist + roles gate on top of that OAuth flow: `authorized_users`
   ([backend/src/db/schema.ts](backend/src/db/schema.ts)) is a separate table from
   `users` (someone can be authorized before they've ever signed in) carrying a
-  `user_role` (`member`/`admin`) per `(organizationId, email)`. The OAuth callback
-  ([backend/src/auth/identity.ts](backend/src/auth/identity.ts)'s
-  `findOrCreateUserForGoogleIdentity`) bootstraps a brand-new organization's first
-  sign-in as `admin`, and otherwise requires an `authorized_users` row to exist or
-  rejects the sign-in outright (no `users` row created). `role` is embedded in the
-  session JWT only as a UI hint;
+  `user_role` (`member`/`admin`) per `(organizationId, email)`, and
+  [backend/src/users/manage.ts](backend/src/users/manage.ts)'s `authorizeUser`
+  (used by `POST /api/users`) validates only that the invited value looks like
+  an email address -- not that it matches the inviting org's own domain.
+  `role` is embedded in the session JWT only as a UI hint;
   [backend/src/auth/middleware.ts](backend/src/auth/middleware.ts)'s `requireAuth`
   re-reads `authorized_users` fresh on every request and 401s if the row is gone —
   the actual enforcement boundary, so a revoked person's session dies immediately

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
-import { buildGoogleAuthUrl, exchangeCodeForUserInfo, emailDomain } from "../auth/google.js";
+import { buildGoogleAuthUrl, exchangeCodeForUserInfo } from "../auth/google.js";
 import { findOrCreateUserForGoogleIdentity, SignInRejectedError } from "../auth/identity.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 import { requireAuth } from "../auth/middleware.js";
@@ -36,8 +36,12 @@ export async function authRoutes(app: FastifyInstance) {
 
       const userInfo = await exchangeCodeForUserInfo(code);
 
-      if (!userInfo.email_verified || emailDomain(userInfo.email) !== config.allowedDomain) {
-        reply.code(403).send({ error: `Only ${config.allowedDomain} accounts may sign in` });
+      // Never trust an unverified email, regardless of which domain admits
+      // the sign-in below -- everything past this point (the home-domain
+      // bootstrap and the cross-domain invite lookup, both in identity.ts)
+      // assumes the email genuinely belongs to this Google account.
+      if (!userInfo.email_verified) {
+        reply.code(403).send({ error: "Your Google account's email isn't verified" });
         return;
       }
 

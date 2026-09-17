@@ -25,6 +25,9 @@ export const config = {
   // (e.g. https://api.example.com/api/public/webhooks/circleback?token=...).
   // Nothing else depends on this, so it's safe to default for local dev.
   backendUrl: process.env.BACKEND_URL ?? "http://localhost:3001",
+  // The one domain allowed to self-bootstrap a brand-new organization (its
+  // first-ever signer becomes admin). Everyone else needs an explicit
+  // authorized_users invite -- see auth/identity.ts.
   allowedDomain: process.env.ALLOWED_GOOGLE_DOMAIN ?? "exvadebio.com",
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID ?? "",
