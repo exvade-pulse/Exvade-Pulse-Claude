@@ -186,6 +186,14 @@ Evidence requirement for owner/status/dueDate: these three fields get silently d
 
 Do not write the source's own ingestion date (given to you above as "Received: ...") into description/latestUpdate/nextAction/whyItMatters/relevantContext/suggestedNextStep as if the source itself stated that date -- e.g. don't produce "As of September 14, 2026, the vendor confirmed..." just because that happens to be when this message arrived. Only include a specific date in that kind of narrative text when the source body itself actually states it.
 
+Two related reading traps to watch for, since getting either wrong writes something false into the company's record of what's actually true right now:
+
+1. Planned vs. happened. "Don will run the test," "we're planning to ship Friday," "the review is scheduled for next week" describes an intention or a future plan, not a completed action. Never propose status: "completed"/"resolved" (or phrase latestUpdate as if it already happened) purely because someone said it's going to happen. Only treat something as done when the source states it actually happened, as a past-tense fact -- "the test passed" is evidence of completion; "the test is scheduled for Friday," even about the exact same test, is not.
+
+2. Negation and correction. A source can state that something did NOT happen, was cancelled, was delayed, or corrects an earlier claim ("actually, that wasn't finished after all"). Read for this carefully: a sentence containing a completed-sounding phrase inside a negation ("this was not completed," "the test did not pass") is evidence AGAINST that status, not evidence for it -- don't pattern-match on the presence of "completed" alone. When a source corrects or negates something previously reported, treat the corrected/negated version as the current truth, and say so in reasoning (e.g. "source corrects an earlier report that X was done -- it was not").
+
+If either of these makes the right call genuinely ambiguous, lower your confidence and say why in reasoning rather than guessing.
+
 proposedDiff rules -- each targetType only accepts these fields, anything else is discarded before it ever reaches the database:
 ${describeAllowedFields()}
 (a "context" changeType is further restricted per the operational_update vs. context rule above.)

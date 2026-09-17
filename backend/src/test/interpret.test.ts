@@ -103,6 +103,15 @@ describe("interpretSource", () => {
     ]);
   });
 
+  // A smoke test, not a behavioral one -- there's no way to mechanically
+  // verify the model actually reads this correctly without a real API call,
+  // which this test suite deliberately avoids (see README). This just
+  // guards against the guidance silently regressing out of the prompt.
+  it("SYSTEM_PROMPT includes planned-vs-happened and negation/correction guidance", () => {
+    expect(SYSTEM_PROMPT).toContain("Planned vs. happened");
+    expect(SYSTEM_PROMPT).toContain("Negation and correction");
+  });
+
   it("maps a valid update response onto SuggestionDraft and keeps only whitelisted fields", async () => {
     const taskId = randomUUID();
     const context: CompanyContext = {

@@ -934,13 +934,28 @@ Built:
   audit-logged) so it's visible on `/activity`, labeled via
   [frontend/app/activity/page.tsx](frontend/app/activity/page.tsx)'s
   `ACTION_LABELS`.
-
-Explicitly **not** built yet (next sessions):
-- Explicit temporal/negation reasoning ("planned ≠ happened", recognizing a
-  correction rather than reinforcement), a typed relationship graph between
-  Company Map entities (depends on/blocks/informs/funded by/etc.),
-  first-class external Company Entities (vendors, regulators, funders), and
-  per-task/decision visibility levels (Team/Leadership/Restricted).
+- **Planned-vs-happened and negation/correction guidance in the
+  interpretation prompt.** Two related reading traps that were previously
+  unaddressed: (1) treating a stated *intention* ("Don will run the test,"
+  "shipping is scheduled for Friday") as if it were a completed fact, and
+  (2) missing that a sentence containing a completed-sounding phrase inside
+  a negation ("this was **not** completed") is evidence against that
+  status, not for it, or that a later message corrects an earlier claim.
+  `SYSTEM_PROMPT` ([backend/src/interpretation/interpret.ts](backend/src/interpretation/interpret.ts))
+  now explicitly walks through both with concrete examples and tells the
+  model to lower confidence rather than guess when it's genuinely
+  ambiguous. Unlike the rest of this session's safeguards, this one is
+  **prompt-only, not mechanically enforced** -- there's no reliable way to
+  validate "did the model correctly read a negation" in code without
+  another model call, so the only test coverage is a smoke test asserting
+  the guidance text is actually present in `SYSTEM_PROMPT` (protects
+  against accidental regression, not against the model getting it wrong).
+  Whether it actually improves real interpretation quality can only be
+  judged once the real historical batch run happens.
+- A typed relationship graph between Company Map entities (depends on/
+  blocks/informs/funded by/etc.), first-class external Company Entities
+  (vendors, regulators, funders), and per-task/decision visibility levels
+  (Team/Leadership/Restricted).
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via
   `npm run interpret:real -w backend`, and inbound email now has a real
   forward-to-address push path via the Postmark-shaped webhook above, but
