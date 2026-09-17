@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { tasks, suggestions, sources, decisions } from "../db/schema.js";
+import { tasks, suggestions, sources, decisions, auditLog } from "../db/schema.js";
 import { runInterpretationPipeline } from "../interpretation/pipeline.js";
 import { approveSuggestion } from "../suggestions/apply.js";
 import { createDecision, resolveDecision } from "../decisions/manage.js";
@@ -138,6 +138,145 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
     expect(suggestion.targetId).toBe(existingTask.id);
     expect(suggestion.targetType).toBe("task");
     expect(suggestion.proposedDiff).toEqual({ status: "needs_attention", latestUpdate: "Happened again today." });
+  });
+
+  it("a second source targeting the same pending suggestion's entity enriches it in place, instead of creating a duplicate", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "pipeline-dedupe.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Rig #3 sensor dropout", status: "active" })
+      .returning();
+
+    const firstClient: ClaudeClient = {
+      createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
+        if (params.model === NOISE_FILTER_MODEL) {
+          return toolUseMessage("classify_source", { isNoise: false, reason: "Circleback meeting notes." });
+        }
+        return toolUseMessage("propose_suggestion", {
+          changeType: "operational_update",
+          targetType: "task",
+          targetId: existingTask.id,
+          proposedDiff: { status: "blocked", latestUpdate: "Waiting on vendor part." },
+          reasoning: "Meeting notes report a blocker.",
+          confidence: 0.7,
+          evidenceQuotes: ["waiting on the vendor part"],
+        });
+      },
+    };
+    setClaudeClientForTesting(firstClient);
+
+    const first = await runInterpretationPipeline(db, fixture.org.id, {
+      type: "circleback",
+      externalId: "ext-dedupe-meeting",
+      subject: "Standup",
+      from: "Circleback",
+      body: "Rig #3 still down, waiting on the vendor part.",
+      receivedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    expect(first.suggestionIds).toHaveLength(1);
+
+    const secondClient: ClaudeClient = {
+      createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
+        if (params.model === NOISE_FILTER_MODEL) {
+          return toolUseMessage("classify_source", { isNoise: false, reason: "Follow-up email." });
+        }
+        return toolUseMessage("propose_suggestion", {
+          changeType: "operational_update",
+          targetType: "task",
+          targetId: existingTask.id,
+          proposedDiff: { latestUpdate: "Vendor part shipped, arriving Friday." },
+          reasoning: "Email says the part shipped.",
+          confidence: 0.85,
+          evidenceQuotes: ["part shipped, arriving Friday"],
+        });
+      },
+    };
+    setClaudeClientForTesting(secondClient);
+
+    const second = await runInterpretationPipeline(db, fixture.org.id, {
+      type: "gmail",
+      externalId: "ext-dedupe-email",
+      subject: "Re: rig #3",
+      from: "vendor@example.com",
+      body: "Update: the part shipped, arriving Friday.",
+      receivedAt: new Date("2026-01-02T00:00:00Z"),
+    });
+
+    // No new row -- the second call enriched the first suggestion.
+    expect(second.suggestionIds).toEqual(first.suggestionIds);
+
+    const allSuggestionsForTask = await db
+      .select()
+      .from(suggestions)
+      .where(eq(suggestions.targetId, existingTask.id));
+    expect(allSuggestionsForTask).toHaveLength(1);
+
+    const [merged] = allSuggestionsForTask;
+    // status/latestUpdate: latestUpdate came from the second draft (wins on
+    // overlap), status is preserved from the first draft (second draft never
+    // touched it).
+    expect(merged.proposedDiff).toEqual({
+      status: "blocked",
+      latestUpdate: "Vendor part shipped, arriving Friday.",
+    });
+    expect(merged.confidence).toBe(0.85);
+    expect(merged.reasoning).toContain("Meeting notes report a blocker.");
+    expect(merged.reasoning).toContain("Email says the part shipped.");
+    // sourceId moved to the newer source.
+    const [secondSourceRow] = await db.select().from(sources).where(eq(sources.externalId, "ext-dedupe-email"));
+    expect(merged.sourceId).toBe(secondSourceRow.id);
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.action, "suggestion.enriched"));
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].actorId).toBeNull();
+  });
+
+  it("does not merge two separately-proposed brand-new tasks (targetId null), even if their titles are identical", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "pipeline-no-merge-new.test" });
+
+    const client: ClaudeClient = {
+      createMessage: async (params) => {
+        const passthrough = passthroughRedaction(params);
+        if (passthrough) return passthrough;
+        if (params.model === NOISE_FILTER_MODEL) {
+          return toolUseMessage("classify_source", { isNoise: false, reason: "New work item." });
+        }
+        return toolUseMessage("propose_suggestion", {
+          changeType: "new_task",
+          targetType: "task",
+          targetId: null,
+          proposedDiff: { projectId: fixture.project.id, title: "Order replacement gasket" },
+          reasoning: "New task mentioned.",
+          confidence: 0.6,
+        });
+      },
+    };
+    setClaudeClientForTesting(client);
+
+    await runInterpretationPipeline(db, fixture.org.id, {
+      type: "gmail",
+      externalId: "ext-new-1",
+      subject: "x",
+      from: "a@exvadebio.com",
+      body: "Need to order a replacement gasket.",
+      receivedAt: new Date(),
+    });
+    await runInterpretationPipeline(db, fixture.org.id, {
+      type: "gmail",
+      externalId: "ext-new-2",
+      subject: "x",
+      from: "a@exvadebio.com",
+      body: "Reminder: need to order a replacement gasket.",
+      receivedAt: new Date(),
+    });
+
+    const rows = await db.select().from(suggestions).where(eq(suggestions.organizationId, fixture.org.id));
+    expect(rows).toHaveLength(2);
   });
 
   it("multi-topic source: writes one suggestions row per parallel propose_suggestion call", async () => {

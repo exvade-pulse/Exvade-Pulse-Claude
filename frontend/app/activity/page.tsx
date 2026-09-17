@@ -15,13 +15,17 @@ import { relativeTime } from "../../lib/time";
 import { Nav } from "../components/Nav";
 
 // Covers every action string current write sites actually produce (see
-// suggestions/apply.ts, decisions/manage.ts, users/manage.ts,
-// integrations/manage.ts) -- anything not listed falls back to a generic
-// humanization rather than crashing on an unrecognized action.
+// suggestions/apply.ts, suggestions/dedupe.ts, decisions/manage.ts,
+// users/manage.ts, integrations/manage.ts) -- anything not listed falls back
+// to a generic humanization rather than crashing on an unrecognized action.
 const ACTION_LABELS: Record<string, string> = {
   "suggestion.approved": "approved a suggestion",
   "suggestion.edited": "edited a suggestion",
   "suggestion.rejected": "rejected a suggestion",
+  // No actorId (system-generated, not a human review decision) -- actorLabel
+  // already falls back to "System" for a null actor, so this reads as
+  // "System enriched a suggestion".
+  "suggestion.enriched": "enriched a suggestion with a newer source",
   "decision.created": "created a decision",
   "decision.info_added": "added information to a decision",
   "decision.assigned": "assigned a decision",

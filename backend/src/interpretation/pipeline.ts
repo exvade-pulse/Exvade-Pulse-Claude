@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { decisions, initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
+import { decisions, initiatives, objectives, projects, sources, tasks } from "../db/schema.js";
 import { isNoiseSource } from "./noiseFilter.js";
 import { interpretSource, InterpretationError, type CompanyContext } from "./interpret.js";
 import {
@@ -9,6 +9,7 @@ import {
   REDACTION_FAILURE_PLACEHOLDER_BODY,
 } from "./redactPatientIdentifiers.js";
 import { getClaudeClient, type ClaudeClient } from "./claudeClient.js";
+import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
 export interface RawIncomingSource {
   type: "gmail" | "circleback" | "document" | "manual";
@@ -140,29 +141,25 @@ export async function runInterpretationPipeline(
     );
 
     // One transaction for the whole batch of drafts from this source, so a
-    // multi-topic source's suggestions either all land or none do.
-    const inserted = await db.transaction(async (tx) => {
-      const rows = [];
+    // multi-topic source's suggestions either all land or none do. Each
+    // draft either merges into an already-pending suggestion targeting the
+    // same entity, or lands as a new row -- see mergeOrInsertSuggestion.
+    const results = await db.transaction(async (tx) => {
+      const rows: Awaited<ReturnType<typeof mergeOrInsertSuggestion>>[] = [];
       for (const draft of drafts) {
-        const [suggestion] = await tx
-          .insert(suggestions)
-          .values({
+        rows.push(
+          await mergeOrInsertSuggestion(tx, {
             organizationId,
             sourceId: source.id,
-            targetType: draft.targetType,
-            targetId: draft.targetId,
-            changeType: draft.changeType,
-            proposedDiff: draft.proposedDiff,
-            reasoning: draft.reasoning,
-            confidence: draft.confidence,
-          })
-          .returning();
-        rows.push(suggestion);
+            sourceReceivedAt: raw.receivedAt,
+            draft,
+          }),
+        );
       }
       return rows;
     });
 
-    return { sourceId: source.id, suggestionIds: inserted.map((s) => s.id), skippedAsNoise: false };
+    return { sourceId: source.id, suggestionIds: results.map((r) => r.id), skippedAsNoise: false };
   } catch (err) {
     if (err instanceof InterpretationError) {
       console.error(`Interpretation failed for source ${source.id}:`, err.message);

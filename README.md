@@ -912,15 +912,35 @@ Built:
   since by the time something's approved `currentState` and the proposed
   value are usually the same thing, which would read as a confusing no-op
   arrow.
+- **Cross-source deduplication**, so a newer source describing something
+  already awaiting review enriches the existing pending suggestion instead
+  of spawning a second review card for the same underlying event.
+  [backend/src/suggestions/dedupe.ts](backend/src/suggestions/dedupe.ts)'s
+  `mergeOrInsertSuggestion` replaces `pipeline.ts`'s old direct
+  `insert(suggestions)` call: when a draft's `targetId` is set (an update to
+  something that already exists -- a brand-new-entity draft has nothing to
+  merge into by definition) and a `pending`/`edited` suggestion already
+  targets that exact `(targetType, targetId)`, it enriches that row instead
+  of inserting a new one -- `proposedDiff` fields merge shallowly (the newer
+  draft wins on overlapping keys, older/hand-edited fields it doesn't touch
+  survive), `reasoning` is *appended* to rather than replaced so neither
+  source's rationale is lost, `confidence` takes the newer read, and
+  `sourceId` moves to the newest source (consistent with this app's general
+  newer-evidence-precedence principle). `status` is deliberately left alone
+  either way -- enrichment isn't a review decision, so an in-progress
+  hand-edit doesn't get silently reset to `pending`. Writes a
+  `suggestion.enriched` audit_log entry (no actor -- this happens as a side
+  effect of ingestion, same as suggestion creation itself was never
+  audit-logged) so it's visible on `/activity`, labeled via
+  [frontend/app/activity/page.tsx](frontend/app/activity/page.tsx)'s
+  `ACTION_LABELS`.
 
 Explicitly **not** built yet (next sessions):
-- Cross-source deduplication (a newer source enriching an existing pending
-  suggestion instead of creating a second review card), explicit temporal/
-  negation reasoning ("planned ≠ happened", recognizing a correction rather
-  than reinforcement), a typed relationship graph between Company Map
-  entities (depends on/blocks/informs/funded by/etc.), first-class external
-  Company Entities (vendors, regulators, funders), and per-task/decision
-  visibility levels (Team/Leadership/Restricted).
+- Explicit temporal/negation reasoning ("planned ≠ happened", recognizing a
+  correction rather than reinforcement), a typed relationship graph between
+  Company Map entities (depends on/blocks/informs/funded by/etc.),
+  first-class external Company Entities (vendors, regulators, funders), and
+  per-task/decision visibility levels (Team/Leadership/Restricted).
 - A real Gmail OAuth pull integration (the pipeline exists and is exercised via
   `npm run interpret:real -w backend`, and inbound email now has a real
   forward-to-address push path via the Postmark-shaped webhook above, but
