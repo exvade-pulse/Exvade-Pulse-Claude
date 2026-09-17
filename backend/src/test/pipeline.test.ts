@@ -116,6 +116,7 @@ describe("runInterpretationPipeline (integration, mocked Claude client)", () => 
           proposedDiff: { status: "needs_attention", latestUpdate: "Happened again today." },
           reasoning: "Matches the existing rig #3 sensor dropout task.",
           confidence: 0.82,
+          evidenceQuotes: ["happened again today"],
         });
       },
     };

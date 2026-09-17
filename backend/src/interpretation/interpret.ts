@@ -66,6 +66,12 @@ const suggestionToolInputSchema = z.object({
   proposedDiff: z.record(z.string(), z.unknown()),
   reasoning: z.string().min(1),
   confidence: z.number().min(0).max(1),
+  // Verbatim quotes from the source, required whenever proposedDiff sets a
+  // "protected" field (owner/status on a hierarchy target, dueDate on a
+  // decision) -- see quotesGroundedInSource. Optional at the schema level
+  // since most suggestions don't touch a protected field and have nothing to
+  // cite; defaulted to [] so downstream code never has to null-check it.
+  evidenceQuotes: z.array(z.string()).optional().default([]),
 });
 
 const PROPOSE_SUGGESTION_TOOL: Anthropic.Tool = {
@@ -106,6 +112,12 @@ const PROPOSE_SUGGESTION_TOOL: Anthropic.Tool = {
         minimum: 0,
         maximum: 1,
         description: "Your confidence that this is the right change to propose, from 0 to 1.",
+      },
+      evidenceQuotes: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Verbatim quotes copied directly from the source text (not paraphrased) that support any of the following IF present in proposedDiff: owner, status, or dueDate. Required whenever proposedDiff sets one of those fields -- if you can't quote text that actually supports it, don't set the field. Omit or leave empty when proposedDiff doesn't touch any of those three fields.",
       },
     },
     required: ["changeType", "targetType", "targetId", "proposedDiff", "reasoning", "confidence"],
@@ -170,6 +182,10 @@ operational_update vs. context -- pick carefully, since this changes which field
 - operational_update: the thing's actual current state changed -- status moved, there's a new latest-update or next-action. Use this when the source describes what IS true now.
 - context: the source adds useful background, history, or color on an objective/initiative/project/task, but does NOT itself change what's currently true right now (e.g. someone explains *why* a task is stalled, or gives detail behind a status that's already recorded). A context suggestion on an objective/initiative/project/task may only set description and owner -- status/latestUpdate/nextAction/priority are silently discarded even if you include them, because a context share must never overwrite the thing's actual current state. If the source genuinely does describe a state change, use operational_update instead, not context.
 
+Evidence requirement for owner/status/dueDate: these three fields get silently dropped from your proposedDiff after the fact unless evidenceQuotes contains a verbatim quote from the source that actually supports the value -- so don't bother setting owner, status, or dueDate unless you can also quote the exact text that justifies it. A quote must be copied directly from the source, not paraphrased or invented, or it won't be recognized as support. This applies to every changeType, not just context -- an operational_update proposing status: "blocked" needs the same evidence as anything else.
+
+Do not write the source's own ingestion date (given to you above as "Received: ...") into description/latestUpdate/nextAction/whyItMatters/relevantContext/suggestedNextStep as if the source itself stated that date -- e.g. don't produce "As of September 14, 2026, the vendor confirmed..." just because that happens to be when this message arrived. Only include a specific date in that kind of narrative text when the source body itself actually states it.
+
 proposedDiff rules -- each targetType only accepts these fields, anything else is discarded before it ever reaches the database:
 ${describeAllowedFields()}
 (a "context" changeType is further restricted per the operational_update vs. context rule above.)
@@ -213,6 +229,109 @@ function isKnownEntityId(
   return pool.some((entity) => entity.id === id);
 }
 
+// The fields the model can't set without pointing at supporting text -- the
+// same owner/status pair across every targetType except "decision", which
+// uses dueDate instead (a decision has no owner/status field of its own;
+// decider/stakeholders are a deliberate human call, not something an
+// inferred update should touch).
+const PROTECTED_HIERARCHY_FIELDS = ["owner", "status"] as const;
+const PROTECTED_DECISION_FIELDS = ["dueDate"] as const;
+
+function normalizeForMatch(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// True only if at least one quote is both non-empty and actually a substring
+// of the source body (whitespace/case-insensitive) -- a paraphrase or an
+// invented quote won't match, which is the point: this can't be satisfied by
+// the model merely asserting it has evidence.
+function quotesGroundedInSource(quotes: string[], sourceBody: string): boolean {
+  const normalizedSource = normalizeForMatch(sourceBody);
+  return quotes.some((quote) => {
+    const normalizedQuote = normalizeForMatch(quote);
+    return normalizedQuote.length > 0 && normalizedSource.includes(normalizedQuote);
+  });
+}
+
+// Drops owner/status (or dueDate, for a decision) from the diff in place
+// when no quoted evidence actually grounds them in the source -- the rest of
+// the diff (and the suggestion as a whole) still goes through. Mutates and
+// returns the same object rather than the usual immutable style, since the
+// caller already treats sanitizedDiff as a fresh object it owns.
+function stripUngroundedProtectedFields(
+  targetType: z.infer<typeof targetTypeSchema>,
+  diff: Record<string, unknown>,
+  evidenceQuotes: string[],
+  sourceBody: string,
+): Record<string, unknown> {
+  const protectedFields = targetType === "decision" ? PROTECTED_DECISION_FIELDS : PROTECTED_HIERARCHY_FIELDS;
+  const touchesProtectedField = protectedFields.some((field) => field in diff);
+  if (!touchesProtectedField) return diff;
+
+  if (!quotesGroundedInSource(evidenceQuotes, sourceBody)) {
+    for (const field of protectedFields) delete diff[field];
+  }
+  return diff;
+}
+
+// Narrative fields per targetType that stripFabricatedIngestionDate checks --
+// everything else in ALLOWED_FIELDS is either structural (title, ids) or
+// already covered by the protected-field check above.
+const NARRATIVE_FIELDS_BY_TARGET: Partial<Record<z.infer<typeof targetTypeSchema>, string[]>> = {
+  objective: ["description"],
+  initiative: ["description"],
+  project: ["description"],
+  task: ["description", "latestUpdate", "nextAction"],
+  decision: ["whyItMatters", "relevantContext", "suggestedNextStep"],
+};
+
+// A handful of common renderings of the same calendar date -- enough to catch
+// "the model restated its own ingestion timestamp as prose" without needing
+// real date parsing, which narrative text is too free-form for anyway.
+function receivedAtDateVariants(receivedAt: Date): string[] {
+  return [
+    receivedAt.toISOString().slice(0, 10),
+    receivedAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+    receivedAt.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }),
+  ];
+}
+
+// True when `text` contains the source's own ingestion date rendered as
+// prose, AND that date string does not itself appear anywhere in the source
+// body -- i.e. the source never said this date, but the model wrote it in
+// anyway, most likely by mistaking "when this arrived" for "a fact the
+// source stated." A source that genuinely does mention its own received date
+// (e.g. "as discussed on today's call") is left alone, since the date really
+// is grounded in that case.
+function containsFabricatedIngestionDate(text: string, receivedAt: Date, sourceBody: string): boolean {
+  const normalizedText = normalizeForMatch(text);
+  const normalizedSourceBody = normalizeForMatch(sourceBody);
+  return receivedAtDateVariants(receivedAt).some((variant) => {
+    const normalizedVariant = normalizeForMatch(variant);
+    return normalizedText.includes(normalizedVariant) && !normalizedSourceBody.includes(normalizedVariant);
+  });
+}
+
+// Drops (whole-field, not a surgical edit) any narrative field whose text
+// contains a fabricated ingestion date -- see containsFabricatedIngestionDate.
+// Deleting the field rather than trying to excise just the date avoids
+// leaving a mangled sentence behind; the rest of the diff is unaffected.
+function stripFieldsWithFabricatedDates(
+  targetType: z.infer<typeof targetTypeSchema>,
+  diff: Record<string, unknown>,
+  receivedAt: Date,
+  sourceBody: string,
+): Record<string, unknown> {
+  const narrativeFields = NARRATIVE_FIELDS_BY_TARGET[targetType] ?? [];
+  for (const field of narrativeFields) {
+    const value = diff[field];
+    if (typeof value === "string" && containsFabricatedIngestionDate(value, receivedAt, sourceBody)) {
+      delete diff[field];
+    }
+  }
+  return diff;
+}
+
 // Validates and sanitizes a single tool_use block's input. Returns the clean
 // draft, or a reason string if this particular item should be dropped --
 // never throws, so one bad item in a multi-item response doesn't take down
@@ -220,6 +339,7 @@ function isKnownEntityId(
 function validateSuggestionInput(
   input: unknown,
   context: CompanyContext,
+  source: InterpretSourceInput,
 ): { draft: SuggestionDraft } | { reason: string } {
   const parsed = suggestionToolInputSchema.safeParse(input);
   if (!parsed.success) {
@@ -238,7 +358,9 @@ function validateSuggestionInput(
   // Re-sanitize proposedDiff through the same whitelist apply.ts enforces, so
   // a malformed or adversarial tool response can't smuggle extra fields
   // through even before it gets anywhere near a DB write.
-  const sanitizedDiff = pickAllowedFields(draft.targetType, draft.changeType, draft.proposedDiff);
+  let sanitizedDiff = pickAllowedFields(draft.targetType, draft.changeType, draft.proposedDiff);
+  sanitizedDiff = stripUngroundedProtectedFields(draft.targetType, sanitizedDiff, draft.evidenceQuotes, source.body);
+  sanitizedDiff = stripFieldsWithFabricatedDates(draft.targetType, sanitizedDiff, source.receivedAt, source.body);
 
   return {
     draft: {
@@ -292,7 +414,7 @@ export async function interpretSource(
 
   const drafts: SuggestionDraft[] = [];
   for (const toolUse of accepted) {
-    const result = validateSuggestionInput(toolUse.input, context);
+    const result = validateSuggestionInput(toolUse.input, context, source);
     if ("draft" in result) {
       drafts.push(result.draft);
     } else {

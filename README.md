@@ -866,11 +866,36 @@ Built:
   distinction and which fields context is restricted to, so the model is
   steered toward the right changeType up front rather than relying on
   fields being silently stripped after the fact.
+- **Evidence grounding for `owner`/`status`/`dueDate`, and a fabricated-
+  ingestion-date guard.** Closes another real gap: nothing previously
+  stopped the model from writing a plausible-sounding but ungrounded owner,
+  status, or due date straight into a suggestion at full confidence. The
+  `propose_suggestion` tool now has an `evidenceQuotes` field (verbatim
+  quotes from the source); whenever `proposedDiff` sets `owner` or `status`
+  on a hierarchy target, or `dueDate` on a decision,
+  [interpret.ts](backend/src/interpretation/interpret.ts)'s
+  `stripUngroundedProtectedFields` checks that at least one quote is an
+  actual (whitespace/case-insensitive) substring of the raw source body --
+  an invented or paraphrased "quote" doesn't count, since it won't literally
+  match. If nothing grounds it, only that field is dropped; the rest of the
+  diff (and the suggestion itself) still goes through for review. Separately,
+  `stripFieldsWithFabricatedDates` catches a specific hallucination pattern
+  seen in practice: the model restating the source's own ingestion date
+  (`Received: ...` in the prompt) as if the source had stated it -- e.g.
+  writing "As of September 14, 2026, the vendor confirmed..." purely because
+  that's when the message happened to arrive. It checks a few common
+  renderings of the source's `receivedAt` against both the proposed text and
+  the source body itself: if the date appears in the proposal but the source
+  never actually said it, the whole field is dropped (not surgically edited,
+  to avoid leaving a mangled sentence behind) -- a source that genuinely does
+  reference its own received date is left alone. Both checks run inside
+  `validateSuggestionInput`, after `pickAllowedFields`, so they apply
+  regardless of changeType. `SYSTEM_PROMPT` explains both requirements up
+  front so the model doesn't waste a call on a field that'll just get
+  stripped.
 
 Explicitly **not** built yet (next sessions):
-- Evidence grounding for AI-proposed owner/status/dates (verifying a quoted
-  claim actually appears in the source before it reaches the review queue),
-  cross-source deduplication (a newer source enriching an existing pending
+- Cross-source deduplication (a newer source enriching an existing pending
   suggestion instead of creating a second review card), explicit temporal/
   negation reasoning ("planned ≠ happened", recognizing a correction rather
   than reinforcement), a typed relationship graph between Company Map

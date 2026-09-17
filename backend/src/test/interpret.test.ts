@@ -122,6 +122,9 @@ describe("interpretSource", () => {
         },
         reasoning: "Matches the existing rig #3 sensor dropout task.",
         confidence: 0.85,
+        // Grounds the proposed status -- see "requires evidenceQuotes..."
+        // tests below for what happens when this is missing.
+        evidenceQuotes: ["Happened again today"],
       }),
     );
 
@@ -145,6 +148,12 @@ describe("interpretSource", () => {
       ...emptyContext(),
       tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
     };
+    // Custom body (not the shared `source`) so evidenceQuotes has real text
+    // to ground the proposed owner against.
+    const ownerSource = {
+      ...source,
+      body: "Vendor confirmed the root cause was a bad harness batch, not firmware. Sean Meehan is coordinating the replacement.",
+    };
     const client = stubClient(
       fakeToolUseMessage({
         changeType: "context",
@@ -159,16 +168,178 @@ describe("interpretSource", () => {
         },
         reasoning: "Background info on an already-tracked task, not a state change.",
         confidence: 0.7,
+        evidenceQuotes: ["Sean Meehan is coordinating the replacement"],
       }),
     );
 
-    const drafts = await interpretSource(source, context, client);
+    const drafts = await interpretSource(ownerSource, context, client);
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0].proposedDiff).toEqual({
       description: "Vendor confirmed the root cause was a bad harness batch, not firmware.",
       owner: "Sean Meehan",
     });
+  });
+
+  it("drops owner when evidenceQuotes is empty, even though nothing else in the diff is affected", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "operational_update",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: { owner: "Sean Meehan", latestUpdate: "Progress continues." },
+        reasoning: "test",
+        confidence: 0.8,
+        // No evidenceQuotes at all -- owner must not survive.
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff).toEqual({ latestUpdate: "Progress continues." });
+  });
+
+  it("drops owner when the evidenceQuote is invented rather than an actual substring of the source", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "operational_update",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: { owner: "Sean Meehan" },
+        reasoning: "test",
+        confidence: 0.8,
+        // Not actually present in `source.body` -- an invented quote must not
+        // satisfy the grounding check.
+        evidenceQuotes: ["Sean Meehan confirmed he owns this"],
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff.owner).toBeUndefined();
+  });
+
+  it("evidence matching is whitespace/case-insensitive", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const messySource = { ...source, body: "Status:   BLOCKED\n\n  waiting on the vendor part." };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "operational_update",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: { status: "blocked" },
+        reasoning: "test",
+        confidence: 0.8,
+        evidenceQuotes: ["status: blocked"],
+      }),
+    );
+
+    const drafts = await interpretSource(messySource, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff.status).toBe("blocked");
+  });
+
+  it("drops dueDate on an ungrounded decision update, leaving the rest of the diff intact", async () => {
+    const decisionId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      decisions: [{ id: decisionId, title: "Approve vendor switch", status: "open", decider: "CEO", whyItMatters: null }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "deadline",
+        targetType: "decision",
+        targetId: decisionId,
+        proposedDiff: { dueDate: "2026-12-01", relevantContext: "Vendor requested a firmer timeline." },
+        reasoning: "test",
+        confidence: 0.6,
+        // No evidenceQuotes -- dueDate must be dropped, relevantContext (not
+        // a protected field) must survive.
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff).toEqual({ relevantContext: "Vendor requested a firmer timeline." });
+  });
+
+  it("strips a narrative field that restates the source's own ingestion date as if the source had said it", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const dated = {
+      ...source,
+      receivedAt: new Date("2026-09-14T12:00:00Z"),
+      body: "Vendor confirmed pricing is firm for the replacement part.",
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "operational_update",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: {
+          latestUpdate: "As of September 14, 2026, the vendor confirmed pricing is firm.",
+          nextAction: "Order the part.",
+        },
+        reasoning: "test",
+        confidence: 0.7,
+      }),
+    );
+
+    const drafts = await interpretSource(dated, context, client);
+
+    expect(drafts).toHaveLength(1);
+    // latestUpdate is dropped entirely (not surgically edited); nextAction,
+    // which doesn't mention the fabricated date, survives untouched.
+    expect(drafts[0].proposedDiff).toEqual({ nextAction: "Order the part." });
+  });
+
+  it("keeps a narrative field's date when the source itself genuinely states that date", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
+    };
+    const dated = {
+      ...source,
+      receivedAt: new Date("2026-09-14T12:00:00Z"),
+      body: "Meeting notes from September 14, 2026: vendor confirmed pricing is firm.",
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "operational_update",
+        targetType: "task",
+        targetId: taskId,
+        proposedDiff: { latestUpdate: "As of September 14, 2026, the vendor confirmed pricing is firm." },
+        reasoning: "test",
+        confidence: 0.7,
+      }),
+    );
+
+    const drafts = await interpretSource(dated, context, client);
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff.latestUpdate).toBe("As of September 14, 2026, the vendor confirmed pricing is firm.");
   });
 
   it("accepts a new_task proposal with targetId null", async () => {
@@ -488,6 +659,7 @@ describe("interpretSource", () => {
       ...emptyContext(),
       tasks: [{ id: taskId, title: "Rig #3 sensor dropout", status: "active" }],
     };
+    const ownerSource = { ...source, body: "Sean is now handling the rig #3 wiring fix." };
     const client = stubClient(
       fakeToolUseMessage({
         changeType: "operational_update",
@@ -496,10 +668,11 @@ describe("interpretSource", () => {
         proposedDiff: { owner: "Sean Meehan" },
         reasoning: "Email says Sean is now handling the rig #3 wiring fix.",
         confidence: 0.8,
+        evidenceQuotes: ["Sean is now handling the rig #3 wiring fix"],
       }),
     );
 
-    const drafts = await interpretSource(source, context, client);
+    const drafts = await interpretSource(ownerSource, context, client);
 
     expect(drafts).toHaveLength(1);
     expect(drafts[0].proposedDiff.owner).toBe("Sean Meehan");
