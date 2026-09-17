@@ -28,6 +28,11 @@ export interface Suggestion {
     externalId: string;
     receivedAt: string;
   };
+  // The live target row's values for exactly the fields proposedDiff touches
+  // -- null for a brand-new entity (targetId null), or if the target can't
+  // be resolved. Lets the review card show "current -> proposed" instead of
+  // just the proposed value in isolation.
+  currentState: Record<string, unknown> | null;
 }
 
 export async function fetchCurrentUser(): Promise<SessionUser | null> {

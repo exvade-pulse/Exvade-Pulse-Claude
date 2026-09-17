@@ -5,12 +5,23 @@ import { createFixtureOrg } from "./fixtures.js";
 import { auditLog, decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 import { createDecision, DecisionError } from "../decisions/manage.js";
+import { buildApp } from "../app.js";
+import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 
 const { db, client } = testDb();
 
 afterAll(async () => {
   await client.end();
 });
+
+async function tokenFor(fixture: Awaited<ReturnType<typeof createFixtureOrg>>) {
+  return signSession({
+    userId: fixture.user.id,
+    organizationId: fixture.org.id,
+    email: fixture.user.email,
+    role: fixture.authorization.role,
+  });
+}
 
 describe("suggestion approval", () => {
   beforeEach(async () => {
@@ -689,5 +700,154 @@ describe("suggestion editing", () => {
     const [task] = await db.select().from(tasks).where(eq(tasks.id, approved.targetId!));
     expect(task.title).toBe("Edited title");
     expect(task.nextAction).toBe("Original action");
+  });
+});
+
+describe("GET /api/suggestions currentState", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("includes only the fields the diff actually touches, pulled from the live target row", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "current-state-update.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({
+        organizationId: fixture.org.id,
+        projectId: fixture.project.id,
+        title: "Original title",
+        status: "active",
+        latestUpdate: "Original latest update",
+        owner: "Someone else",
+      })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: existingTask.id,
+      changeType: "operational_update",
+      proposedDiff: { status: "blocked", latestUpdate: "New update text" },
+      reasoning: "test",
+      confidence: 0.8,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { suggestions: Array<{ currentState: Record<string, unknown> | null }> };
+    expect(body.suggestions).toHaveLength(1);
+    // Only status/latestUpdate -- title/owner aren't in the diff, so they
+    // must not leak into currentState even though they exist on the row.
+    expect(body.suggestions[0].currentState).toEqual({
+      status: "active",
+      latestUpdate: "Original latest update",
+    });
+  });
+
+  it("is null for a suggestion proposing a brand-new entity (targetId null)", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "current-state-new.test" });
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: null,
+      changeType: "new_task",
+      proposedDiff: { projectId: fixture.project.id, title: "Brand new task" },
+      reasoning: "test",
+      confidence: 0.6,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { suggestions: Array<{ currentState: unknown }> };
+    expect(body.suggestions[0].currentState).toBeNull();
+  });
+
+  it("works for a decision target, reflecting the decision's own current fields", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "current-state-decision.test" });
+
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "Approve vendor switch",
+      decider: "CEO",
+      relevantContext: "Original context.",
+    });
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "decision",
+      targetId: decision.id,
+      changeType: "context",
+      proposedDiff: { relevantContext: "Updated context from a follow-up email." },
+      reasoning: "test",
+      confidence: 0.7,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { suggestions: Array<{ currentState: Record<string, unknown> | null }> };
+    expect(body.suggestions[0].currentState).toEqual({ relevantContext: "Original context." });
+  });
+
+  it("never leaks another organization's current-state data", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "current-state-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "current-state-org-b.test" });
+
+    const [taskB] = await db
+      .insert(tasks)
+      .values({ organizationId: orgB.org.id, projectId: orgB.project.id, title: "Org B task", status: "active" })
+      .returning();
+
+    // A suggestion in org A's own queue, but pointed (however implausibly)
+    // at a task id that happens to belong to org B -- loadCurrentStates must
+    // still org-scope the lookup rather than trusting targetId alone.
+    await db.insert(suggestions).values({
+      organizationId: orgA.org.id,
+      sourceId: orgA.source.id,
+      targetType: "task",
+      targetId: taskB.id,
+      changeType: "operational_update",
+      proposedDiff: { status: "blocked" },
+      reasoning: "test",
+      confidence: 0.5,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(orgA) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { suggestions: Array<{ currentState: unknown }> };
+    expect(body.suggestions[0].currentState).toBeNull();
   });
 });

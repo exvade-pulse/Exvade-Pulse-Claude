@@ -893,6 +893,25 @@ Built:
   regardless of changeType. `SYSTEM_PROMPT` explains both requirements up
   front so the model doesn't waste a call on a field that'll just get
   stripped.
+- **Current-vs-proposed state on the review card**, closing the gap where a
+  suggestion showed what the AI wants to change a field to but not what it
+  currently is. `GET /api/suggestions`
+  ([backend/src/routes/suggestions.ts](backend/src/routes/suggestions.ts))
+  now also returns `currentState` per suggestion: `loadCurrentStates` batch-
+  fetches (one query per targetType actually present among the returned
+  rows, not N+1) the live row for every suggestion's `(targetType,
+  targetId)`, org-scoped, then `pickCurrentStateFields` narrows each one
+  down to just the keys the suggestion's own `proposedDiff` touches --
+  `null` for a brand-new entity (`targetId` null) or an unresolved target.
+  The frontend's `formatDiffWithCurrentState`
+  ([frontend/lib/formatDiff.ts](frontend/lib/formatDiff.ts)) renders
+  `field: current → proposed` for any key present in both, falling back to
+  the old plain `field: proposed` form otherwise; wired into
+  [frontend/app/review/page.tsx](frontend/app/review/page.tsx)'s pending
+  queue only -- the Approved/Rejected history tabs keep the plain diff,
+  since by the time something's approved `currentState` and the proposed
+  value are usually the same thing, which would read as a confusing no-op
+  arrow.
 
 Explicitly **not** built yet (next sessions):
 - Cross-source deduplication (a newer source enriching an existing pending

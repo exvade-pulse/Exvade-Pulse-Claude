@@ -12,7 +12,7 @@ import {
   type SessionUser,
   type Suggestion,
 } from "../../lib/api";
-import { formatDiff, HIDDEN_DIFF_KEYS } from "../../lib/formatDiff";
+import { formatDiff, formatDiffWithCurrentState, HIDDEN_DIFF_KEYS } from "../../lib/formatDiff";
 import { Nav } from "../components/Nav";
 import { SourceToggle } from "../components/SourceToggle";
 
@@ -190,7 +190,9 @@ export default function ReviewPage() {
             ))}
           </div>
         ) : (
-          <p className="card-diff">{formatDiff(s.proposedDiff)}</p>
+          <p className="card-diff">
+            {isHistory ? formatDiff(s.proposedDiff) : formatDiffWithCurrentState(s.proposedDiff, s.currentState)}
+          </p>
         )}
 
         <p className="card-reasoning">{s.reasoning}</p>
