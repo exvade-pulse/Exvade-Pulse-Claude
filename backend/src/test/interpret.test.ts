@@ -79,7 +79,7 @@ describe("interpretSource", () => {
     // tool_choice is auto, verified empirically against the real API.
     expect(capture.params?.tool_choice).toEqual({ type: "auto" });
     expect(capture.params?.thinking).toEqual({ type: "adaptive" });
-    expect(capture.params?.output_config).toEqual({ effort: "xhigh" });
+    expect(capture.params?.output_config).toEqual({ effort: "high" });
     const userContent = capture.params?.messages[0]?.content as string;
     expect(userContent).toContain(taskId);
     expect(userContent).toContain("Rig #3 sensor dropout");

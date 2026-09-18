@@ -412,11 +412,17 @@ export async function interpretSource(
     // real headroom -- 4096 was sized for tool-call output alone.
     max_tokens: 16000,
     thinking: { type: "adaptive" },
-    // xhigh over the default high: this pass's actual job -- decompose a
-    // messy multi-topic update into distinct items and match each one
-    // against existing context -- is exactly the kind of harder reasoning
-    // task where the step up earns its cost.
-    output_config: { effort: "xhigh" },
+    // Deliberately the platform default ("high"), not xhigh -- measured
+    // against real documents, xhigh let thinking run away on some inputs
+    // (observed: 15999 of a 16000 max_tokens budget spent entirely on
+    // thinking, response cut off mid-thought with stop_reason "max_tokens"
+    // and zero tool_use output, on a document with a genuinely small
+    // context). "high" is what every successful interpretation call this
+    // session has run under before thinking was even enabled, so it's the
+    // proven-stable choice; revisit only alongside raising max_tokens and
+    // switching to a streaming call (large max_tokens needs streaming to
+    // avoid non-streaming HTTP timeouts).
+    output_config: { effort: "high" },
     // SYSTEM_PROMPT is static and identical on every call; the dynamic
     // per-call content (company context + document body) lives entirely in
     // buildUserMessage below and is deliberately left uncached.
