@@ -4,7 +4,14 @@ import { config } from "../config.js";
 import * as schema from "./schema.js";
 
 export function createDb(connectionString: string) {
-  const client = postgres(connectionString, { max: 10 });
+  // Explicit, not relying on the connecting role's default search_path:
+  // Neon's pooler can hand back a physical connection whose session state
+  // (including search_path) was left behind by a prior, unrelated client --
+  // e.g. a psql session running a plain SQL dump/restore, whose preamble
+  // resets search_path to empty. Setting it here sends it as a startup
+  // parameter on every connection this pool opens, so query results never
+  // depend on what state some previous occupant of a pooled connection left.
+  const client = postgres(connectionString, { max: 10, connection: { search_path: "public" } });
   return { client, db: drizzle(client, { schema }) };
 }
 

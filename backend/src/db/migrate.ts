@@ -12,7 +12,9 @@ async function main() {
   // this forever with zero output -- on a host with no pre-deploy hook (see
   // Dockerfile's CMD comment), that looks identical to a slow build from the
   // outside. Fail loud and fast instead.
-  const client = postgres(connectionString, { max: 1, connect_timeout: 10 });
+  // See db/client.ts's createDb for why search_path is set explicitly rather
+  // than left to the connection's default.
+  const client = postgres(connectionString, { max: 1, connect_timeout: 10, connection: { search_path: "public" } });
   const db = drizzle(client);
   await migrate(db, { migrationsFolder: "./drizzle" });
   await client.end();
