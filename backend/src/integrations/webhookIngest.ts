@@ -68,11 +68,13 @@ export async function ingestCirclebackWebhook(
       externalId: meta.externalId,
       subject: meta.title,
       from: "Circleback",
-      // The full raw JSON payload, verbatim -- this is what lands in
-      // sources.rawBody, so nothing is lost even where the field-name
-      // guessing above misses. It's also what the interpretation pass reads,
-      // same as pipeline.ts already does for gmail sources.
-      body: rawBodyText,
+      // Extracted notes + action items, not the full raw JSON envelope (see
+      // circlebackPayload.ts's ParsedCirclebackMeta.body) -- both what lands
+      // in sources.rawBody and what interpretation reads. Verified against a
+      // real delivery: the full envelope's attendees/tags/signed-recording-
+      // URL noise wasn't worth either storing long-term or making the
+      // interpretation pass read through.
+      body: meta.body,
       receivedAt: meta.occurredAt,
     });
 

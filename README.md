@@ -470,27 +470,34 @@ Built:
     unrecognized token 401s (identically either way, so nothing about *why* a
     token failed is leaked) before anything is looked at, let alone ingested.
     A valid token resolves straight to an organization (the token itself picks
-    the org — Circleback never sends one). Payload field names are guessed
-    defensively across plausible variants (`title`/`name`/`meetingTitle`,
-    `id`/`meetingId`/`externalId`, `occurredAt`/`date`/`startTime`, etc. — see
-    [backend/src/integrations/circlebackPayload.ts](backend/src/integrations/circlebackPayload.ts))
-    to populate the `sources` row's title/external id/received-at, falling back
-    to a hash of the raw body for the id if nothing recognizable is present —
-    **we do not have real Circleback payload docs for this**, so these field
-    names are a best guess and should be verified against a real payload the
-    first time a live Circleback automation is connected. The full raw JSON
-    body is always stored verbatim as `sources.rawBody`, regardless of what the
-    field-name guessing finds, so nothing is ever lost to a parsing miss. From
-    there it's a straight handoff into the existing, source-type-agnostic
-    `runInterpretationPipeline` ([backend/src/interpretation/pipeline.ts](backend/src/interpretation/pipeline.ts)) —
+    the org — Circleback never sends one). Payload field names — see
+    [backend/src/integrations/circlebackPayload.ts](backend/src/integrations/circlebackPayload.ts)
+    — are **verified against a real delivery**: `name` (title), `id` (external
+    id), `createdAt` (date), `notes`, and `actionItems` (an array of `{title,
+    description, assignee: {name, email}, status}`, though a plain array of
+    strings is also handled defensively). The extracted `notes` plus a
+    formatted rendering of `actionItems` — not the full raw JSON envelope — is
+    what becomes both `sources.rawBody` and what the interpretation pass
+    reads; a real payload's envelope (attendees, tags, a recording URL that
+    itself expires in 24h) isn't worth either storing long-term or making
+    interpretation read through. Falls back to the full raw JSON when neither
+    field is found, so an unrecognized shape still keeps something to
+    interpret rather than an empty body. From there it's a straight handoff
+    into the existing, source-type-agnostic `runInterpretationPipeline`
+    ([backend/src/interpretation/pipeline.ts](backend/src/interpretation/pipeline.ts)) —
     no pipeline changes were needed. Runs synchronously in-request (no job
-    queue exists in this codebase yet); a comment in `webhookIngest.ts` flags
-    this as the thing to change if/when ingestion volume grows. A repeat
-    delivery of the same `(organizationId, externalId)` — Circleback retries on
-    a non-200 response or timeout — hits the `sources` table's existing unique
-    index and is caught and answered 200 idempotently rather than erroring; a
-    genuine downstream failure (e.g. the Claude API call) leaves the already-
-    inserted `sources` row in place and answers 5xx so Circleback retries.
+    queue exists in this codebase yet); observed against a real ~12KB meeting
+    payload, redaction + noise-filter + interpretation together took roughly
+    two minutes end-to-end (extended thinking, see the interpretation
+    section above, is most of that) — long enough to look like a hang from
+    Circleback's side even though it completes successfully, and the
+    strongest real signal yet for the async-queue move flagged as a known gap
+    below. A repeat delivery of the same `(organizationId, externalId)` —
+    Circleback retries on a non-200 response or timeout — hits the `sources`
+    table's existing unique index and is caught and answered 200 idempotently
+    rather than erroring; a genuine downstream failure (e.g. the Claude API
+    call) leaves the already-inserted `sources` row in place and answers 5xx
+    so Circleback retries.
   - Frontend: [frontend/app/integrations/page.tsx](frontend/app/integrations/page.tsx)
     (admin-only, linked from the nav like `/users`) shows each integration
     type's status and last-received time, a Generate/Rotate token button
@@ -500,9 +507,8 @@ Built:
   - **To connect a real Circleback account:** an admin generates a token on
     `/integrations`, copies the webhook URL, and pastes it into a Circleback
     automation configured to send meeting notes and action items (transcript
-    optional) — no code changes needed. Given the lack of real payload docs,
-    the first live delivery is the point to double-check the field-name
-    guessing above actually matches.
+    optional) — no code changes needed. Actually connected and verified
+    against a real delivery (see the field-name note above).
 - Real inbound-email ingestion, closing the kickoff spec's original "forward an
   email, same as today" priority — until now the only way an email reached the
   interpretation pipeline was running `npm run interpret:real -w backend` by
@@ -1139,7 +1145,11 @@ Built:
   but no real provider has been wired up yet — see the email integration section
   above).
 - An async job queue for webhook ingestion (Circleback and email webhooks
-  currently both run the interpretation pipeline synchronously in-request).
+  currently both run the interpretation pipeline synchronously in-request —
+  observed at roughly two minutes end-to-end against a real Circleback
+  payload, see the Circleback section above; not broken, but long enough to
+  be the clearest real argument yet for this becoming a real problem at
+  higher volume or on a sender with a shorter delivery timeout).
 - Styling polish beyond "readable and scannable."
 
 ## Security notes
