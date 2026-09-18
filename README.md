@@ -232,12 +232,23 @@ Built:
     creating one.
   - [backend/src/interpretation/interpret.ts](backend/src/interpretation/interpret.ts) —
     the real interpretation pass (Claude Sonnet), given a source and the
-    org's current open objectives/initiatives/projects/tasks. Uses forced
-    tool-use for structured output, strongly prefers matching/updating an
-    existing item over proposing something new, and validates the model's
-    response (schema, target-type/target-id membership in the context it was
-    given, and the same field whitelist `suggestions/apply.ts` enforces)
-    before it's trusted.
+    org's current open objectives/initiatives/projects/tasks. `tool_choice`
+    is deliberately `auto`, not forced -- Sonnet 5 only runs extended
+    thinking (`adaptive`, `effort: "xhigh"`) when tool_choice is auto,
+    verified empirically against the real API, and giving the model room to
+    actually reason before deciding how to decompose a multi-topic source and
+    match each piece against existing context is the point of this pass. It
+    strongly prefers matching/updating an existing item over proposing
+    something new, and validates the model's response (schema,
+    target-type/target-id membership in the context it was given, and the
+    same field whitelist `suggestions/apply.ts` enforces) before it's
+    trusted. A task can only be created under a project that already exists
+    -- when a source names a distinct, individually-owned action item whose
+    real project doesn't exist yet, the prompt directs the model to a
+    standing "Unsorted / Needs Triage" project (a real Objective ->
+    Initiative -> Project a human creates once per org) rather than losing
+    that item into some other entity's description text; a human re-files it
+    into real structure later.
   - [backend/src/interpretation/pipeline.ts](backend/src/interpretation/pipeline.ts) —
     wires the above into one call: insert `sources` row → noise filter →
     interpretation → insert `suggestions` row (or stop, keeping the source

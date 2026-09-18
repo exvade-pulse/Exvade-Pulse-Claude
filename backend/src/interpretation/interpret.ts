@@ -164,11 +164,17 @@ You will be given the company's current open objectives/initiatives/projects/tas
 
 Most sources are about a single topic and warrant exactly one propose_suggestion call. Some sources, though -- a weekly company update, a broad meeting-minutes doc -- genuinely cover several unrelated workstreams (e.g. finance, engineering, regulatory, and grants all in one document). For a source like that, call propose_suggestion once per genuinely distinct topic/target, so each gets its own clear diff and reasoning instead of one call vaguely trying to cover everything. This is NOT license to fragment a single coherent update into many redundant calls -- one call per genuinely distinct topic or target, never one call per sentence or per minor detail within the same topic. When in doubt about whether two things are "the same topic," they usually are; only split when the topics are truly unrelated to each other.
 
+Topical similarity alone is not the only signal for whether something deserves its own call, though. Within what reads as one broad status update, a specific action item with its own named owner and its own concrete deliverable (e.g. "finalize remaining charges -- Harold/Sean", "schedule review meeting -- Nassir/Sean", "CO for assembly sample sizes -- Sean/Don") is worth its own new_task or operational_update call even if it shares a parent theme with other items in the same paragraph -- a distinct owner and a distinct deliverable is what makes something individually trackable and assignable, which is the whole point of this system, and lumping several of those into one context update on the parent initiative loses that. Reserve a single broad context/operational_update call for content that is genuinely just narrative color with no separately actionable, separately owned piece inside it.
+
+Use your extended thinking to actually work through this before calling the tool: identify every distinct action item in the source first (what is it, who owns it, is it new or a continuation of something tracked), decide for each one individually whether it matches an existing objective/initiative/project/task or is genuinely new, and only then make your propose_suggestion call(s). Since every source reaching you has already passed a cheaper noise filter, you should almost always find at least one real, worthwhile call to make -- responding with nothing is the rare exception, not a safe default when a source is merely hard to parse.
+
 The hardest and most important part of this job: deciding whether the source is about something already being tracked, or is genuinely new.
 
 Strongly prefer matching the source to an EXISTING objective, initiative, project, or task over proposing a new one. Most incoming communication is a status update, a blocker, a decision, or new context on work that is already tracked -- not something brand new. Read the existing titles carefully and look for the same underlying subject matter, even if the wording differs (e.g. "rig #3 sensor issue" and "bench testing sensor dropout" are very likely the same task). If a plausible match exists, propose an update to it (targetId set to that entity's real id) rather than creating a duplicate.
 
 Only propose creating something new (targetId: null) when nothing existing plausibly matches -- every unnecessary new_task/new project/etc. fragments the picture the company relies on and creates duplicate-tracking work for the human reviewer. When genuinely uncertain between "update this existing item" and "this is new", prefer the existing item and lower your confidence rather than defaulting to new.
+
+A task needs a real, existing project to attach to (proposedDiff.projectId must reference a project id given to you in context) -- you cannot create a task under a project, initiative, or objective that doesn't exist yet in the same call. When a source names a specific, individually actionable, individually owned item (a distinct deliverable with a named owner) but its real workstream has no project yet, do not fall back to describing it only in prose on some other entity's context/operational_update -- instead propose the task as a new_task under the project literally titled "Unsorted / Needs Triage" (it always exists for exactly this purpose), so it's still tracked as its own item with its own owner and status rather than buried in someone else's description text. Say in your reasoning that it belongs somewhere else once that structure exists, so a human knows to re-file it later. Reserve the "describe it in the parent's context/operational_update instead" approach for content that is genuinely just narrative color, not a separately-owned action item.
 
 Not every source calls for a change to the objective/initiative/project/task tree. Some describe something that genuinely needs a human decision -- a real choice with consequences that a specific person or group needs to make, not just a status update or a routine next action. Propose a decision (targetType: "decision") for that kind of open question. For example: "the fractional CFO engagement's scope still needs to be clarified with leadership" is a decision -- someone has to actually choose an answer. "The firmware patch passed testing" is not a decision -- it is an operational update to the relevant task, even though it is worth recording. When genuinely unsure whether something is a decision or a routine update, prefer the routine update: decisions are for real open questions that need a human call, not for every piece of news.
 
@@ -385,10 +391,16 @@ function validateSuggestionInput(
 // Returns one to several SuggestionDrafts for a single source. Most sources
 // yield exactly one; a genuinely multi-topic source (see SYSTEM_PROMPT) may
 // yield several parallel tool_use blocks in the same response. tool_choice
-// "any" forces at least one propose_suggestion call while leaving Claude's
-// default parallel tool use enabled, so it can emit more than one when
-// warranted -- unlike the old forced-single-tool choice, which capped it at
-// exactly one no matter what the source contained.
+// is deliberately "auto", not the old forced "any": Sonnet 5 only runs
+// extended thinking when tool_choice is auto (empirically verified -- forced
+// tool use returns zero thinking tokens regardless of the thinking param),
+// and giving the model room to actually reason before deciding how to split
+// a multi-topic source into distinct, correctly-matched items is the whole
+// point of this pass. The SYSTEM_PROMPT's "always call the tool" guidance
+// below is what keeps this from regressing to text-only non-answers now that
+// nothing structurally forces a tool call -- and if it ever does, pipeline.ts
+// already treats that identically to "found nothing worth proposing", not a
+// crash.
 export async function interpretSource(
   source: InterpretSourceInput,
   context: CompanyContext,
@@ -396,12 +408,20 @@ export async function interpretSource(
 ): Promise<SuggestionDraft[]> {
   const response = await claudeClient.createMessage({
     model: INTERPRETATION_MODEL,
-    max_tokens: 4096,
+    // Extended thinking plus a document with several distinct items needs
+    // real headroom -- 4096 was sized for tool-call output alone.
+    max_tokens: 16000,
+    thinking: { type: "adaptive" },
+    // xhigh over the default high: this pass's actual job -- decompose a
+    // messy multi-topic update into distinct items and match each one
+    // against existing context -- is exactly the kind of harder reasoning
+    // task where the step up earns its cost.
+    output_config: { effort: "xhigh" },
     // SYSTEM_PROMPT is static and identical on every call; the dynamic
     // per-call content (company context + document body) lives entirely in
     // buildUserMessage below and is deliberately left uncached.
     system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-    tool_choice: { type: "any" },
+    tool_choice: { type: "auto" },
     tools: [PROPOSE_SUGGESTION_TOOL],
     messages: [{ role: "user", content: buildUserMessage(source, context) }],
   });

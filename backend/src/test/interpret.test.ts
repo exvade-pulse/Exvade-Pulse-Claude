@@ -75,7 +75,11 @@ describe("interpretSource", () => {
     await interpretSource(source, context, client);
 
     expect(capture.params?.model).toBe(INTERPRETATION_MODEL);
-    expect(capture.params?.tool_choice).toEqual({ type: "any" });
+    // auto, not forced -- Sonnet 5 only runs extended thinking when
+    // tool_choice is auto, verified empirically against the real API.
+    expect(capture.params?.tool_choice).toEqual({ type: "auto" });
+    expect(capture.params?.thinking).toEqual({ type: "adaptive" });
+    expect(capture.params?.output_config).toEqual({ effort: "xhigh" });
     const userContent = capture.params?.messages[0]?.content as string;
     expect(userContent).toContain(taskId);
     expect(userContent).toContain("Rig #3 sensor dropout");
