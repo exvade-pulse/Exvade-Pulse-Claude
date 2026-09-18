@@ -571,14 +571,44 @@ export interface GeneratedIntegrationToken {
   lastReceivedAt: string | null;
 }
 
-export async function fetchIntegrations(): Promise<IntegrationStatus[] | "forbidden"> {
+export interface GmailConnectionStatus {
+  connected: boolean;
+  emailAddress: string | null;
+  connectedAt: string | null;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  totalSuggestions: number;
+}
+
+export interface GmailSyncResult {
+  messagesFound: number;
+  suggestionsCreated: number;
+  errors: number;
+}
+
+export async function fetchIntegrations(): Promise<{ integrations: IntegrationStatus[]; gmail: GmailConnectionStatus } | "forbidden"> {
   const res = await fetch(`${API_URL}/api/integrations`, { credentials: "include" });
   if (res.status === 403) return "forbidden";
   if (!res.ok) {
     throw new Error(`Failed to load integrations (${res.status})`);
   }
-  const body = (await res.json()) as { integrations: IntegrationStatus[] };
-  return body.integrations;
+  return res.json();
+}
+
+export async function triggerGmailSync(): Promise<GmailSyncResult> {
+  const res = await fetch(`${API_URL}/api/integrations/gmail/sync`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Gmail sync failed");
+  }
+  return res.json();
+}
+
+export async function disconnectGmail(): Promise<void> {
+  const res = await fetch(`${API_URL}/api/integrations/gmail`, { method: "DELETE", credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to disconnect Gmail (${res.status})`);
+  }
 }
 
 export interface IntegrationActivityItem {
@@ -592,6 +622,18 @@ export async function fetchIntegrationActivity(type: IntegrationType): Promise<I
   const res = await fetch(`${API_URL}/api/integrations/${type}/activity`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to load ${type} activity (${res.status})`);
+  }
+  const body = (await res.json()) as { activity: IntegrationActivityItem[] };
+  return body.activity;
+}
+
+// Not IntegrationType-parameterized like the function above -- "gmail" is a
+// real connection (gmailConnections), not a webhookIntegrations row, so it
+// has its own route even though the underlying activity query is identical.
+export async function fetchGmailActivity(): Promise<IntegrationActivityItem[]> {
+  const res = await fetch(`${API_URL}/api/integrations/gmail/activity`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load Gmail activity (${res.status})`);
   }
   const body = (await res.json()) as { activity: IntegrationActivityItem[] };
   return body.activity;

@@ -584,6 +584,83 @@ Built:
     frontend ([frontend/app/integrations/page.tsx](frontend/app/integrations/page.tsx))
     adds a "Suggestions" column and a per-row "View activity" toggle that
     lazy-loads the log for just that integration type.
+- A real, live Gmail pull integration — a genuine OAuth connection to a
+  specific inbox that's polled for new mail, as opposed to the push-based
+  webhook integrations above (which still need a real provider connected to
+  actually deliver anything). Deliberately a separate mechanism, not another
+  `webhookIntegrations`/`integrationTypeEnum` row:
+  - `gmail_connections` ([backend/src/db/schema.ts](backend/src/db/schema.ts))
+    is one row per org, holding the connected mailbox's address, a real
+    (reversible) OAuth refresh token — unlike `webhookIntegrations`' one-way
+    token hash, a refresh token has to be retrievable to actually call the
+    Gmail API, so hashing it isn't an option; stored in plain text, consistent
+    with this app's existing security posture (no field-level encryption
+    exists anywhere else) — and `lastHistoryId`, Gmail's own cursor for
+    incremental sync.
+  - The connect flow —
+    [backend/src/integrations/gmailOAuth.ts](backend/src/integrations/gmailOAuth.ts),
+    [backend/src/routes/gmailAuth.ts](backend/src/routes/gmailAuth.ts) —
+    is incremental authorization on the *same* Google OAuth client sign-in
+    already uses, not a second client: `GET /auth/gmail/connect` (admin-only)
+    redirects to Google requesting `gmail.readonly` plus
+    `access_type=offline&prompt=consent` (forces a fresh refresh token on
+    every connect, not just an account's first-ever consent) at its own
+    `GOOGLE_GMAIL_CALLBACK_URL` redirect URI, separate from sign-in's own
+    callback since it's a fundamentally different grant ("read this inbox,"
+    not "prove who's signing in"). `GET /auth/gmail/callback` verifies a
+    state cookie (the same CSRF pattern as `routes/auth.ts`'s sign-in flow),
+    exchanges the code, fetches the connected mailbox's own address purely
+    for display, and upserts the connection row — a reconnect always resets
+    `lastHistoryId` to null, safe because `runInterpretationPipeline`'s
+    `externalId` uniqueness makes re-processing an already-ingested message a
+    no-op rather than a duplicate. The person authorizing needs to be signed
+    into the *target* Google account (e.g. `pulse@exvadebio.com`) in their
+    browser at the consent screen — a separate session from their own Pulse
+    admin login on accounts.google.com, not something the app can do for them.
+  - Syncing — [backend/src/integrations/gmailSync.ts](backend/src/integrations/gmailSync.ts) —
+    the first-ever sync for a connection lists the whole inbox (`labelIds:
+    INBOX`) and captures the mailbox's current `historyId` as the baseline;
+    every sync after that calls `users.history.list(startHistoryId=...)` for
+    just what's new since the last check, falling back to a full re-list if
+    Gmail reports the stored `historyId` has expired (its documented 404
+    signal, which happens after roughly a week of inactivity). Each new
+    message is fetched via `messages.get`, parsed by
+    [backend/src/integrations/gmailMime.ts](backend/src/integrations/gmailMime.ts)
+    (depth-first search for a `text/plain` part, falling back to a stripped
+    `text/html` part, falling back to the top-level body for a genuinely
+    non-multipart message), and handed to the same
+    `runInterpretationPipeline` every other source type uses — no pipeline
+    changes needed. An in-process 5-minute `setInterval` poller
+    (`startGmailPoller`, started in
+    [backend/src/index.ts](backend/src/index.ts)) checks every connected
+    org's inbox — the same "simplest thing that works at this scale" choice
+    as the webhook integrations' synchronous in-request processing, not a
+    placeholder for a job queue.
+  - `GET /api/integrations` now also returns a `gmail` field (connection
+    status, connected address, last synced time, last sync error) alongside
+    the existing per-type webhook integration list; its `totalSuggestions`
+    reads the same `sources.type = "gmail"` count the (still-unconnected)
+    "email" webhook integration above would also report — see the comment on
+    `GmailConnectionStatus` in
+    [backend/src/integrations/manage.ts](backend/src/integrations/manage.ts)
+    for why that overlap is accepted rather than engineered around, given
+    only one of the two mechanisms is expected to actually be in use at a
+    time. `POST /api/integrations/gmail/sync` lets an admin force a check
+    immediately instead of waiting for the next scheduled pass;
+    `DELETE /api/integrations/gmail` disconnects.
+  - Frontend: [frontend/app/integrations/page.tsx](frontend/app/integrations/page.tsx)
+    adds a Gmail row to the same integrations table — "Connect Gmail" (a
+    real link to `/auth/gmail/connect`, not a fetch call, since it has to
+    navigate the browser to Google) when not connected, "Sync now" /
+    "Disconnect" once it is, reusing the existing per-row activity-log toggle.
+  - **To connect a real Gmail inbox:** create the mailbox in Google Workspace
+    admin, click "Connect Gmail" on `/integrations`, and sign into that
+    mailbox's Google account (not your own) at Google's consent screen. The
+    connecting Google Cloud project also needs `GOOGLE_GMAIL_CALLBACK_URL`
+    added to the OAuth client's authorized redirect URIs and the
+    `gmail.readonly` scope added to the consent screen (with the connecting
+    account added as a test user if the app is in Testing mode, which is
+    expected and fine for an internal tool).
 - A "What changed" activity feed, making the `audit_log` table (written by
   nearly every mutating action — suggestion review, decision review, user
   management, integration token management) actually viewable instead of
@@ -1057,10 +1134,6 @@ Built:
   (title + link, shown when a task is blocked on an open decision) isn't
   itself visibility-checked, so a restricted decision's title could appear
   on an otherwise-visible task's page.
-- A real Gmail OAuth pull integration (the pipeline exists and is exercised via
-  `npm run interpret:real -w backend`, and inbound email now has a real
-  forward-to-address push path via the Postmark-shaped webhook above, but
-  nothing yet pulls from a live Gmail account automatically).
 - An actual inbound-email provider account connected to the new `/api/public/webhooks/email`
   endpoint (the endpoint exists and is tested against a Postmark-shaped payload,
   but no real provider has been wired up yet — see the email integration section

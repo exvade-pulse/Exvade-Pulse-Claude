@@ -278,6 +278,39 @@ export const webhookIntegrations = pgTable(
   (table) => [uniqueIndex("webhook_integrations_org_type_unique").on(table.organizationId, table.type)],
 );
 
+// A real OAuth-connected Gmail inbox that gets polled for new mail, as
+// opposed to webhookIntegrations' push-based, static-bearer-token model --
+// deliberately a separate table rather than forcing this into
+// webhook_integrations, since a Gmail connection needs a real, reversible
+// refresh token (to call the Gmail API with) rather than a one-way hash, and
+// carries sync-cursor state (lastHistoryId) that a webhook credential never
+// needs. One row per org: the whole point of this integration is a single
+// dedicated inbox (see README), not per-label multi-mailbox routing.
+export const gmailConnections = pgTable("gmail_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .unique()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  emailAddress: text("email_address").notNull(),
+  // Stored in plain text, consistent with this app's existing security
+  // posture -- no field-level encryption exists anywhere else (ANTHROPIC_API_KEY
+  // etc. are env-level secrets, not DB columns), and the DB connection itself
+  // is the trust boundary. A refresh token, unlike a webhook token, must be
+  // retrievable to call the Gmail API, so hashing it (as webhookIntegrations
+  // does) isn't an option.
+  refreshToken: text("refresh_token").notNull(),
+  // Gmail's cursor for incremental sync via users.history.list -- null until
+  // the first sync establishes a baseline, after which only messages newer
+  // than this are fetched on each poll instead of re-scanning the mailbox.
+  lastHistoryId: text("last_history_id"),
+  lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+  lastSyncError: text("last_sync_error"),
+  connectedBy: uuid("connected_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const suggestions = pgTable("suggestions", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")

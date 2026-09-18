@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   API_URL,
+  disconnectGmail,
   fetchCurrentUser,
+  fetchGmailActivity,
   fetchIntegrationActivity,
   fetchIntegrations,
   generateIntegrationToken,
+  triggerGmailSync,
   type GeneratedIntegrationToken,
+  type GmailConnectionStatus,
   type IntegrationActivityItem,
   type IntegrationStatus,
   type IntegrationType,
@@ -18,6 +23,7 @@ import { Nav } from "../components/Nav";
 const LABELS: Record<string, string> = {
   circleback: "Circleback",
   email: "Email",
+  gmail: "Gmail",
 };
 
 // Per-type instructions for the one-time "here's your webhook URL" card --
@@ -41,14 +47,32 @@ function formatDateTime(value: string | null): string {
 }
 
 export default function IntegrationsPage() {
+  return (
+    <Suspense fallback={null}>
+      <IntegrationsPageInner />
+    </Suspense>
+  );
+}
+
+// useSearchParams() (needed for the ?gmail_error= redirect from
+// /auth/gmail/callback) requires a Suspense boundary in the App Router --
+// split into a thin wrapper + this inner component rather than restructuring
+// the whole page around it.
+function IntegrationsPageInner() {
+  const searchParams = useSearchParams();
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
   const [rows, setRows] = useState<IntegrationStatus[]>([]);
+  const [gmail, setGmail] = useState<GmailConnectionStatus | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyType, setBusyType] = useState<string | null>(null);
   const [justGenerated, setJustGenerated] = useState<GeneratedIntegrationToken | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const [gmailError, setGmailError] = useState<string | null>(searchParams.get("gmail_error"));
+  const [gmailBusy, setGmailBusy] = useState(false);
+  const [gmailSyncResult, setGmailSyncResult] = useState<string | null>(null);
 
   const [openActivityType, setOpenActivityType] = useState<string | null>(null);
   const [activity, setActivity] = useState<IntegrationActivityItem[] | "loading">("loading");
@@ -65,7 +89,8 @@ export default function IntegrationsPage() {
           setForbidden(true);
           return;
         }
-        setRows(result);
+        setRows(result.integrations);
+        setGmail(result.gmail);
       })
       .catch((err) => setLoadError(err.message));
   }
@@ -73,6 +98,42 @@ export default function IntegrationsPage() {
   useEffect(() => {
     if (user && user !== "loading") load();
   }, [user]);
+
+  async function handleGmailSync() {
+    setGmailBusy(true);
+    setGmailError(null);
+    setGmailSyncResult(null);
+    try {
+      const result = await triggerGmailSync();
+      setGmailSyncResult(
+        `Checked ${result.messagesFound} message${result.messagesFound === 1 ? "" : "s"}, ` +
+          `created ${result.suggestionsCreated} suggestion${result.suggestionsCreated === 1 ? "" : "s"}` +
+          (result.errors > 0 ? `, ${result.errors} error${result.errors === 1 ? "" : "s"}` : ""),
+      );
+      load();
+    } catch (err) {
+      setGmailError(err instanceof Error ? err.message : "Gmail sync failed");
+    } finally {
+      setGmailBusy(false);
+    }
+  }
+
+  async function handleGmailDisconnect() {
+    const confirmed = window.confirm(
+      "Disconnect Gmail? New mail will stop being imported until you connect it again.",
+    );
+    if (!confirmed) return;
+    setGmailBusy(true);
+    setGmailError(null);
+    try {
+      await disconnectGmail();
+      load();
+    } catch (err) {
+      setGmailError(err instanceof Error ? err.message : "Failed to disconnect Gmail");
+    } finally {
+      setGmailBusy(false);
+    }
+  }
 
   async function handleGenerate(type: string, alreadyConfigured: boolean) {
     if (alreadyConfigured) {
@@ -105,9 +166,8 @@ export default function IntegrationsPage() {
     setOpenActivityType(type);
     setActivity("loading");
     setActivityError(null);
-    fetchIntegrationActivity(type as IntegrationType)
-      .then(setActivity)
-      .catch((err) => setActivityError(err.message));
+    const fetchActivity = type === "gmail" ? fetchGmailActivity() : fetchIntegrationActivity(type as IntegrationType);
+    fetchActivity.then(setActivity).catch((err) => setActivityError(err.message));
   }
 
   async function handleCopy() {
@@ -167,6 +227,8 @@ export default function IntegrationsPage() {
 
       {loadError && <div className="error-banner">{loadError}</div>}
       {actionError && <div className="error-banner">{actionError}</div>}
+      {gmailError && <div className="error-banner">{gmailError}</div>}
+      {gmailSyncResult && <p className="card activity-summary">{gmailSyncResult}</p>}
 
       {justGenerated && (
         <div className="card">
@@ -189,7 +251,7 @@ export default function IntegrationsPage() {
         </div>
       )}
 
-      {rows.length > 0 && (
+      {(rows.length > 0 || gmail) && (
         <div className="card users-table-wrap">
           <table className="users-table">
             <thead>
@@ -203,6 +265,48 @@ export default function IntegrationsPage() {
               </tr>
             </thead>
             <tbody>
+              {gmail && (
+                <tr>
+                  <td>Gmail</td>
+                  <td>
+                    {gmail.connected ? (
+                      <span className="chip chip-done" title={gmail.emailAddress ?? undefined}>
+                        Connected{gmail.emailAddress ? ` (${gmail.emailAddress})` : ""}
+                      </span>
+                    ) : (
+                      <span className="chip">Not connected</span>
+                    )}
+                    {gmail.lastSyncError && (
+                      <div className="muted" style={{ marginTop: 4 }}>
+                        Last sync error: {gmail.lastSyncError}
+                      </div>
+                    )}
+                  </td>
+                  <td>{formatDateTime(gmail.lastSyncedAt)}</td>
+                  <td>{gmail.totalSuggestions}</td>
+                  <td>
+                    <button className="decision-btn" onClick={() => toggleActivity("gmail")}>
+                      {openActivityType === "gmail" ? "Hide activity" : "View activity"}
+                    </button>
+                  </td>
+                  <td>
+                    {gmail.connected ? (
+                      <div className="card-actions">
+                        <button className="decision-btn" disabled={gmailBusy} onClick={handleGmailSync}>
+                          Sync now
+                        </button>
+                        <button className="decision-btn reject" disabled={gmailBusy} onClick={handleGmailDisconnect}>
+                          Disconnect
+                        </button>
+                      </div>
+                    ) : (
+                      <a className="decision-btn save" href={`${API_URL}/auth/gmail/connect`}>
+                        Connect Gmail
+                      </a>
+                    )}
+                  </td>
+                </tr>
+              )}
               {rows.map((row) => {
                 const busy = busyType === row.type;
                 const activityOpen = openActivityType === row.type;

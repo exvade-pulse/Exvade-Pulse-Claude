@@ -3,6 +3,7 @@ import { and, count, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import {
   auditLog,
+  gmailConnections,
   integrationTypeEnum,
   sources,
   suggestions,
@@ -65,6 +66,41 @@ export async function listIntegrations(db: Database, organizationId: string): Pr
       totalSuggestions: suggestionCountBySourceType.get(SOURCE_TYPE_BY_INTEGRATION[type]) ?? 0,
     };
   });
+}
+
+export interface GmailConnectionStatus {
+  connected: boolean;
+  emailAddress: string | null;
+  connectedAt: Date | null;
+  lastSyncedAt: Date | null;
+  lastSyncError: string | null;
+  // Deliberately the same sources.type = "gmail" count the (unused, never-
+  // connected-to-a-real-provider) "email" webhook integration above would
+  // also report -- both mechanisms write the same source type, and only one
+  // is ever expected to actually be in use at a time. See schema.ts's
+  // gmailConnections comment for why this is a genuinely separate table
+  // rather than folded into webhookIntegrations/integrationTypeEnum.
+  totalSuggestions: number;
+}
+
+export async function getGmailConnectionStatus(db: Database, organizationId: string): Promise<GmailConnectionStatus> {
+  const [[connection], [suggestionCount]] = await Promise.all([
+    db.select().from(gmailConnections).where(eq(gmailConnections.organizationId, organizationId)),
+    db
+      .select({ count: count() })
+      .from(suggestions)
+      .innerJoin(sources, eq(sources.id, suggestions.sourceId))
+      .where(and(eq(suggestions.organizationId, organizationId), eq(sources.type, "gmail"))),
+  ]);
+
+  return {
+    connected: connection !== undefined,
+    emailAddress: connection?.emailAddress ?? null,
+    connectedAt: connection?.createdAt ?? null,
+    lastSyncedAt: connection?.lastSyncedAt ?? null,
+    lastSyncError: connection?.lastSyncError ?? null,
+    totalSuggestions: suggestionCount?.count ?? 0,
+  };
 }
 
 export interface IntegrationActivityItem {

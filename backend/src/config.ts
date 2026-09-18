@@ -33,6 +33,13 @@ export const config = {
     clientId: process.env.GOOGLE_CLIENT_ID ?? "",
     clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
     callbackUrl: process.env.GOOGLE_CALLBACK_URL ?? "http://localhost:3001/auth/google/callback",
+    // Same OAuth client as sign-in (incremental auth: an additional scope
+    // requested in a separate consent step), but its own redirect URI and
+    // its own callback route -- this flow authorizes read access to a
+    // specific Gmail inbox (see integrations/gmailOAuth.ts), a fundamentally
+    // different grant than "prove who's signing in," so it's kept on a
+    // distinct path rather than overloading /auth/google/callback.
+    gmailCallbackUrl: process.env.GOOGLE_GMAIL_CALLBACK_URL ?? "http://localhost:3001/auth/gmail/callback",
   },
   // Optional at import time: the app must still boot and tests must still pass
   // without a real key (CI has none). Only code paths that actually call the
