@@ -93,9 +93,55 @@ function reviewerLabel(s: Suggestion): string {
   return s.reviewerName ?? s.reviewerEmail ?? "Unknown reviewer";
 }
 
+// For an update to something that already exists, the proposedDiff usually
+// never mentions title at all (an operational_update touches status/
+// latestUpdate, not the name) -- so the headline must come from
+// currentState.title (the real existing name), not proposedDiff, or every
+// update card reads as a generic "Task update" with no way to tell which
+// task. A brand-new entity has no currentState, so its proposed title is the
+// only name there is to show. Shared by renderCard and the project-grouping
+// below, since an objective-type suggestion groups under its own name.
+function cardTitle(s: Suggestion): string {
+  return s.targetId
+    ? String(s.currentState?.title ?? `${TARGET_LABEL[s.targetType]} update`)
+    : String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`);
+}
+
+const UNGROUPED_HEADING = "Unsorted / Other";
+
+// Buckets suggestions under the deepest heading their breadcrumb resolves to
+// (project, else initiative, else objective) so a reviewer can work through
+// one part of the company map at a time instead of skimming the whole
+// queue. An objective-type suggestion has no breadcrumb (nothing sits above
+// an objective) but does represent a heading itself, so it groups under its
+// own name. Decisions and anything else with no resolvable heading fall
+// into a single catch-all bucket, sorted last since it's not a real part of
+// the hierarchy.
+function groupByWorkflow(items: Suggestion[]): Array<[string, Suggestion[]]> {
+  const groups = new Map<string, Suggestion[]>();
+  for (const s of items) {
+    const heading =
+      s.breadcrumb?.project?.title ??
+      s.breadcrumb?.initiative?.title ??
+      s.breadcrumb?.objective?.title ??
+      (s.targetType === "objective" ? cardTitle(s) : UNGROUPED_HEADING);
+    const bucket = groups.get(heading) ?? [];
+    bucket.push(s);
+    groups.set(heading, bucket);
+  }
+  return [...groups.entries()].sort(([a], [b]) => {
+    if (a === UNGROUPED_HEADING) return 1;
+    if (b === UNGROUPED_HEADING) return -1;
+    return a.localeCompare(b);
+  });
+}
+
+type GroupMode = "confidence" | "project";
+
 export default function ReviewPage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
   const [tab, setTab] = useState<ReviewTab>("pending");
+  const [groupMode, setGroupMode] = useState<GroupMode>("confidence");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -201,21 +247,11 @@ export default function ReviewPage() {
   function renderCard(s: Suggestion) {
     const isEditing = editingId === s.id;
     const isHistory = tab !== "pending";
-    // For an update to something that already exists, the proposedDiff
-    // usually never mentions title at all (an operational_update touches
-    // status/latestUpdate, not the name) -- so the headline must come from
-    // currentState.title (the real existing name), not proposedDiff, or
-    // every update card reads as a generic "Task update" with no way to
-    // tell which task. A brand-new entity has no currentState, so its
-    // proposed title is the only name there is to show.
-    const cardTitle = s.targetId
-      ? String(s.currentState?.title ?? `${TARGET_LABEL[s.targetType]} update`)
-      : String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`);
     return (
       <article className="card" key={s.id}>
         <div className="card-top">
           <div>
-            <p className="card-title">{cardTitle}</p>
+            <p className="card-title">{cardTitle(s)}</p>
             <span className="muted">
               {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
             </span>
@@ -391,6 +427,20 @@ export default function ReviewPage() {
             {TAB_LABEL[t]}
           </button>
         ))}
+        <span className="group-toggle">
+          <button
+            className={`tab-btn small${groupMode === "confidence" ? " active" : ""}`}
+            onClick={() => setGroupMode("confidence")}
+          >
+            By attention
+          </button>
+          <button
+            className={`tab-btn small${groupMode === "project" ? " active" : ""}`}
+            onClick={() => setGroupMode("project")}
+          >
+            By project
+          </button>
+        </span>
       </div>
 
       {loadError && <div className="error-banner">{loadError}</div>}
@@ -398,7 +448,16 @@ export default function ReviewPage() {
 
       {suggestions.length === 0 && !loadError && <p className="empty-state">{TAB_EMPTY_MESSAGE[tab]}</p>}
 
-      {tab === "pending" ? (
+      {groupMode === "project" ? (
+        groupByWorkflow(suggestions).map(([heading, items]) => (
+          <div key={heading}>
+            <p className="section-title">
+              {heading} ({items.length})
+            </p>
+            {items.map(renderCard)}
+          </div>
+        ))
+      ) : tab === "pending" ? (
         <>
           {readyToApprove.length > 0 && (
             <>

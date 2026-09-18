@@ -610,7 +610,19 @@ body {
 .tab-row {
   display: flex;
   gap: 8px;
+  align-items: center;
   margin-bottom: 20px;
+}
+
+.group-toggle {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.tab-btn.small {
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .tab-btn {
