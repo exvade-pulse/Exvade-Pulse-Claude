@@ -255,6 +255,11 @@ body {
   color: #bbb;
 }
 
+.card-moving-to {
+  color: #2b7a3b;
+  font-weight: 600;
+}
+
 .badge {
   font-size: 11px;
   text-transform: uppercase;

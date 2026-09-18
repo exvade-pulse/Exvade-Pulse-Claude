@@ -17,6 +17,7 @@ import { searchRoutes } from "./routes/search.js";
 import { entityRoutes } from "./routes/entities.js";
 import { relationshipRoutes } from "./routes/relationships.js";
 import { gmailAuthRoutes } from "./routes/gmailAuth.js";
+import { unsortedRoutes } from "./routes/unsorted.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -44,6 +45,7 @@ export async function buildApp() {
   await app.register(entityRoutes);
   await app.register(relationshipRoutes);
   await app.register(gmailAuthRoutes);
+  await app.register(unsortedRoutes);
 
   return app;
 }

@@ -42,6 +42,11 @@ export interface Suggestion {
     initiative?: { id: string; title: string };
     project?: { id: string; title: string };
   } | null;
+  // Set only when this suggestion proposes moving an existing task to a
+  // *different* project than the one it's currently in (the Unsorted
+  // re-triage flow is the only producer of this today). The plain diff view
+  // hides projectId entirely, so this is the only visual sign of the move.
+  movingToProject: { id: string; title: string } | null;
 }
 
 export async function fetchCurrentUser(): Promise<SessionUser | null> {
@@ -759,6 +764,50 @@ export async function fetchCompanyMap(): Promise<CompanyMapResponse> {
   const res = await fetch(`${API_URL}/api/company-map`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to load company map (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface UnsortedTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  latestUpdate: string | null;
+  nextAction: string | null;
+  owner: string | null;
+  // Set when a re-triage pass (or any other suggestion) already proposed
+  // something for this task and it's still awaiting a review decision.
+  pendingSuggestion: { confidence: number } | null;
+}
+
+export interface UnsortedResponse {
+  project: { id: string; title: string } | null;
+  tasks: UnsortedTask[];
+}
+
+// One-click flat view of the "Unsorted / Needs Triage" catch-all -- the
+// alternative (Company Map, several nested expand-clicks deep to reach one
+// project's task list) is exactly the friction this page exists to remove.
+export async function fetchUnsorted(): Promise<UnsortedResponse> {
+  const res = await fetch(`${API_URL}/api/unsorted`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to load Unsorted tasks (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface RetriageResult {
+  checked: number;
+  suggested: number;
+}
+
+// Triggers an on-demand Claude pass (one call per eligible Unsorted task)
+// that proposes moving each one to a real project, if a clear match exists.
+// Never runs automatically -- see backend/src/routes/unsorted.ts.
+export async function triggerUnsortedRetriage(): Promise<RetriageResult> {
+  const res = await fetch(`${API_URL}/api/unsorted/retriage`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to re-triage Unsorted tasks (${res.status})`);
   }
   return res.json();
 }

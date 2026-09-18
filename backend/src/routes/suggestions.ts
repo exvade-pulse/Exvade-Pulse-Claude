@@ -200,6 +200,48 @@ async function loadBreadcrumbs(
   return result;
 }
 
+// For a task-update suggestion whose proposedDiff sets a *different*
+// projectId than the task's current one (the Unsorted re-triage flow, see
+// routes/unsorted.ts, is the only producer of this today) -- the plain diff
+// view hides projectId entirely (see frontend/lib/formatDiff.ts's
+// HIDDEN_DIFF_KEYS, since a foreign key is normally implementation detail),
+// so without this a reviewer would have no visual sign of what's actually
+// being proposed beyond the reasoning text. Batches one query for the whole
+// suggestion list rather than per-suggestion.
+async function loadMovingToProjects(
+  organizationId: string,
+  rows: Array<{ id: string; targetType: string; targetId: string | null; proposedDiff: unknown }>,
+  currentStates: Map<string, Record<string, unknown>>,
+): Promise<Map<string, { id: string; title: string }>> {
+  const neededProjectIds = new Set<string>();
+  const proposedProjectIdBySuggestion = new Map<string, string>();
+
+  for (const row of rows) {
+    if (row.targetType !== "task" || row.targetId === null) continue;
+    const proposedProjectId = (row.proposedDiff as Record<string, unknown>).projectId;
+    if (typeof proposedProjectId !== "string") continue;
+    const currentProjectId = currentStates.get(`task:${row.targetId}`)?.projectId;
+    if (proposedProjectId === currentProjectId) continue;
+    proposedProjectIdBySuggestion.set(row.id, proposedProjectId);
+    neededProjectIds.add(proposedProjectId);
+  }
+
+  if (neededProjectIds.size === 0) return new Map();
+
+  const found = await db
+    .select({ id: projects.id, title: projects.title })
+    .from(projects)
+    .where(and(eq(projects.organizationId, organizationId), inArray(projects.id, [...neededProjectIds])));
+  const projectById = new Map(found.map((p) => [p.id, p]));
+
+  const result = new Map<string, { id: string; title: string }>();
+  for (const [suggestionId, projectId] of proposedProjectIdBySuggestion) {
+    const project = projectById.get(projectId);
+    if (project) result.set(suggestionId, project);
+  }
+  return result;
+}
+
 // Only task/decision carry a visibility column (see schema.ts); an
 // objective/initiative/project target, or a targetId-null (brand-new
 // entity) suggestion, is always viewable -- there's nothing to restrict yet.
@@ -289,7 +331,10 @@ export async function suggestionRoutes(app: FastifyInstance) {
       .orderBy(desc(suggestions.createdAt));
 
     const currentStates = await loadCurrentStates(organizationId, rows);
-    const breadcrumbs = await loadBreadcrumbs(organizationId, rows, currentStates);
+    const [breadcrumbs, movingToProjects] = await Promise.all([
+      loadBreadcrumbs(organizationId, rows, currentStates),
+      loadMovingToProjects(organizationId, rows, currentStates),
+    ]);
     const role = request.user!.role;
     const withCurrentState = rows
       // A suggestion targeting a task/decision the caller can't view (per
@@ -312,6 +357,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
           row.proposedDiff as Record<string, unknown>,
         ),
         breadcrumb: breadcrumbs.get(row.id) ?? null,
+        movingToProject: movingToProjects.get(row.id) ?? null,
       }));
 
     reply.send({ suggestions: withCurrentState });

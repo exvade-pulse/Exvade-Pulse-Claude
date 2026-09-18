@@ -75,6 +75,15 @@ function WorkflowBreadcrumb({ breadcrumb }: { breadcrumb: Suggestion["breadcrumb
   );
 }
 
+// Shown when a suggestion proposes moving an existing task to a different
+// project (the Unsorted re-triage flow) -- the plain diff view hides
+// projectId entirely (see formatDiff.ts's HIDDEN_DIFF_KEYS), so without this
+// a reviewer would have no visual sign of the move beyond the reasoning text.
+function MovingToProject({ movingToProject }: { movingToProject: Suggestion["movingToProject"] }) {
+  if (!movingToProject) return null;
+  return <p className="card-breadcrumb card-moving-to">&rarr; Moving to: {movingToProject.title}</p>;
+}
+
 type ReviewTab = "pending" | "approved" | "rejected";
 
 const TAB_LABEL: Record<ReviewTab, string> = {
@@ -256,6 +265,7 @@ export default function ReviewPage() {
               {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
             </span>
             <WorkflowBreadcrumb breadcrumb={s.breadcrumb} />
+            <MovingToProject movingToProject={s.movingToProject} />
           </div>
           <div className="card-top-right">
             <ConfidenceBadge confidence={s.confidence} />

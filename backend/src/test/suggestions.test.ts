@@ -999,3 +999,135 @@ describe("GET /api/suggestions breadcrumb", () => {
     expect(body.suggestions[0].breadcrumb).toBeNull();
   });
 });
+
+describe("GET /api/suggestions movingToProject", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("is set when an update suggestion's proposedDiff sets a projectId different from the task's current one", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "moving-to-basic.test" });
+
+    const [otherProject] = await db
+      .insert(projects)
+      .values({ organizationId: fixture.org.id, initiativeId: fixture.initiative.id, title: "Bench testing protocol" })
+      .returning();
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "active" })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: existingTask.id,
+      changeType: "operational_update",
+      proposedDiff: { projectId: otherProject.id },
+      reasoning: "Re-triage match.",
+      confidence: 0.8,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ movingToProject: { id: string; title: string } | null }> };
+    expect(body.suggestions[0].movingToProject).toEqual({ id: otherProject.id, title: "Bench testing protocol" });
+  });
+
+  it("is null when proposedDiff's projectId is the same as the task's current project (no real move)", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "moving-to-unchanged.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "active" })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: existingTask.id,
+      changeType: "operational_update",
+      // Restates the same projectId the task is already in -- not a move.
+      proposedDiff: { projectId: fixture.project.id, status: "blocked" },
+      reasoning: "test",
+      confidence: 0.7,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ movingToProject: unknown }> };
+    expect(body.suggestions[0].movingToProject).toBeNull();
+  });
+
+  it("is null for a brand-new task (targetId null) even though its proposedDiff sets projectId", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "moving-to-new-task.test" });
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: null,
+      changeType: "new_task",
+      proposedDiff: { projectId: fixture.project.id, title: "Brand new task" },
+      reasoning: "test",
+      confidence: 0.6,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ movingToProject: unknown }> };
+    expect(body.suggestions[0].movingToProject).toBeNull();
+  });
+
+  it("never leaks another organization's project title into movingToProject", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "moving-to-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "moving-to-org-b.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: orgA.org.id, projectId: orgA.project.id, title: "Task", status: "active" })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: orgA.org.id,
+      sourceId: orgA.source.id,
+      targetType: "task",
+      targetId: existingTask.id,
+      changeType: "operational_update",
+      proposedDiff: { projectId: orgB.project.id },
+      reasoning: "test",
+      confidence: 0.5,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(orgA) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ movingToProject: unknown }> };
+    expect(body.suggestions[0].movingToProject).toBeNull();
+  });
+});
