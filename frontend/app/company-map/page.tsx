@@ -177,10 +177,11 @@ export default function CompanyMapPage() {
 
   const [openObjectives, setOpenObjectives] = useState<Set<string>>(new Set());
   const [openInitiatives, setOpenInitiatives] = useState<Set<string>>(new Set());
-  // Projects start collapsed -- task lists are the most numerous leaf level,
-  // and expanding every one by default is the case most likely to make a
-  // real org's map unwieldy. Objectives/initiatives start open since seeing
-  // the whole structure at once is the point of this page.
+  // Every level starts open, including projects -- a newly-approved task
+  // lands inside its project's task list, and a collapsed-by-default project
+  // row hid that from view entirely (looked like the map "hadn't updated"
+  // even though the data was already there). Individual nodes stay
+  // collapsible for when a real org's map grows large enough to need it.
   const [openProjects, setOpenProjects] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -194,6 +195,9 @@ export default function CompanyMapPage() {
           setData(res);
           setOpenObjectives(new Set(res.objectives.map((o) => o.id)));
           setOpenInitiatives(new Set(res.objectives.flatMap((o) => o.initiatives.map((i) => i.id))));
+          setOpenProjects(
+            new Set(res.objectives.flatMap((o) => o.initiatives.flatMap((i) => i.projects.map((p) => p.id)))),
+          );
         })
         .catch((err) => setLoadError(err.message));
     }
