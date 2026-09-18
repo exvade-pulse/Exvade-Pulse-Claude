@@ -708,7 +708,7 @@ describe("GET /api/suggestions currentState", () => {
     await truncateAll(db);
   });
 
-  it("includes only the fields the diff actually touches, pulled from the live target row", async () => {
+  it("includes only the fields the diff actually touches, plus title, pulled from the live target row", async () => {
     const fixture = await createFixtureOrg(db, { domain: "current-state-update.test" });
 
     const [existingTask] = await db
@@ -745,11 +745,12 @@ describe("GET /api/suggestions currentState", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as { suggestions: Array<{ currentState: Record<string, unknown> | null }> };
     expect(body.suggestions).toHaveLength(1);
-    // Only status/latestUpdate -- title/owner aren't in the diff, so they
-    // must not leak into currentState even though they exist on the row.
+    // status/latestUpdate from the diff, plus title always -- owner is in
+    // neither the diff nor the always-included set, so it must not leak in.
     expect(body.suggestions[0].currentState).toEqual({
       status: "active",
       latestUpdate: "Original latest update",
+      title: "Original title",
     });
   });
 
@@ -812,7 +813,10 @@ describe("GET /api/suggestions currentState", () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json() as { suggestions: Array<{ currentState: Record<string, unknown> | null }> };
-    expect(body.suggestions[0].currentState).toEqual({ relevantContext: "Original context." });
+    expect(body.suggestions[0].currentState).toEqual({
+      relevantContext: "Original context.",
+      title: "Approve vendor switch",
+    });
   });
 
   it("never leaks another organization's current-state data", async () => {

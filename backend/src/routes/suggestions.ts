@@ -65,7 +65,12 @@ async function loadCurrentStates(
 
 // Narrows a fetched current row down to just the fields the suggestion's own
 // proposedDiff touches, so the review UI can render "current -> proposed"
-// pairs for exactly what's changing, not the entire row.
+// pairs for exactly what's changing, not the entire row. title is always
+// included on top of that, even when the diff itself never touches it (an
+// operational_update on a task's status/latestUpdate never mentions title) --
+// without it, the review card has no way to say *which* existing task/
+// decision/etc. a suggestion is about, since proposedDiff for an update to
+// an existing entity usually doesn't restate its name at all.
 function pickCurrentStateFields(
   currentRow: Record<string, unknown> | undefined,
   proposedDiff: Record<string, unknown>,
@@ -75,6 +80,7 @@ function pickCurrentStateFields(
   for (const key of Object.keys(proposedDiff)) {
     if (key in currentRow) result[key] = currentRow[key];
   }
+  if ("title" in currentRow) result.title = currentRow.title;
   return result;
 }
 

@@ -158,13 +158,21 @@ export default function ReviewPage() {
   function renderCard(s: Suggestion) {
     const isEditing = editingId === s.id;
     const isHistory = tab !== "pending";
+    // For an update to something that already exists, the proposedDiff
+    // usually never mentions title at all (an operational_update touches
+    // status/latestUpdate, not the name) -- so the headline must come from
+    // currentState.title (the real existing name), not proposedDiff, or
+    // every update card reads as a generic "Task update" with no way to
+    // tell which task. A brand-new entity has no currentState, so its
+    // proposed title is the only name there is to show.
+    const cardTitle = s.targetId
+      ? String(s.currentState?.title ?? `${TARGET_LABEL[s.targetType]} update`)
+      : String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`);
     return (
       <article className="card" key={s.id}>
         <div className="card-top">
           <div>
-            <p className="card-title">
-              {String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`)}
-            </p>
+            <p className="card-title">{cardTitle}</p>
             <span className="muted">
               {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
             </span>
