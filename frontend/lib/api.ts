@@ -33,6 +33,15 @@ export interface Suggestion {
   // be resolved. Lets the review card show "current -> proposed" instead of
   // just the proposed value in isolation.
   currentState: Record<string, unknown> | null;
+  // Where this suggestion's target lives in the objective/initiative/project
+  // hierarchy (the levels *above* it) -- null when the target is an
+  // objective itself, a decision, or a level that couldn't be resolved (e.g.
+  // a brand-new entity proposed with no parent id yet).
+  breadcrumb: {
+    objective?: { id: string; title: string };
+    initiative?: { id: string; title: string };
+    project?: { id: string; title: string };
+  } | null;
 }
 
 export async function fetchCurrentUser(): Promise<SessionUser | null> {

@@ -855,3 +855,147 @@ describe("GET /api/suggestions currentState", () => {
     expect(body.suggestions[0].currentState).toBeNull();
   });
 });
+
+describe("GET /api/suggestions breadcrumb", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("resolves the full objective/initiative/project chain for an update to an existing task", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "breadcrumb-task-update.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "active" })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: existingTask.id,
+      changeType: "operational_update",
+      proposedDiff: { status: "blocked" },
+      reasoning: "test",
+      confidence: 0.8,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as {
+      suggestions: Array<{
+        breadcrumb: { objective?: { title: string }; initiative?: { title: string }; project?: { title: string } } | null;
+      }>;
+    };
+    expect(body.suggestions[0].breadcrumb).toEqual({
+      objective: { id: fixture.objective.id, title: "Test objective" },
+      initiative: { id: fixture.initiative.id, title: "Test initiative" },
+      project: { id: fixture.project.id, title: "Test project" },
+    });
+  });
+
+  it("resolves the breadcrumb for a brand-new task off the proposed projectId, since there's no existing row yet", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "breadcrumb-task-new.test" });
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: null,
+      changeType: "new_task",
+      proposedDiff: { projectId: fixture.project.id, title: "Brand new task" },
+      reasoning: "test",
+      confidence: 0.6,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as {
+      suggestions: Array<{ breadcrumb: { project?: { title: string } } | null }>;
+    };
+    expect(body.suggestions[0].breadcrumb?.project).toEqual({ id: fixture.project.id, title: "Test project" });
+  });
+
+  it("is null for an objective target and for a decision target, since neither has a parent chain to show", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "breadcrumb-none.test" });
+
+    await db.insert(suggestions).values([
+      {
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "objective",
+        targetId: fixture.objective.id,
+        changeType: "context",
+        proposedDiff: { description: "Adds context." },
+        reasoning: "test",
+        confidence: 0.7,
+      },
+      {
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "decision",
+        targetId: null,
+        changeType: "decision",
+        proposedDiff: { title: "New decision", decider: "CEO" },
+        reasoning: "test",
+        confidence: 0.6,
+      },
+    ]);
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ breadcrumb: unknown }> };
+    expect(body.suggestions).toHaveLength(2);
+    for (const s of body.suggestions) {
+      expect(s.breadcrumb).toBeNull();
+    }
+  });
+
+  it("never leaks another organization's project/initiative/objective titles into the breadcrumb", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "breadcrumb-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "breadcrumb-org-b.test" });
+
+    // A suggestion in org A's queue whose proposedDiff points at org B's own
+    // project id -- the breadcrumb resolver must org-scope its project/
+    // initiative/objective lookups the same way loadCurrentStates does.
+    await db.insert(suggestions).values({
+      organizationId: orgA.org.id,
+      sourceId: orgA.source.id,
+      targetType: "task",
+      targetId: null,
+      changeType: "new_task",
+      proposedDiff: { projectId: orgB.project.id, title: "Cross-org task" },
+      reasoning: "test",
+      confidence: 0.5,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(orgA) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ breadcrumb: unknown }> };
+    expect(body.suggestions[0].breadcrumb).toBeNull();
+  });
+});

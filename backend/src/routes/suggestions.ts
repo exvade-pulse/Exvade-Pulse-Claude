@@ -84,6 +84,122 @@ function pickCurrentStateFields(
   return result;
 }
 
+// The field on a task/project/initiative row (or on a not-yet-created one's
+// own proposedDiff) that names its immediate parent -- objective and
+// decision aren't included: an objective has no parent to walk up to, and a
+// decision doesn't live in the objective/initiative/project hierarchy at all.
+const PARENT_ID_FIELD: Record<string, string> = {
+  task: "projectId",
+  project: "initiativeId",
+  initiative: "objectiveId",
+};
+
+interface BreadcrumbEntry {
+  id: string;
+  title: string;
+}
+
+interface Breadcrumb {
+  objective?: BreadcrumbEntry;
+  initiative?: BreadcrumbEntry;
+  project?: BreadcrumbEntry;
+}
+
+// Resolves "where does this suggestion live" -- the objective/initiative/
+// project chain *above* the suggestion's own target -- for the review UI's
+// workflow breadcrumb. For an update to an existing task/project/initiative,
+// the starting parent id comes off the already-fetched currentStates row
+// (loadCurrentStates fetches full rows, so it's already in hand, no extra
+// query). For a brand-new entity (targetId null), the same field name is
+// read off proposedDiff instead, since that's where the caller is proposing
+// to place it. Walks up at most two more levels (project -> initiative ->
+// objective), batched as one query per level rather than per suggestion, so
+// this stays O(1) queries regardless of how many suggestions are in the list.
+async function loadBreadcrumbs(
+  organizationId: string,
+  rows: Array<{ id: string; targetType: string; targetId: string | null; proposedDiff: unknown }>,
+  currentStates: Map<string, Record<string, unknown>>,
+): Promise<Map<string, Breadcrumb>> {
+  const startParentId = new Map<string, string>(); // suggestion id -> immediate parent id
+  const neededProjectIds = new Set<string>();
+  const neededInitiativeIds = new Set<string>();
+  const neededObjectiveIds = new Set<string>();
+
+  for (const row of rows) {
+    const parentField = PARENT_ID_FIELD[row.targetType];
+    if (!parentField) continue;
+    const source = row.targetId
+      ? currentStates.get(`${row.targetType}:${row.targetId}`)
+      : (row.proposedDiff as Record<string, unknown>);
+    const parentId = source?.[parentField];
+    if (typeof parentId !== "string") continue;
+    startParentId.set(row.id, parentId);
+    if (row.targetType === "task") neededProjectIds.add(parentId);
+    else if (row.targetType === "project") neededInitiativeIds.add(parentId);
+    else if (row.targetType === "initiative") neededObjectiveIds.add(parentId);
+  }
+
+  const projectsById = new Map<string, { id: string; title: string; initiativeId: string }>();
+  if (neededProjectIds.size > 0) {
+    const found = await db
+      .select({ id: projects.id, title: projects.title, initiativeId: projects.initiativeId })
+      .from(projects)
+      .where(and(eq(projects.organizationId, organizationId), inArray(projects.id, [...neededProjectIds])));
+    for (const p of found) {
+      projectsById.set(p.id, p);
+      neededInitiativeIds.add(p.initiativeId);
+    }
+  }
+
+  const initiativesById = new Map<string, { id: string; title: string; objectiveId: string }>();
+  if (neededInitiativeIds.size > 0) {
+    const found = await db
+      .select({ id: initiatives.id, title: initiatives.title, objectiveId: initiatives.objectiveId })
+      .from(initiatives)
+      .where(and(eq(initiatives.organizationId, organizationId), inArray(initiatives.id, [...neededInitiativeIds])));
+    for (const i of found) {
+      initiativesById.set(i.id, i);
+      neededObjectiveIds.add(i.objectiveId);
+    }
+  }
+
+  const objectivesById = new Map<string, { id: string; title: string }>();
+  if (neededObjectiveIds.size > 0) {
+    const found = await db
+      .select({ id: objectives.id, title: objectives.title })
+      .from(objectives)
+      .where(and(eq(objectives.organizationId, organizationId), inArray(objectives.id, [...neededObjectiveIds])));
+    for (const o of found) objectivesById.set(o.id, o);
+  }
+
+  const result = new Map<string, Breadcrumb>();
+  for (const row of rows) {
+    const parentId = startParentId.get(row.id);
+    if (!parentId) continue;
+    const breadcrumb: Breadcrumb = {};
+
+    if (row.targetType === "task") {
+      const project = projectsById.get(parentId);
+      if (project) breadcrumb.project = { id: project.id, title: project.title };
+      const initiative = project ? initiativesById.get(project.initiativeId) : undefined;
+      if (initiative) breadcrumb.initiative = { id: initiative.id, title: initiative.title };
+      const objective = initiative ? objectivesById.get(initiative.objectiveId) : undefined;
+      if (objective) breadcrumb.objective = { id: objective.id, title: objective.title };
+    } else if (row.targetType === "project") {
+      const initiative = initiativesById.get(parentId);
+      if (initiative) breadcrumb.initiative = { id: initiative.id, title: initiative.title };
+      const objective = initiative ? objectivesById.get(initiative.objectiveId) : undefined;
+      if (objective) breadcrumb.objective = { id: objective.id, title: objective.title };
+    } else if (row.targetType === "initiative") {
+      const objective = objectivesById.get(parentId);
+      if (objective) breadcrumb.objective = { id: objective.id, title: objective.title };
+    }
+
+    if (Object.keys(breadcrumb).length > 0) result.set(row.id, breadcrumb);
+  }
+  return result;
+}
+
 // Only task/decision carry a visibility column (see schema.ts); an
 // objective/initiative/project target, or a targetId-null (brand-new
 // entity) suggestion, is always viewable -- there's nothing to restrict yet.
@@ -173,6 +289,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
       .orderBy(desc(suggestions.createdAt));
 
     const currentStates = await loadCurrentStates(organizationId, rows);
+    const breadcrumbs = await loadBreadcrumbs(organizationId, rows, currentStates);
     const role = request.user!.role;
     const withCurrentState = rows
       // A suggestion targeting a task/decision the caller can't view (per
@@ -194,6 +311,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
           row.targetId ? currentStates.get(`${row.targetType}:${row.targetId}`) : undefined,
           row.proposedDiff as Record<string, unknown>,
         ),
+        breadcrumb: breadcrumbs.get(row.id) ?? null,
       }));
 
     reply.send({ suggestions: withCurrentState });

@@ -32,6 +32,49 @@ const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
 // (the common case) don't all get dumped into "needs a closer look."
 const CONFIDENCE_THRESHOLD = 0.7;
 
+// Three-tier version of the same cut, for the confidence badge's color --
+// gives a reviewer skimming the queue a visual "how much attention does this
+// need" signal instead of making them read the number itself every time.
+function confidenceTier(confidence: number): "high" | "medium" | "low" {
+  if (confidence >= 0.85) return "high";
+  if (confidence >= CONFIDENCE_THRESHOLD) return "medium";
+  return "low";
+}
+
+function ConfidenceBadge({ confidence }: { confidence: number }) {
+  const tier = confidenceTier(confidence);
+  return (
+    <div className={`confidence-badge confidence-${tier}`} title="How sure the model is about this suggestion">
+      <span className="confidence-value">{Math.round(confidence * 100)}%</span>
+      <span className="confidence-caption">confidence</span>
+    </div>
+  );
+}
+
+// Renders the objective/initiative/project chain a suggestion's target lives
+// under (or would be placed under, for a brand-new entity), so a reviewer
+// can tell which part of the company map an approval will affect without
+// opening the target itself. Absent for objective/decision targets, or any
+// suggestion whose parent chain couldn't be resolved (see loadBreadcrumbs on
+// the backend).
+function WorkflowBreadcrumb({ breadcrumb }: { breadcrumb: Suggestion["breadcrumb"] }) {
+  if (!breadcrumb) return null;
+  const parts = [breadcrumb.objective, breadcrumb.initiative, breadcrumb.project].filter(
+    (p): p is { id: string; title: string } => Boolean(p),
+  );
+  if (parts.length === 0) return null;
+  return (
+    <p className="card-breadcrumb">
+      {parts.map((p, i) => (
+        <span key={p.id}>
+          {i > 0 && <span className="breadcrumb-sep">›</span>}
+          {p.title}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 type ReviewTab = "pending" | "approved" | "rejected";
 
 const TAB_LABEL: Record<ReviewTab, string> = {
@@ -176,11 +219,15 @@ export default function ReviewPage() {
             <span className="muted">
               {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
             </span>
+            <WorkflowBreadcrumb breadcrumb={s.breadcrumb} />
           </div>
-          <div className="card-badges">
-            {s.status === "edited" && <span className="badge badge-edited">edited</span>}
-            {isHistory && <span className="badge">{s.status}</span>}
-            <span className="badge">{s.changeType.replace("_", " ")}</span>
+          <div className="card-top-right">
+            <ConfidenceBadge confidence={s.confidence} />
+            <div className="card-badges">
+              {s.status === "edited" && <span className="badge badge-edited">edited</span>}
+              {isHistory && <span className="badge">{s.status}</span>}
+              <span className="badge">{s.changeType.replace("_", " ")}</span>
+            </div>
           </div>
         </div>
 
@@ -206,8 +253,7 @@ export default function ReviewPage() {
         <p className="card-reasoning">{s.reasoning}</p>
 
         <p className="card-source">
-          Source: {s.source.type} &middot; received {new Date(s.source.receivedAt).toLocaleString()} &middot;
-          confidence {Math.round(s.confidence * 100)}%
+          Source: {s.source.type} &middot; received {new Date(s.source.receivedAt).toLocaleString()}
         </p>
 
         <SourceToggle sourceId={s.source.id} />
