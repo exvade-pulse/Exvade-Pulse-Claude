@@ -4,12 +4,14 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   API_URL,
+  checkDuplicateTasks,
   fetchCompanyMap,
   fetchCurrentUser,
   type CompanyMapInitiative,
   type CompanyMapObjective,
   type CompanyMapProject,
   type CompanyMapResponse,
+  type DuplicateCheckResult,
   type SessionUser,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
@@ -184,9 +186,27 @@ export default function CompanyMapPage() {
   // collapsible for when a real org's map grows large enough to need it.
   const [openProjects, setOpenProjects] = useState<Set<string>>(new Set());
 
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [duplicateResult, setDuplicateResult] = useState<DuplicateCheckResult | null>(null);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+
   useEffect(() => {
     fetchCurrentUser().then(setUser);
   }, []);
+
+  async function handleCheckDuplicates() {
+    setCheckingDuplicates(true);
+    setDuplicateError(null);
+    setDuplicateResult(null);
+    try {
+      const result = await checkDuplicateTasks();
+      setDuplicateResult(result);
+    } catch (err) {
+      setDuplicateError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setCheckingDuplicates(false);
+    }
+  }
 
   useEffect(() => {
     if (user && user !== "loading") {
@@ -234,6 +254,27 @@ export default function CompanyMapPage() {
         <h1>Company map</h1>
         <span className="muted">{user.email}</span>
       </div>
+
+      <div className="card-actions" style={{ marginBottom: 16 }}>
+        <button className="decision-btn" onClick={handleCheckDuplicates} disabled={checkingDuplicates}>
+          {checkingDuplicates ? "Checking…" : "Check for duplicate tasks"}
+        </button>
+      </div>
+
+      {duplicateResult && (
+        <p className="card activity-summary">
+          Checked {duplicateResult.tasksChecked} task{duplicateResult.tasksChecked === 1 ? "" : "s"} across{" "}
+          {duplicateResult.projectsChecked} project{duplicateResult.projectsChecked === 1 ? "" : "s"} -- found{" "}
+          {duplicateResult.duplicatesFound} likely duplicate{duplicateResult.duplicatesFound === 1 ? "" : "s"}.
+          {duplicateResult.duplicatesFound > 0 && (
+            <>
+              {" "}
+              <Link href="/review">Review them</Link>.
+            </>
+          )}
+        </p>
+      )}
+      {duplicateError && <div className="error-banner">{duplicateError}</div>}
 
       {loadError && <div className="error-banner">{loadError}</div>}
 

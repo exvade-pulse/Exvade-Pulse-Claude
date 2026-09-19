@@ -384,6 +384,56 @@ export async function suggestionRoutes(app: FastifyInstance) {
     }
   });
 
+  // Approves several suggestions in one request -- for the review queue's
+  // "approve all ready-to-approve" action, where clicking through each one
+  // individually is real friction once there are a dozen high-confidence
+  // items sitting in the same tier. Each id goes through the exact same
+  // isSuggestionViewable check and approveSuggestion call the single-approve
+  // route uses, one at a time (not parallelized) so two suggestions that
+  // happen to target the same entity apply in a stable, predictable order
+  // rather than racing. One bad id never aborts the rest -- the response
+  // reports each outcome individually so the UI can show a partial result.
+  const MAX_BULK_APPROVE = 100;
+  app.post<{ Body: { ids?: string[] } }>("/api/suggestions/bulk-approve", async (request, reply) => {
+    const ids = request.body?.ids;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      reply.code(400).send({ error: "ids is required and must be a non-empty array" });
+      return;
+    }
+    if (ids.length > MAX_BULK_APPROVE) {
+      reply.code(400).send({ error: `Cannot approve more than ${MAX_BULK_APPROVE} suggestions at once` });
+      return;
+    }
+
+    const organizationId = request.user!.organizationId;
+    const role = request.user!.role;
+    const approved: string[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    for (const id of ids) {
+      if (!(await isSuggestionViewable(organizationId, id, role))) {
+        failed.push({ id, error: "Suggestion not found" });
+        continue;
+      }
+      try {
+        const updated = await approveSuggestion(db, {
+          organizationId,
+          suggestionId: id,
+          reviewerId: request.user!.userId,
+        });
+        approved.push(updated.id);
+      } catch (err) {
+        if (err instanceof SuggestionApplyError) {
+          failed.push({ id, error: err.message });
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    reply.send({ approved, failed });
+  });
+
   app.patch<{ Params: { id: string }; Body: { proposedDiff?: Record<string, unknown> } }>(
     "/api/suggestions/:id",
     async (request, reply) => {

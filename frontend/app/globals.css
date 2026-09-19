@@ -260,6 +260,36 @@ body {
   font-weight: 600;
 }
 
+.card-select {
+  flex-shrink: 0;
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #eef2ff;
+  border-color: #c7d0f5;
+}
+
+.select-all-link {
+  border: none;
+  background: none;
+  color: #3730a3;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  margin-left: 10px;
+  padding: 0;
+  text-decoration: underline;
+}
+
 .badge {
   font-size: 11px;
   text-transform: uppercase;

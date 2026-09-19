@@ -91,6 +91,28 @@ export async function decideSuggestion(id: string, decision: "approve" | "reject
   }
 }
 
+export interface BulkApproveResult {
+  approved: string[];
+  failed: Array<{ id: string; error: string }>;
+}
+
+// One request for several approvals at once, for the review queue's "approve
+// all ready-to-approve" action -- see backend/src/routes/suggestions.ts for
+// why this is a dedicated endpoint rather than N calls to decideSuggestion.
+export async function bulkApproveSuggestions(ids: string[]): Promise<BulkApproveResult> {
+  const res = await fetch(`${API_URL}/api/suggestions/bulk-approve`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to bulk-approve suggestions");
+  }
+  return res.json();
+}
+
 export interface SourceDetail {
   id: string;
   type: string;
@@ -808,6 +830,24 @@ export async function triggerUnsortedRetriage(): Promise<RetriageResult> {
   const res = await fetch(`${API_URL}/api/unsorted/retriage`, { method: "POST", credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to re-triage Unsorted tasks (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface DuplicateCheckResult {
+  projectsChecked: number;
+  tasksChecked: number;
+  duplicatesFound: number;
+}
+
+// Triggers an on-demand Claude pass (one call per project with 2+ open
+// tasks) that flags genuine duplicate tasks -- any found pair proposes
+// marking the lesser copy "superseded" as a normal suggestion in Review.
+// Never runs automatically -- see backend/src/routes/duplicates.ts.
+export async function checkDuplicateTasks(): Promise<DuplicateCheckResult> {
+  const res = await fetch(`${API_URL}/api/tasks/check-duplicates`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to check for duplicate tasks (${res.status})`);
   }
   return res.json();
 }

@@ -1131,3 +1131,142 @@ describe("GET /api/suggestions movingToProject", () => {
     expect(body.suggestions[0].movingToProject).toBeNull();
   });
 });
+
+describe("POST /api/suggestions/bulk-approve", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  async function newTaskSuggestion(fixture: Awaited<ReturnType<typeof createFixtureOrg>>, title: string) {
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { projectId: fixture.project.id, title },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+    return suggestion;
+  }
+
+  it("returns 400 when ids is missing or empty", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "bulk-approve-missing-ids.test" });
+    const app = await buildApp();
+    const cookies = { [SESSION_COOKIE_NAME]: await tokenFor(fixture) };
+
+    const missing = await app.inject({ method: "POST", url: "/api/suggestions/bulk-approve", payload: {}, cookies });
+    expect(missing.statusCode).toBe(400);
+
+    const empty = await app.inject({ method: "POST", url: "/api/suggestions/bulk-approve", payload: { ids: [] }, cookies });
+    expect(empty.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it("returns 400 when more than 100 ids are submitted at once", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "bulk-approve-too-many.test" });
+    const app = await buildApp();
+    const ids = Array.from({ length: 101 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/suggestions/bulk-approve",
+      payload: { ids },
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("approves every valid pending suggestion and reports their ids", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "bulk-approve-happy-path.test" });
+    const a = await newTaskSuggestion(fixture, "Task A");
+    const b = await newTaskSuggestion(fixture, "Task B");
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/suggestions/bulk-approve",
+      payload: { ids: [a.id, b.id] },
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { approved: string[]; failed: Array<{ id: string; error: string }> };
+    expect(body.approved.sort()).toEqual([a.id, b.id].sort());
+    expect(body.failed).toEqual([]);
+
+    const allTasks = await db.select().from(tasks).where(eq(tasks.organizationId, fixture.org.id));
+    expect(allTasks).toHaveLength(2);
+
+    const [refreshedA] = await db.select().from(suggestions).where(eq(suggestions.id, a.id));
+    expect(refreshedA.status).toBe("approved");
+  });
+
+  it("reports an already-approved suggestion as failed without aborting the rest of the batch", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "bulk-approve-partial-failure.test" });
+    const alreadyApproved = await newTaskSuggestion(fixture, "Already approved");
+    const stillPending = await newTaskSuggestion(fixture, "Still pending");
+
+    await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: alreadyApproved.id,
+      reviewerId: fixture.user.id,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/suggestions/bulk-approve",
+      payload: { ids: [alreadyApproved.id, stillPending.id] },
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { approved: string[]; failed: Array<{ id: string; error: string }> };
+    expect(body.approved).toEqual([stillPending.id]);
+    expect(body.failed).toHaveLength(1);
+    expect(body.failed[0].id).toBe(alreadyApproved.id);
+  });
+
+  it("cannot bulk-approve a suggestion belonging to a different organization -- it comes back failed, not approved", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "bulk-approve-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "bulk-approve-org-b.test" });
+    const crossOrgSuggestion = await newTaskSuggestion(orgB, "Belongs to org B");
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/suggestions/bulk-approve",
+      payload: { ids: [crossOrgSuggestion.id] },
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(orgA) },
+    });
+    await app.close();
+
+    const body = response.json() as { approved: string[]; failed: Array<{ id: string }> };
+    expect(body.approved).toEqual([]);
+    expect(body.failed).toHaveLength(1);
+
+    const [untouched] = await db.select().from(suggestions).where(eq(suggestions.id, crossOrgSuggestion.id));
+    expect(untouched.status).toBe("pending");
+  });
+
+  it("returns 401 for an unauthenticated request", async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/suggestions/bulk-approve",
+      payload: { ids: ["00000000-0000-4000-8000-000000000000"] },
+    });
+    await app.close();
+    expect(response.statusCode).toBe(401);
+  });
+});

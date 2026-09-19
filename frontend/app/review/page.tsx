@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   API_URL,
+  bulkApproveSuggestions,
   decideSuggestion,
   editSuggestion,
   fetchCurrentUser,
@@ -159,6 +160,9 @@ export default function ReviewPage() {
   const [editDraft, setEditDraft] = useState<Record<string, string>>({});
   const [savingEdit, setSavingEdit] = useState(false);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkApproving, setBulkApproving] = useState(false);
+
   const [showAddUpdate, setShowAddUpdate] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [submittingNote, setSubmittingNote] = useState(false);
@@ -176,6 +180,7 @@ export default function ReviewPage() {
       setEditingId(null);
       setEditDraft({});
       setNoteResult(null);
+      setSelectedIds(new Set());
       const load = tab === "pending" ? fetchPendingSuggestions() : fetchSuggestionsByStatus(tab);
       load.then(setSuggestions).catch((err) => setLoadError(err.message));
     }
@@ -187,10 +192,53 @@ export default function ReviewPage() {
     try {
       await decideSuggestion(id, decision);
       setSuggestions((prev) => prev.filter((s) => s.id !== id));
+      setSelectedIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setPendingActionId(null);
+    }
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleBulkApprove(ids: string[]) {
+    if (ids.length === 0) return;
+    if (!window.confirm(`Approve ${ids.length} suggestion${ids.length === 1 ? "" : "s"}? This can't be undone.`)) {
+      return;
+    }
+    setBulkApproving(true);
+    setActionError(null);
+    try {
+      const result = await bulkApproveSuggestions(ids);
+      const approvedSet = new Set(result.approved);
+      setSuggestions((prev) => prev.filter((s) => !approvedSet.has(s.id)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of result.approved) next.delete(id);
+        return next;
+      });
+      if (result.failed.length > 0) {
+        setActionError(
+          `${result.approved.length} approved, ${result.failed.length} failed: ${result.failed.map((f) => f.error).join("; ")}`,
+        );
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setBulkApproving(false);
     }
   }
 
@@ -259,6 +307,15 @@ export default function ReviewPage() {
     return (
       <article className="card" key={s.id}>
         <div className="card-top">
+          {!isHistory && (
+            <input
+              type="checkbox"
+              className="card-select"
+              checked={selectedIds.has(s.id)}
+              onChange={() => toggleSelected(s.id)}
+              aria-label={`Select "${cardTitle(s)}" for bulk approval`}
+            />
+          )}
           <div>
             <p className="card-title">{cardTitle(s)}</p>
             <span className="muted">
@@ -456,6 +513,26 @@ export default function ReviewPage() {
       {loadError && <div className="error-banner">{loadError}</div>}
       {actionError && <div className="error-banner">{actionError}</div>}
 
+      {tab === "pending" && selectedIds.size > 0 && (
+        <div className="card selection-bar">
+          <span>
+            {selectedIds.size} suggestion{selectedIds.size === 1 ? "" : "s"} selected
+          </span>
+          <div className="card-actions">
+            <button
+              className="decision-btn approve"
+              disabled={bulkApproving}
+              onClick={() => handleBulkApprove([...selectedIds])}
+            >
+              {bulkApproving ? "Approving…" : "Approve selected"}
+            </button>
+            <button className="decision-btn cancel" disabled={bulkApproving} onClick={() => setSelectedIds(new Set())}>
+              Clear selection
+            </button>
+          </div>
+        </div>
+      )}
+
       {suggestions.length === 0 && !loadError && <p className="empty-state">{TAB_EMPTY_MESSAGE[tab]}</p>}
 
       {groupMode === "project" ? (
@@ -471,7 +548,15 @@ export default function ReviewPage() {
         <>
           {readyToApprove.length > 0 && (
             <>
-              <p className="section-title">Ready to approve ({readyToApprove.length})</p>
+              <p className="section-title">
+                Ready to approve ({readyToApprove.length})
+                <button
+                  className="select-all-link"
+                  onClick={() => setSelectedIds(new Set(readyToApprove.map((s) => s.id)))}
+                >
+                  Select all
+                </button>
+              </p>
               {readyToApprove.map(renderCard)}
             </>
           )}
