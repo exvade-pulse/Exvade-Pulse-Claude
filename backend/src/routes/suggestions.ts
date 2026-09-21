@@ -431,7 +431,14 @@ export async function suggestionRoutes(app: FastifyInstance) {
         if (err instanceof SuggestionApplyError) {
           failed.push({ id, error: err.message });
         } else {
-          throw err;
+          // An unexpected (non-SuggestionApplyError) failure on one item --
+          // e.g. a malformed proposedDiff the whitelist/required-field checks
+          // didn't anticipate -- must not take the rest of the batch down
+          // with it. Logged for visibility (this is a real bug, not an
+          // ordinary "already approved" style rejection) but reported back
+          // as an ordinary failure, same as the expected case.
+          request.log.error({ err, suggestionId: id }, "Unexpected error approving a suggestion during bulk-approve");
+          failed.push({ id, error: "Something went wrong approving this suggestion" });
         }
       }
     }

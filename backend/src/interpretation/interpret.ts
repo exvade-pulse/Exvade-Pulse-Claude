@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { getClaudeClient, type ClaudeClient } from "./claudeClient.js";
-import { ALLOWED_FIELDS, pickAllowedFields } from "../suggestions/apply.js";
+import { ALLOWED_FIELDS, pickAllowedFields, REQUIRED_CREATE_FIELDS } from "../suggestions/apply.js";
 import type { SuggestionDraft } from "./fakeInterpret.js";
 
 export const INTERPRETATION_MODEL = "claude-sonnet-5";
@@ -375,6 +375,20 @@ function validateSuggestionInput(
   let sanitizedDiff = pickAllowedFields(draft.targetType, draft.changeType, draft.proposedDiff);
   sanitizedDiff = stripUngroundedProtectedFields(draft.targetType, sanitizedDiff, draft.evidenceQuotes, source.body);
   sanitizedDiff = stripFieldsWithFabricatedDates(draft.targetType, sanitizedDiff, source.receivedAt, source.body);
+
+  // A brand-new row (targetId null) missing its required parent id/title
+  // would fail the target table's own NOT NULL constraint at approval time
+  // no matter how many times it's retried -- reject it here instead of
+  // storing a suggestion that can never actually be approved. Decisions have
+  // their own required-field check in apply.ts's createDecision path.
+  if (draft.targetId === null && draft.targetType !== "decision") {
+    const missing = REQUIRED_CREATE_FIELDS[draft.targetType].filter((key) => !(key in sanitizedDiff));
+    if (missing.length > 0) {
+      return {
+        reason: `proposes a new ${draft.targetType} but proposedDiff is missing required field(s) ${missing.join(", ")}`,
+      };
+    }
+  }
 
   return {
     draft: {

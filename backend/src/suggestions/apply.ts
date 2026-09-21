@@ -18,6 +18,27 @@ const TABLE_BY_TARGET_TYPE = {
 // so they're deliberately left out of v1.
 const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner"] as const;
 
+// Fields a brand-new row of each type cannot be created without -- a real
+// parent id (except objective, which has none) plus a title. interpret.ts's
+// SYSTEM_PROMPT already instructs the model to always include the parent id,
+// but that's prompt guidance, not enforcement: a malformed draft (parent id
+// omitted) previously reached the database uncaught, where the table's own
+// NOT NULL constraint rejected it with a raw, unhandled Postgres error --
+// crashing the whole request (including the rest of a bulk-approve batch)
+// instead of failing this one suggestion gracefully. Checked below before
+// ever attempting the insert.
+// Exported so interpret.ts's validateSuggestionInput can reject a malformed
+// new-entity draft at ingestion time too -- catching it here (apply.ts) is
+// what stops the crash, but rejecting it before it's ever stored as a
+// suggestion is better still, since a suggestion missing required fields can
+// never actually be approved no matter how many times it's retried.
+export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decision">, string[]> = {
+  objective: ["title"],
+  initiative: ["objectiveId", "title"],
+  project: ["initiativeId", "title"],
+  task: ["projectId", "title"],
+};
+
 // "decision" is a valid suggestion targetType but deliberately has no entry in
 // TABLE_BY_TARGET_TYPE: creating a decision isn't a drop-in "insert this table
 // with whitelisted fields" case like the other four (it needs org-scoped
@@ -224,6 +245,13 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         }
         resultTargetId = updated.id;
       } else {
+        const missing = REQUIRED_CREATE_FIELDS[targetType].filter((key) => !(key in fields));
+        if (missing.length > 0) {
+          throw new SuggestionApplyError(
+            `Cannot create a new ${targetType}: missing required field(s) ${missing.join(", ")}`,
+          );
+        }
+
         const insertValues: Record<string, unknown> = { ...fields, organizationId: params.organizationId };
         if (evidencePatch) {
           insertValues.fieldEvidence = evidencePatch;

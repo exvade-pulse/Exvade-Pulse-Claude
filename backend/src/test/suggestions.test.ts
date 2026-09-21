@@ -681,6 +681,88 @@ describe("approveSuggestion fieldEvidence", () => {
   });
 });
 
+describe("approveSuggestion rejects a malformed new-entity diff instead of crashing", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  // Real production bug: a new_task-labeled suggestion proposing a brand-new
+  // PROJECT whose proposedDiff never included initiativeId reached the
+  // database uncaught, where the NOT NULL constraint threw a raw Postgres
+  // error -- crashing the whole request instead of failing gracefully.
+  it("throws SuggestionApplyError (not a raw DB error) when a new project's proposedDiff is missing initiativeId", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "missing-required-field-project.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "project",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { title: "A project with no initiative", description: "Missing initiativeId entirely." },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    await expect(
+      approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id }),
+    ).rejects.toBeInstanceOf(SuggestionApplyError);
+
+    const allProjects = await db.select().from(projects).where(eq(projects.organizationId, fixture.org.id));
+    expect(allProjects).toHaveLength(1); // only the fixture's own project -- nothing partially created
+  });
+
+  it("throws SuggestionApplyError when a new task's proposedDiff is missing projectId", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "missing-required-field-task.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { title: "A task with no project" },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    await expect(
+      approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id }),
+    ).rejects.toBeInstanceOf(SuggestionApplyError);
+  });
+
+  it("still succeeds normally when all required fields are present", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "required-fields-present.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "project",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { initiativeId: fixture.initiative.id, title: "A well-formed new project" },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    const updated = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+    expect(updated.status).toBe("approved");
+  });
+});
+
 describe("suggestion editing", () => {
   beforeEach(async () => {
     await truncateAll(db);
@@ -1486,6 +1568,47 @@ describe("POST /api/suggestions/bulk-approve", () => {
 
     const [untouched] = await db.select().from(suggestions).where(eq(suggestions.id, crossOrgSuggestion.id));
     expect(untouched.status).toBe("pending");
+  });
+
+  // Real production bug: a malformed suggestion (a new-project proposal
+  // missing initiativeId) threw a raw, uncaught DB error mid-batch, which
+  // crashed the whole request with a 500 instead of reporting it as one
+  // failed item -- the other valid ids in the same batch never got a
+  // response at all, even though their own approvals may have already
+  // committed. apply.ts's REQUIRED_CREATE_FIELDS check now turns this into
+  // an ordinary SuggestionApplyError; this also covers the route's own
+  // defense-in-depth catch-all for any other unexpected error.
+  it("reports a malformed suggestion as failed rather than 500ing the whole batch", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "bulk-approve-malformed-item.test" });
+    const good = await newTaskSuggestion(fixture, "Good task");
+    const [malformed] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "project",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { title: "A project with no initiative" }, // missing initiativeId
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/suggestions/bulk-approve",
+      payload: { ids: [good.id, malformed.id] },
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { approved: string[]; failed: Array<{ id: string; error: string }> };
+    expect(body.approved).toEqual([good.id]);
+    expect(body.failed).toHaveLength(1);
+    expect(body.failed[0].id).toBe(malformed.id);
   });
 
   it("returns 401 for an unauthenticated request", async () => {

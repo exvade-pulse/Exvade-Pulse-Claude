@@ -738,4 +738,46 @@ describe("interpretSource", () => {
       Array.from({ length: MAX_SUGGESTIONS_PER_SOURCE }, (_, i) => `Task ${i}`),
     );
   });
+
+  // Real production bug: a new-project proposal that never included
+  // initiativeId was previously stored as a suggestion that could never
+  // actually be approved (it would fail the projects table's own NOT NULL
+  // constraint at approval time, uncaught). Rejected here instead, before it
+  // ever reaches the database.
+  it("rejects a new-entity proposal missing its required parent id", async () => {
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "new_task",
+        targetType: "project",
+        targetId: null,
+        proposedDiff: { title: "A project with no initiative" }, // missing initiativeId
+        reasoning: "x",
+        confidence: 0.6,
+      }),
+    );
+
+    await expect(interpretSource(source, emptyContext(), client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
+  it("accepts a new-entity proposal once its required parent id is present", async () => {
+    const initiativeId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      initiatives: [{ id: initiativeId, title: "Pre-clinical validation", status: "active" }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "new_task",
+        targetType: "project",
+        targetId: null,
+        proposedDiff: { initiativeId, title: "A well-formed new project" },
+        reasoning: "x",
+        confidence: 0.6,
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].proposedDiff.initiativeId).toBe(initiativeId);
+  });
 });
