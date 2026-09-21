@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { auditLog, decisions, tasks } from "../db/schema.js";
+import { auditLog, decisions, sources, suggestions, tasks } from "../db/schema.js";
 import {
   addDecisionInfo,
   assignDecision,
@@ -506,6 +506,55 @@ describe("GET/POST /api/decisions", () => {
     const response = await app.inject({ method: "GET", url: "/api/decisions" });
     expect(response.statusCode).toBe(401);
     await app.close();
+  });
+
+  // Same real bug as company-map's: "updatedAt" must reflect the real
+  // source date behind the decision's current content, not when the row
+  // itself was last written to the database.
+  it("shows the real source date, not the DB row's own updatedAt, for a decision built from a historical document", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "decisions-real-updated-date.test" });
+    const decision = await createDecision(db, {
+      organizationId: fixture.org.id,
+      actorId: fixture.user.id,
+      title: "An old open question",
+      decider: "Leadership",
+    });
+
+    const historicalDate = new Date("2020-07-28T00:00:00.000Z");
+    const [source] = await db
+      .insert(sources)
+      .values({ organizationId: fixture.org.id, type: "document", externalId: "2020-status-meeting", receivedAt: historicalDate })
+      .returning();
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: source.id,
+      targetType: "decision",
+      targetId: decision.id,
+      changeType: "decision",
+      proposedDiff: { relevantContext: "From the 2020 status meeting." },
+      reasoning: "test",
+      confidence: 0.6,
+      status: "approved",
+    });
+
+    const app = await buildApp();
+    const token = await signSession({
+      userId: fixture.user.id,
+      organizationId: fixture.org.id,
+      email: fixture.user.email,
+      role: fixture.authorization.role,
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/decisions",
+      cookies: { [SESSION_COOKIE_NAME]: token },
+    });
+    await app.close();
+
+    const body = response.json() as { decisions: Array<{ id: string; updatedAt: string }> };
+    const found = body.decisions.find((d) => d.id === decision.id);
+    expect(found?.updatedAt).toBe(historicalDate.toISOString());
+    expect(new Date(decision.updatedAt).getFullYear()).toBeGreaterThan(2020);
   });
 
   it("defaults to listing only open decisions; a decided one is excluded", async () => {

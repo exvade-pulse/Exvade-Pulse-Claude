@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
 import { eq } from "drizzle-orm";
-import { initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
 import { createDecision, resolveDecision } from "../decisions/manage.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
@@ -54,6 +54,78 @@ describe("GET /api/company-map", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as { objectives: unknown[] };
     expect(body.objectives).toEqual([]);
+  });
+
+  // Real user-reported bug: a task's "Updated" date was showing when the
+  // database row was last written to (i.e. when a historical document was
+  // imported), not the real-world date of the information -- making a 2020
+  // status meeting look like it happened today. The task itself is created
+  // "today" (fixture default), but its real evidence comes from a source
+  // dated 2020; the response must reflect the 2020 date, not the row's own
+  // recent updatedAt.
+  it("shows the real source date, not the DB row's own updatedAt, for a task built from a historical document", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "map-real-updated-date.test" });
+    const historicalDate = new Date("2020-07-28T00:00:00.000Z");
+    const [source] = await db
+      .insert(sources)
+      .values({ organizationId: fixture.org.id, type: "document", externalId: "2020-status-meeting", receivedAt: historicalDate })
+      .returning();
+
+    const [task] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Animal study justification/rationale", status: "needs_attention" })
+      .returning();
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: source.id,
+      targetType: "task",
+      targetId: task.id,
+      changeType: "new_task",
+      proposedDiff: { title: "Animal study justification/rationale", status: "needs_attention" },
+      reasoning: "test",
+      confidence: 0.6,
+      status: "approved",
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/company-map",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as {
+      objectives: Array<{ initiatives: Array<{ projects: Array<{ tasks: Array<{ id: string; updatedAt: string }> }> }> }>;
+    };
+    const foundTask = body.objectives[0].initiatives[0].projects[0].tasks.find((t) => t.id === task.id);
+    expect(foundTask?.updatedAt).toBe(historicalDate.toISOString());
+    // Sanity check the fixture's own row really was written "now", not 2020
+    // -- proving this assertion is actually exercising the override, not
+    // coincidentally matching a row that happened to be old already.
+    expect(new Date(task.updatedAt).getFullYear()).toBeGreaterThan(2020);
+  });
+
+  it("falls back to the row's own updatedAt when a task has no approved-suggestion history at all", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "map-real-updated-fallback.test" });
+    const [task] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Hand-created task", status: "active" })
+      .returning();
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/company-map",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as {
+      objectives: Array<{ initiatives: Array<{ projects: Array<{ tasks: Array<{ id: string; updatedAt: string }> }> }> }>;
+    };
+    const foundTask = body.objectives[0].initiatives[0].projects[0].tasks.find((t) => t.id === task.id);
+    expect(foundTask?.updatedAt).toBe(task.updatedAt.toISOString());
   });
 
   it("returns the full nested tree for the caller's org, org-isolated from another org's data", async () => {
@@ -594,6 +666,43 @@ describe("company map detail endpoints", () => {
       expect(body.objective?.id).toBe(fixture.objective.id);
       expect(body.approvedSuggestions).toHaveLength(1);
       expect(body.approvedSuggestions[0].id).toBe(approved.id);
+    });
+
+    it("shows the real source date, not the DB row's own updatedAt, when built from a historical document", async () => {
+      const fixture = await createFixtureOrg(db, { domain: "task-detail-real-updated-date.test" });
+      const historicalDate = new Date("2020-07-28T00:00:00.000Z");
+      const [source] = await db
+        .insert(sources)
+        .values({ organizationId: fixture.org.id, type: "document", externalId: "2020-status-meeting", receivedAt: historicalDate })
+        .returning();
+
+      const [task] = await db
+        .insert(tasks)
+        .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Animal study justification/rationale", status: "needs_attention" })
+        .returning();
+      await db.insert(suggestions).values({
+        organizationId: fixture.org.id,
+        sourceId: source.id,
+        targetType: "task",
+        targetId: task.id,
+        changeType: "new_task",
+        proposedDiff: { title: "Animal study justification/rationale", status: "needs_attention" },
+        reasoning: "test",
+        confidence: 0.6,
+        status: "approved",
+      });
+
+      const app = await buildApp();
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/tasks/${task.id}`,
+        cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+      });
+      await app.close();
+
+      const body = response.json() as { task: { updatedAt: string } };
+      expect(body.task.updatedAt).toBe(historicalDate.toISOString());
+      expect(new Date(task.updatedAt).getFullYear()).toBeGreaterThan(2020);
     });
 
     it("includes the blocking open decision, but not a decided one", async () => {

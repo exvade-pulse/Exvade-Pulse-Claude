@@ -7,6 +7,7 @@ import { emptyTaskCounts } from "../tasks/rollup.js";
 import { blockingDecisionsForTasks } from "../tasks/blockingDecisions.js";
 import { taskSourceCounts } from "../tasks/sourceCounts.js";
 import { canViewVisibility, visibilityFilter } from "../access/visibility.js";
+import { loadRealUpdatedAt, resolveRealUpdatedAt } from "../entities/realUpdatedAt.js";
 import { UUID_RE } from "./uuid.js";
 
 const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
@@ -77,14 +78,20 @@ export async function companyMapRoutes(app: FastifyInstance) {
     ]);
 
     const allTaskIds = taskRows.map((task) => task.id);
-    const [blockingDecisionByTaskId, sourceCountByTaskId] = await Promise.all([
-      blockingDecisionsForTasks(db, organizationId, allTaskIds),
-      taskSourceCounts(db, organizationId, allTaskIds),
-    ]);
+    const [blockingDecisionByTaskId, sourceCountByTaskId, realUpdatedByObjective, realUpdatedByInitiative, realUpdatedByProject, realUpdatedByTask] =
+      await Promise.all([
+        blockingDecisionsForTasks(db, organizationId, allTaskIds),
+        taskSourceCounts(db, organizationId, allTaskIds),
+        loadRealUpdatedAt(db, organizationId, "objective", objectiveRows.map((o) => o.id)),
+        loadRealUpdatedAt(db, organizationId, "initiative", initiativeRows.map((i) => i.id)),
+        loadRealUpdatedAt(db, organizationId, "project", projectRows.map((p) => p.id)),
+        loadRealUpdatedAt(db, organizationId, "task", allTaskIds),
+      ]);
     const taskRowsWithTags = taskRows.map((task) => ({
       ...task,
       blockingDecision: blockingDecisionByTaskId.get(task.id) ?? null,
       sourceCount: sourceCountByTaskId.get(task.id) ?? 0,
+      updatedAt: resolveRealUpdatedAt(task.updatedAt, realUpdatedByTask.get(task.id)),
     }));
 
     const tasksByProject = new Map<string, typeof taskRowsWithTags>();
@@ -100,7 +107,11 @@ export async function companyMapRoutes(app: FastifyInstance) {
     >();
     for (const project of projectRows) {
       const list = projectsByInitiative.get(project.initiativeId) ?? [];
-      list.push({ ...project, tasks: tasksByProject.get(project.id) ?? [] });
+      list.push({
+        ...project,
+        updatedAt: resolveRealUpdatedAt(project.updatedAt, realUpdatedByProject.get(project.id)),
+        tasks: tasksByProject.get(project.id) ?? [],
+      });
       projectsByInitiative.set(project.initiativeId, list);
     }
 
@@ -110,12 +121,17 @@ export async function companyMapRoutes(app: FastifyInstance) {
     >();
     for (const initiative of initiativeRows) {
       const list = initiativesByObjective.get(initiative.objectiveId) ?? [];
-      list.push({ ...initiative, projects: projectsByInitiative.get(initiative.id) ?? [] });
+      list.push({
+        ...initiative,
+        updatedAt: resolveRealUpdatedAt(initiative.updatedAt, realUpdatedByInitiative.get(initiative.id)),
+        projects: projectsByInitiative.get(initiative.id) ?? [],
+      });
       initiativesByObjective.set(initiative.objectiveId, list);
     }
 
     const tree = objectiveRows.map((objective) => ({
       ...objective,
+      updatedAt: resolveRealUpdatedAt(objective.updatedAt, realUpdatedByObjective.get(objective.id)),
       initiatives: initiativesByObjective.get(objective.id) ?? [],
     }));
 
@@ -153,7 +169,18 @@ export async function companyMapRoutes(app: FastifyInstance) {
       .where(and(eq(initiatives.objectiveId, id), eq(initiatives.organizationId, organizationId)))
       .orderBy(initiatives.title);
 
-    reply.send({ objective, initiatives: initiativeRows });
+    const [realUpdatedForObjective, realUpdatedByInitiative] = await Promise.all([
+      loadRealUpdatedAt(db, organizationId, "objective", [id]),
+      loadRealUpdatedAt(db, organizationId, "initiative", initiativeRows.map((i) => i.id)),
+    ]);
+
+    reply.send({
+      objective: { ...objective, updatedAt: resolveRealUpdatedAt(objective.updatedAt, realUpdatedForObjective.get(id)) },
+      initiatives: initiativeRows.map((i) => ({
+        ...i,
+        updatedAt: resolveRealUpdatedAt(i.updatedAt, realUpdatedByInitiative.get(i.id)),
+      })),
+    });
   });
 
   app.get<{ Params: { id: string } }>("/api/initiatives/:id", async (request, reply) => {
@@ -205,7 +232,20 @@ export async function companyMapRoutes(app: FastifyInstance) {
     const taskCounts = emptyTaskCounts();
     for (const row of taskStatusCounts) taskCounts[row.status] = row.count;
 
-    reply.send({ initiative, objective: objective ?? null, projects: projectRows, taskCounts });
+    const [realUpdatedForInitiative, realUpdatedByProject] = await Promise.all([
+      loadRealUpdatedAt(db, organizationId, "initiative", [id]),
+      loadRealUpdatedAt(db, organizationId, "project", projectRows.map((p) => p.id)),
+    ]);
+
+    reply.send({
+      initiative: { ...initiative, updatedAt: resolveRealUpdatedAt(initiative.updatedAt, realUpdatedForInitiative.get(id)) },
+      objective: objective ?? null,
+      projects: projectRows.map((p) => ({
+        ...p,
+        updatedAt: resolveRealUpdatedAt(p.updatedAt, realUpdatedByProject.get(p.id)),
+      })),
+      taskCounts,
+    });
   });
 
   app.get<{ Params: { id: string } }>("/api/projects/:id", async (request, reply) => {
@@ -263,7 +303,20 @@ export async function companyMapRoutes(app: FastifyInstance) {
     const taskCounts = emptyTaskCounts();
     for (const row of taskStatusCounts) taskCounts[row.status] = row.count;
 
-    reply.send({ project, initiative: initiative ?? null, tasks: taskRows, taskCounts });
+    const [realUpdatedForProject, realUpdatedByTask] = await Promise.all([
+      loadRealUpdatedAt(db, organizationId, "project", [id]),
+      loadRealUpdatedAt(db, organizationId, "task", taskRows.map((t) => t.id)),
+    ]);
+
+    reply.send({
+      project: { ...project, updatedAt: resolveRealUpdatedAt(project.updatedAt, realUpdatedForProject.get(id)) },
+      initiative: initiative ?? null,
+      tasks: taskRows.map((t) => ({
+        ...t,
+        updatedAt: resolveRealUpdatedAt(t.updatedAt, realUpdatedByTask.get(t.id)),
+      })),
+      taskCounts,
+    });
   });
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
@@ -328,8 +381,10 @@ export async function companyMapRoutes(app: FastifyInstance) {
       .from(decisions)
       .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"), eq(decisions.relatedTaskId, id)));
 
+    const realUpdatedForTask = await loadRealUpdatedAt(db, organizationId, "task", [id]);
+
     reply.send({
-      task,
+      task: { ...task, updatedAt: resolveRealUpdatedAt(task.updatedAt, realUpdatedForTask.get(id)) },
       project: chain?.project ?? null,
       initiative: chain?.initiative ?? null,
       objective: chain?.objective ?? null,

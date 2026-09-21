@@ -5,6 +5,7 @@ import { db } from "../db/client.js";
 import { decisions, tasks, visibilityEnum, type UserRole, type Visibility } from "../db/schema.js";
 import { addDecisionInfo, assignDecision, createDecision, resolveDecision, DecisionError } from "../decisions/manage.js";
 import { canViewVisibility, visibilityFilter } from "../access/visibility.js";
+import { loadRealUpdatedAt, resolveRealUpdatedAt } from "../entities/realUpdatedAt.js";
 import { UUID_RE } from "./uuid.js";
 
 const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
@@ -70,7 +71,11 @@ export async function decisionRoutes(app: FastifyInstance) {
       // Soonest due date first; decisions with no due date sort last, not first.
       .orderBy(sql`${decisions.dueDate} is null`, decisions.dueDate);
 
-    reply.send({ decisions: rows });
+    const realUpdatedByDecision = await loadRealUpdatedAt(db, organizationId, "decision", rows.map((r) => r.id));
+
+    reply.send({
+      decisions: rows.map((r) => ({ ...r, updatedAt: resolveRealUpdatedAt(r.updatedAt, realUpdatedByDecision.get(r.id)) })),
+    });
   });
 
   app.post<{
