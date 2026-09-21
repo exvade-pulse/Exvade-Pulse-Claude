@@ -21,6 +21,10 @@ function snippet(text: string | null): string | null {
   return text.length > SNIPPET_LENGTH ? `${text.slice(0, SNIPPET_LENGTH)}…` : text;
 }
 
+function formatUpdated(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
@@ -102,6 +106,9 @@ export default function ProjectDetailPage() {
               </div>
               <div className="card-badges">
                 <span className="badge">{data.project.status}</span>
+                <span className="updated-line" title={new Date(data.project.updatedAt).toLocaleString()}>
+                  Updated {formatUpdated(data.project.updatedAt)}
+                </span>
               </div>
             </div>
 
@@ -122,6 +129,9 @@ export default function ProjectDetailPage() {
                   </div>
                   <div className="card-badges">
                     <span className="badge">{task.status}</span>
+                    <span className="updated-line" title={new Date(task.updatedAt).toLocaleString()}>
+                      Updated {formatUpdated(task.updatedAt)}
+                    </span>
                   </div>
                 </div>
                 {snippet(task.latestUpdate) && (

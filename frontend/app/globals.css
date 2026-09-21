@@ -288,6 +288,13 @@ body {
   color: #8a5a00;
 }
 
+.updated-line {
+  font-size: 11px;
+  color: #999;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .card-select {
   flex-shrink: 0;
   margin-top: 3px;

@@ -24,6 +24,18 @@ function Toggle({ open, hasChildren, onClick }: { open: boolean; hasChildren: bo
   );
 }
 
+function formatUpdated(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function UpdatedLine({ updatedAt }: { updatedAt: string }) {
+  return (
+    <span className="updated-line" title={new Date(updatedAt).toLocaleString()}>
+      Updated {formatUpdated(updatedAt)}
+    </span>
+  );
+}
+
 function TaskRow({ task }: { task: CompanyMapProject["tasks"][number] }) {
   return (
     <div className="tree-task-row">
@@ -42,6 +54,7 @@ function TaskRow({ task }: { task: CompanyMapProject["tasks"][number] }) {
         </span>
       )}
       <span className="badge">{task.status.replace("_", " ")}</span>
+      <UpdatedLine updatedAt={task.updatedAt} />
     </div>
   );
 }
@@ -64,6 +77,7 @@ function ProjectNode({
         </Link>
         {project.owner && <span className="owner-line">Owner: {project.owner}</span>}
         <span className="badge">{project.status}</span>
+        <UpdatedLine updatedAt={project.updatedAt} />
       </div>
       {open && (
         <div className="tree-children">
@@ -100,6 +114,7 @@ function InitiativeNode({
         {initiative.owner && <span className="owner-line">Owner: {initiative.owner}</span>}
         <span className={`badge badge-priority-${initiative.priority}`}>{initiative.priority}</span>
         <span className="badge">{initiative.status}</span>
+        <UpdatedLine updatedAt={initiative.updatedAt} />
       </div>
       {open && (
         <div className="tree-children">
@@ -145,6 +160,7 @@ function ObjectiveNode({
         {objective.owner && <span className="owner-line">Owner: {objective.owner}</span>}
         <span className={`badge badge-priority-${objective.priority}`}>{objective.priority}</span>
         <span className="badge">{objective.status}</span>
+        <UpdatedLine updatedAt={objective.updatedAt} />
       </div>
       {open && (
         <div className="tree-children">

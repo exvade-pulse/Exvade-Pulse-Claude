@@ -14,6 +14,10 @@ import { Nav } from "../../components/Nav";
 import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 import { TaskStatusChips } from "../../components/TaskStatusChips";
 
+function formatUpdated(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export default function InitiativeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
@@ -96,6 +100,9 @@ export default function InitiativeDetailPage() {
               <div className="card-badges">
                 <span className={`badge badge-priority-${data.initiative.priority}`}>{data.initiative.priority}</span>
                 <span className="badge">{data.initiative.status}</span>
+                <span className="updated-line" title={new Date(data.initiative.updatedAt).toLocaleString()}>
+                  Updated {formatUpdated(data.initiative.updatedAt)}
+                </span>
               </div>
             </div>
 
@@ -116,6 +123,9 @@ export default function InitiativeDetailPage() {
                   </div>
                   <div className="card-badges">
                     <span className="badge">{project.status}</span>
+                    <span className="updated-line" title={new Date(project.updatedAt).toLocaleString()}>
+                      Updated {formatUpdated(project.updatedAt)}
+                    </span>
                   </div>
                 </div>
               </article>

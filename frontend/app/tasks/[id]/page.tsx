@@ -153,6 +153,9 @@ export default function TaskDetailPage() {
                     last confirmed {staleDaysAgo(data.task)} days ago
                   </span>
                 )}
+                <span className="updated-line" title={new Date(data.task.updatedAt).toLocaleString()}>
+                  Updated {formatDate(data.task.updatedAt)}
+                </span>
               </div>
             </div>
 

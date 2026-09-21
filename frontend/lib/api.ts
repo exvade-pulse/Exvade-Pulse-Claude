@@ -415,6 +415,7 @@ export interface InitiativeSummary {
   status: StrategyStatus;
   priority: Priority;
   owner: string | null;
+  updatedAt: string;
 }
 
 export interface ObjectiveDetailResponse {
@@ -451,6 +452,7 @@ export interface ProjectSummary {
   title: string;
   status: StrategyStatus;
   owner: string | null;
+  updatedAt: string;
 }
 
 export interface InitiativeDetailResponse {
@@ -487,6 +489,7 @@ export interface TaskSummary {
   latestUpdate: string | null;
   nextAction: string | null;
   owner: string | null;
+  updatedAt: string;
 }
 
 export interface ProjectDetailResponse {
@@ -770,6 +773,7 @@ export interface CompanyMapTask {
   owner: string | null;
   sourceCount: number;
   blockingDecision: BlockingDecision | null;
+  updatedAt: string;
 }
 
 export interface CompanyMapProject {
@@ -778,6 +782,7 @@ export interface CompanyMapProject {
   status: StrategyStatus;
   owner: string | null;
   tasks: CompanyMapTask[];
+  updatedAt: string;
 }
 
 export interface CompanyMapInitiative {
@@ -787,6 +792,7 @@ export interface CompanyMapInitiative {
   priority: Priority;
   owner: string | null;
   projects: CompanyMapProject[];
+  updatedAt: string;
 }
 
 export interface CompanyMapObjective {
@@ -797,6 +803,7 @@ export interface CompanyMapObjective {
   priority: Priority;
   owner: string | null;
   initiatives: CompanyMapInitiative[];
+  updatedAt: string;
 }
 
 export interface CompanyMapResponse {

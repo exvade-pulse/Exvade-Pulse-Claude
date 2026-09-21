@@ -13,6 +13,10 @@ import {
 import { Nav } from "../../components/Nav";
 import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 
+function formatUpdated(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export default function ObjectiveDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
@@ -89,6 +93,9 @@ export default function ObjectiveDetailPage() {
               <div className="card-badges">
                 <span className={`badge badge-priority-${data.objective.priority}`}>{data.objective.priority}</span>
                 <span className="badge">{data.objective.status}</span>
+                <span className="updated-line" title={new Date(data.objective.updatedAt).toLocaleString()}>
+                  Updated {formatUpdated(data.objective.updatedAt)}
+                </span>
               </div>
             </div>
           </article>
@@ -108,6 +115,9 @@ export default function ObjectiveDetailPage() {
                   <div className="card-badges">
                     <span className={`badge badge-priority-${initiative.priority}`}>{initiative.priority}</span>
                     <span className="badge">{initiative.status}</span>
+                    <span className="updated-line" title={new Date(initiative.updatedAt).toLocaleString()}>
+                      Updated {formatUpdated(initiative.updatedAt)}
+                    </span>
                   </div>
                 </div>
               </article>

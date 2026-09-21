@@ -37,6 +37,10 @@ function formatDueDate(dueDate: string): string {
   return new Date(dueDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+function formatUpdated(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export default function DecisionsPage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
   const [decisions, setDecisions] = useState<Decision[]>([]);
@@ -309,6 +313,10 @@ export default function DecisionsPage() {
               <div>
                 <p className="card-title">{d.title}</p>
                 <span className="muted">Decider: {d.decider}</span>
+                <span className="updated-line" title={new Date(d.updatedAt).toLocaleString()}>
+                  {" "}
+                  &middot; Updated {formatUpdated(d.updatedAt)}
+                </span>
               </div>
               <div className="card-badges">
                 <VisibilityControl
