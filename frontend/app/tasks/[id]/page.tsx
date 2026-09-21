@@ -9,6 +9,7 @@ import {
   fetchTask,
   setTaskVisibility,
   type SessionUser,
+  type TaskDetail,
   type TaskDetailResponse,
   type Visibility,
 } from "../../../lib/api";
@@ -20,6 +21,22 @@ import { VisibilityControl } from "../../components/VisibilityControl";
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
   return new Date(dateStr).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+// A permanent/terminal status (the task is done, or its tracking was
+// explicitly closed) never goes stale -- there's nothing left to reconfirm.
+// Only an in-progress status can go stale, and only once its evidence is old
+// enough that "still true" is genuinely worth re-checking rather than
+// assuming. See backend/src/db/schema.ts's tasks.fieldEvidence.
+const STALE_THRESHOLD_DAYS = 30;
+const TERMINAL_STATUSES = new Set(["completed", "resolved", "superseded"]);
+
+function staleDaysAgo(task: TaskDetail): number | null {
+  if (TERMINAL_STATUSES.has(task.status)) return null;
+  const asOf = task.fieldEvidence?.status?.asOf;
+  if (!asOf) return null;
+  const days = Math.floor((Date.now() - new Date(asOf).getTime()) / (24 * 60 * 60 * 1000));
+  return days >= STALE_THRESHOLD_DAYS ? days : null;
 }
 
 export default function TaskDetailPage() {
@@ -131,6 +148,11 @@ export default function TaskDetailPage() {
                   onChange={handleVisibilityChange}
                 />
                 <span className="badge">{data.task.status}</span>
+                {staleDaysAgo(data.task) !== null && (
+                  <span className="stale-badge" title="This status hasn't been reconfirmed by a new source in a while">
+                    last confirmed {staleDaysAgo(data.task)} days ago
+                  </span>
+                )}
               </div>
             </div>
 

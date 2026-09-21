@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { auditLog, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { auditLog, initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
 import { createDecision, updateDecision } from "../decisions/manage.js";
 
 export class SuggestionApplyError extends Error {}
@@ -11,6 +11,12 @@ const TABLE_BY_TARGET_TYPE = {
   project: projects,
   task: tasks,
 } as const;
+
+// The task fields worth tracking "when was this actually last confirmed, and
+// by what source" for -- see schema.ts's tasks.fieldEvidence comment. title/
+// description are more structural/narrative than "current operational fact",
+// so they're deliberately left out of v1.
+const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner"] as const;
 
 // "decision" is a valid suggestion targetType but deliberately has no entry in
 // TABLE_BY_TARGET_TYPE: creating a decision isn't a drop-in "insert this table
@@ -177,10 +183,39 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
     } else {
       const table = TABLE_BY_TARGET_TYPE[targetType];
 
+      // Only tasks track fieldEvidence (see schema.ts) -- build the patch for
+      // whichever tracked fields this diff actually touches, so an
+      // operational_update that only sets status doesn't disturb the
+      // latestUpdate/nextAction/owner evidence already on record.
+      let evidencePatch: Record<string, { asOf: string; sourceId: string }> | null = null;
+      if (targetType === "task") {
+        const trackedKeys = TRACKED_EVIDENCE_FIELDS.filter((key) => key in fields);
+        if (trackedKeys.length > 0) {
+          const [source] = await tx
+            .select({ receivedAt: sources.receivedAt })
+            .from(sources)
+            .where(eq(sources.id, suggestion.sourceId));
+          const asOf = (source?.receivedAt ?? suggestion.createdAt).toISOString();
+          evidencePatch = {};
+          for (const key of trackedKeys) {
+            evidencePatch[key] = { asOf, sourceId: suggestion.sourceId };
+          }
+        }
+      }
+
       if (suggestion.targetId) {
+        const setClause: Record<string, unknown> = { ...fields, updatedAt: new Date() };
+        if (evidencePatch) {
+          // Shallow-merge into whatever evidence already exists (jsonb ||
+          // overwrites only the top-level keys present on the right side),
+          // computed server-side in the same update rather than a separate
+          // read-then-write.
+          setClause.fieldEvidence = sql`COALESCE(${tasks.fieldEvidence}, '{}'::jsonb) || ${JSON.stringify(evidencePatch)}::jsonb`;
+        }
+
         const [updated] = await tx
           .update(table)
-          .set({ ...fields, updatedAt: new Date() } as never)
+          .set(setClause as never)
           .where(and(eq(table.id, suggestion.targetId), eq(table.organizationId, params.organizationId)))
           .returning({ id: table.id });
 
@@ -189,9 +224,14 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         }
         resultTargetId = updated.id;
       } else {
+        const insertValues: Record<string, unknown> = { ...fields, organizationId: params.organizationId };
+        if (evidencePatch) {
+          insertValues.fieldEvidence = evidencePatch;
+        }
+
         const [created] = await tx
           .insert(table)
-          .values({ ...fields, organizationId: params.organizationId } as never)
+          .values(insertValues as never)
           .returning({ id: table.id });
         resultTargetId = created.id;
       }

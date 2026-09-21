@@ -309,6 +309,11 @@ export async function suggestionRoutes(app: FastifyInstance) {
         proposedDiff: suggestions.proposedDiff,
         reasoning: suggestions.reasoning,
         confidence: suggestions.confidence,
+        // Set by dedupe.ts's mergeOrInsertSuggestion when this suggestion
+        // proposed regressing a task field that's already been confirmed by
+        // more recent evidence -- see tasks.fieldEvidence in schema.ts. Null
+        // in the overwhelming common case.
+        conflicts: suggestions.conflicts,
         status: suggestions.status,
         createdAt: suggestions.createdAt,
         reviewedAt: suggestions.reviewedAt,

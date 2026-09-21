@@ -235,6 +235,13 @@ export const tasks = pgTable("tasks", {
   // processing must never be the thing that widens (or narrows) who can see
   // a task, only a human admin can, via a dedicated endpoint.
   visibility: visibilityEnum("visibility").notNull().default("team"),
+  // Per-field "when was this actually last confirmed, and by what source" --
+  // { [field]: { asOf: ISO string, sourceId: uuid } } for whichever of
+  // status/latestUpdate/nextAction/owner have ever been set by an approved
+  // suggestion. Written by suggestions/apply.ts's approveSuggestion, read by
+  // suggestions/dedupe.ts's conflict check and the task detail page's
+  // staleness badge. Null until the first approval touches a tracked field.
+  fieldEvidence: jsonb("field_evidence"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -327,6 +334,14 @@ export const suggestions = pgTable("suggestions", {
   reasoning: text("reasoning").notNull(),
   confidence: real("confidence").notNull(),
   status: suggestionStatusEnum("status").notNull().default("pending"),
+  // Set when dedupe.ts's mergeOrInsertSuggestion finds this draft would
+  // regress a task field that's already been confirmed by more recent
+  // evidence (see tasks.fieldEvidence). The regressing field is stripped
+  // from proposedDiff before it's ever applied -- this array is purely
+  // informational, citing both the proposed and the currently-confirmed
+  // value/source so a reviewer can judge which is actually right. Null in
+  // the overwhelming common case (no conflict).
+  conflicts: jsonb("conflicts"),
   reviewedBy: uuid("reviewed_by").references(() => users.id),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

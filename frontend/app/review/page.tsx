@@ -85,6 +85,42 @@ function MovingToProject({ movingToProject }: { movingToProject: Suggestion["mov
   return <p className="card-breadcrumb card-moving-to">&rarr; Moving to: {movingToProject.title}</p>;
 }
 
+function humanizeField(field: string): string {
+  return field.replace(/([A-Z])/g, " $1").toLowerCase();
+}
+
+function formatConflictValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "(empty)";
+  return String(value);
+}
+
+function formatConflictDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+// A suggestion that tried to regress a task field past what's already been
+// confirmed by a more recent source (see dedupe.ts's stripConflictingFields)
+// has that field silently stripped from proposedDiff -- this is the only
+// place that regression becomes visible at all, so it needs to actually be
+// seen, not buried in reasoning prose. Purely informational: the reviewer
+// can still use Edit to manually re-add a stripped field if they judge the
+// older source is actually correct after reading both.
+function ConflictCallout({ conflicts }: { conflicts: Suggestion["conflicts"] }) {
+  if (!conflicts || conflicts.length === 0) return null;
+  return (
+    <div className="conflict-callout">
+      <p className="conflict-callout-title">Conflicting information -- not applied</p>
+      {conflicts.map((c) => (
+        <p className="conflict-callout-row" key={c.field}>
+          <strong>{humanizeField(c.field)}</strong>: this suggestion proposed &ldquo;{formatConflictValue(c.proposedValue)}
+          &rdquo; (source dated {formatConflictDate(c.proposedAsOf)}), but &ldquo;{formatConflictValue(c.currentValue)}
+          &rdquo; was confirmed more recently (as of {formatConflictDate(c.currentAsOf)}).
+        </p>
+      ))}
+    </div>
+  );
+}
+
 type ReviewTab = "pending" | "approved" | "rejected";
 
 const TAB_LABEL: Record<ReviewTab, string> = {
@@ -352,6 +388,8 @@ export default function ReviewPage() {
             {isHistory ? formatDiff(s.proposedDiff) : formatDiffWithCurrentState(s.proposedDiff, s.currentState)}
           </p>
         )}
+
+        <ConflictCallout conflicts={s.conflicts} />
 
         <p className="card-reasoning">{s.reasoning}</p>
 

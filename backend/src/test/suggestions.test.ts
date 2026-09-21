@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { auditLog, decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { auditLog, decisions, initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 import { createDecision, DecisionError } from "../decisions/manage.js";
 import { buildApp } from "../app.js";
@@ -525,6 +525,159 @@ describe("suggestion approval", () => {
     const [decision] = await db.select().from(decisions).where(eq(decisions.id, updated.targetId!));
     expect(decision).toBeDefined();
     expect(decision).not.toHaveProperty("owner");
+  });
+});
+
+describe("approveSuggestion fieldEvidence", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("records asOf/sourceId for exactly the tracked fields the diff touches", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "field-evidence-basic.test" });
+    const receivedAt = new Date("2026-08-01T12:00:00.000Z");
+    const [source] = await db
+      .insert(sources)
+      .values({ organizationId: fixture.org.id, type: "gmail", externalId: "ext-evidence-basic", receivedAt })
+      .returning();
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "active" })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: source.id,
+        targetType: "task",
+        targetId: existingTask.id,
+        changeType: "operational_update",
+        proposedDiff: { status: "blocked", latestUpdate: "Waiting on part shipment." },
+        reasoning: "test",
+        confidence: 0.8,
+      })
+      .returning();
+
+    await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id });
+
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, existingTask.id));
+    const evidence = task.fieldEvidence as Record<string, { asOf: string; sourceId: string }>;
+    expect(evidence.status).toEqual({ asOf: receivedAt.toISOString(), sourceId: source.id });
+    expect(evidence.latestUpdate).toEqual({ asOf: receivedAt.toISOString(), sourceId: source.id });
+    // nextAction/owner weren't in this diff -- no evidence entry for them.
+    expect(evidence.nextAction).toBeUndefined();
+    expect(evidence.owner).toBeUndefined();
+  });
+
+  it("leaves existing evidence for other fields untouched (shallow merge, not overwrite)", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "field-evidence-shallow-merge.test" });
+    const firstReceivedAt = new Date("2026-07-01T00:00:00.000Z");
+    const secondReceivedAt = new Date("2026-08-01T00:00:00.000Z");
+    const [firstSource] = await db
+      .insert(sources)
+      .values({ organizationId: fixture.org.id, type: "gmail", externalId: "ext-evidence-first", receivedAt: firstReceivedAt })
+      .returning();
+    const [secondSource] = await db
+      .insert(sources)
+      .values({ organizationId: fixture.org.id, type: "gmail", externalId: "ext-evidence-second", receivedAt: secondReceivedAt })
+      .returning();
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "active" })
+      .returning();
+
+    const [firstSuggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: firstSource.id,
+        targetType: "task",
+        targetId: existingTask.id,
+        changeType: "operational_update",
+        proposedDiff: { owner: "Sean Meehan" },
+        reasoning: "test",
+        confidence: 0.7,
+      })
+      .returning();
+    await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: firstSuggestion.id, reviewerId: fixture.user.id });
+
+    const [secondSuggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: secondSource.id,
+        targetType: "task",
+        targetId: existingTask.id,
+        changeType: "operational_update",
+        proposedDiff: { status: "blocked" },
+        reasoning: "test",
+        confidence: 0.7,
+      })
+      .returning();
+    await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: secondSuggestion.id, reviewerId: fixture.user.id });
+
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, existingTask.id));
+    const evidence = task.fieldEvidence as Record<string, { asOf: string; sourceId: string }>;
+    // owner's evidence from the first approval must survive the second
+    // approval, which never touched owner.
+    expect(evidence.owner).toEqual({ asOf: firstReceivedAt.toISOString(), sourceId: firstSource.id });
+    expect(evidence.status).toEqual({ asOf: secondReceivedAt.toISOString(), sourceId: secondSource.id });
+  });
+
+  it("seeds fieldEvidence on a brand-new task from its own creating suggestion", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "field-evidence-new-task.test" });
+    const receivedAt = new Date("2026-08-15T00:00:00.000Z");
+    const [source] = await db
+      .insert(sources)
+      .values({ organizationId: fixture.org.id, type: "gmail", externalId: "ext-evidence-new-task", receivedAt })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: source.id,
+        targetType: "task",
+        targetId: null,
+        changeType: "new_task",
+        proposedDiff: { projectId: fixture.project.id, title: "New task", status: "active", nextAction: "Kick off" },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    const updated = await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id });
+
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, updated.targetId!));
+    const evidence = task.fieldEvidence as Record<string, { asOf: string; sourceId: string }>;
+    expect(evidence.status).toEqual({ asOf: receivedAt.toISOString(), sourceId: source.id });
+    expect(evidence.nextAction).toEqual({ asOf: receivedAt.toISOString(), sourceId: source.id });
+  });
+
+  it("never writes fieldEvidence for a non-task target type", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "field-evidence-non-task.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "project",
+        targetId: fixture.project.id,
+        changeType: "operational_update",
+        proposedDiff: { status: "paused" },
+        reasoning: "test",
+        confidence: 0.6,
+      })
+      .returning();
+
+    await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id });
+
+    const [project] = await db.select().from(projects).where(eq(projects.id, fixture.project.id));
+    expect(project).not.toHaveProperty("fieldEvidence");
   });
 });
 
@@ -1129,6 +1282,82 @@ describe("GET /api/suggestions movingToProject", () => {
 
     const body = response.json() as { suggestions: Array<{ movingToProject: unknown }> };
     expect(body.suggestions[0].movingToProject).toBeNull();
+  });
+});
+
+describe("GET /api/suggestions conflicts", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("returns the conflicts array when present, org-scoped", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "conflicts-field-present.test" });
+
+    const [existingTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Task", status: "completed" })
+      .returning();
+
+    const conflictsPayload = [
+      {
+        field: "status",
+        proposedValue: "active",
+        proposedSourceId: fixture.source.id,
+        proposedAsOf: "2026-08-01T00:00:00.000Z",
+        currentValue: "completed",
+        currentAsOf: "2026-08-15T00:00:00.000Z",
+      },
+    ];
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: existingTask.id,
+      changeType: "operational_update",
+      proposedDiff: {},
+      reasoning: "test",
+      confidence: 0.6,
+      conflicts: conflictsPayload,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { suggestions: Array<{ conflicts: unknown }> };
+    expect(body.suggestions[0].conflicts).toEqual(conflictsPayload);
+  });
+
+  it("is null for an ordinary suggestion with no conflict", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "conflicts-field-null.test" });
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "task",
+      targetId: null,
+      changeType: "new_task",
+      proposedDiff: { projectId: fixture.project.id, title: "New task" },
+      reasoning: "test",
+      confidence: 0.6,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ conflicts: unknown }> };
+    expect(body.suggestions[0].conflicts).toBeNull();
   });
 });
 

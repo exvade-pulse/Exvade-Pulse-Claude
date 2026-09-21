@@ -9,6 +9,21 @@ export interface SessionUser {
   role: UserRole;
 }
 
+// Recorded when a suggestion proposed a task field value older than what's
+// already been confirmed by a more recent source -- see
+// backend/src/suggestions/dedupe.ts's stripConflictingFields. The
+// conflicting field is stripped from proposedDiff before it's ever applied;
+// this is purely informational so a reviewer can see both facts and judge
+// which is actually right.
+export interface ConflictEntry {
+  field: string;
+  proposedValue: unknown;
+  proposedSourceId: string;
+  proposedAsOf: string;
+  currentValue: unknown;
+  currentAsOf: string;
+}
+
 export interface Suggestion {
   id: string;
   targetType: "objective" | "initiative" | "project" | "task" | "decision";
@@ -47,6 +62,8 @@ export interface Suggestion {
   // re-triage flow is the only producer of this today). The plain diff view
   // hides projectId entirely, so this is the only visual sign of the move.
   movingToProject: { id: string; title: string } | null;
+  // Null in the overwhelming common case -- see ConflictEntry.
+  conflicts: ConflictEntry[] | null;
 }
 
 export async function fetchCurrentUser(): Promise<SessionUser | null> {
@@ -488,6 +505,13 @@ export async function fetchProject(id: string): Promise<ProjectDetailResponse | 
   return res.json();
 }
 
+// Per-field "when was this actually last confirmed, and by what source" --
+// see backend/src/db/schema.ts's tasks.fieldEvidence comment. Keys are
+// whichever of status/latestUpdate/nextAction/owner have ever been set by an
+// approved suggestion; absent entirely (or missing a key) until the first
+// approval touches it.
+export type FieldEvidence = Partial<Record<"status" | "latestUpdate" | "nextAction" | "owner", { asOf: string; sourceId: string }>>;
+
 export interface TaskDetail {
   id: string;
   title: string;
@@ -498,6 +522,7 @@ export interface TaskDetail {
   owner: string | null;
   projectId: string;
   visibility: Visibility;
+  fieldEvidence: FieldEvidence | null;
   createdAt: string;
   updatedAt: string;
 }
