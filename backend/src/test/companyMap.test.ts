@@ -23,6 +23,11 @@ async function tokenFor(fixture: Awaited<ReturnType<typeof createFixtureOrg>>) {
   });
 }
 
+async function makeSource(organizationId: string, externalId: string, receivedAt: Date) {
+  const [source] = await db.insert(sources).values({ organizationId, type: "document", externalId, receivedAt }).returning();
+  return source;
+}
+
 describe("GET /api/company-map", () => {
   beforeEach(async () => {
     await truncateAll(db);
@@ -126,6 +131,46 @@ describe("GET /api/company-map", () => {
     };
     const foundTask = body.objectives[0].initiatives[0].projects[0].tasks.find((t) => t.id === task.id);
     expect(foundTask?.updatedAt).toBe(task.updatedAt.toISOString());
+  });
+
+  // Real production case: "Data room preparation" had zero suggestions ever
+  // approved directly on the project row itself, but one of its own tasks
+  // had a real evidence date from 2019 -- the project card was showing its
+  // own bare creation timestamp (effectively today) instead, hiding that the
+  // project's real content hadn't been reconfirmed in years.
+  it("a project's card rolls up the real date from a task inside it, not just its own direct suggestions", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "map-project-rollup.test" });
+    const oldSource = await makeSource(fixture.org.id, "old-task-evidence", new Date("2019-05-22T16:00:00.000Z"));
+
+    const [task] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Review lab burn rates", status: "active" })
+      .returning();
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: oldSource.id,
+      targetType: "task",
+      targetId: task.id,
+      changeType: "operational_update",
+      proposedDiff: { status: "active" },
+      reasoning: "test",
+      confidence: 0.7,
+      status: "approved",
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/company-map",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as {
+      objectives: Array<{ initiatives: Array<{ projects: Array<{ id: string; updatedAt: string }> }> }>;
+    };
+    const foundProject = body.objectives[0].initiatives[0].projects.find((p) => p.id === fixture.project.id);
+    expect(foundProject?.updatedAt).toBe(oldSource.receivedAt.toISOString());
   });
 
   it("returns the full nested tree for the caller's org, org-isolated from another org's data", async () => {

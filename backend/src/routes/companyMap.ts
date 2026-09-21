@@ -7,7 +7,13 @@ import { emptyTaskCounts } from "../tasks/rollup.js";
 import { blockingDecisionsForTasks } from "../tasks/blockingDecisions.js";
 import { taskSourceCounts } from "../tasks/sourceCounts.js";
 import { canViewVisibility, visibilityFilter } from "../access/visibility.js";
-import { loadRealUpdatedAt, resolveRealUpdatedAt } from "../entities/realUpdatedAt.js";
+import {
+  loadRealUpdatedAt,
+  loadRealUpdatedAtForInitiatives,
+  loadRealUpdatedAtForObjectives,
+  loadRealUpdatedAtForProjects,
+  resolveRealUpdatedAt,
+} from "../entities/realUpdatedAt.js";
 import { UUID_RE } from "./uuid.js";
 
 const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
@@ -82,9 +88,9 @@ export async function companyMapRoutes(app: FastifyInstance) {
       await Promise.all([
         blockingDecisionsForTasks(db, organizationId, allTaskIds),
         taskSourceCounts(db, organizationId, allTaskIds),
-        loadRealUpdatedAt(db, organizationId, "objective", objectiveRows.map((o) => o.id)),
-        loadRealUpdatedAt(db, organizationId, "initiative", initiativeRows.map((i) => i.id)),
-        loadRealUpdatedAt(db, organizationId, "project", projectRows.map((p) => p.id)),
+        loadRealUpdatedAtForObjectives(db, organizationId, objectiveRows.map((o) => o.id)),
+        loadRealUpdatedAtForInitiatives(db, organizationId, initiativeRows.map((i) => i.id)),
+        loadRealUpdatedAtForProjects(db, organizationId, projectRows.map((p) => p.id)),
         loadRealUpdatedAt(db, organizationId, "task", allTaskIds),
       ]);
     const taskRowsWithTags = taskRows.map((task) => ({
@@ -170,8 +176,8 @@ export async function companyMapRoutes(app: FastifyInstance) {
       .orderBy(initiatives.title);
 
     const [realUpdatedForObjective, realUpdatedByInitiative] = await Promise.all([
-      loadRealUpdatedAt(db, organizationId, "objective", [id]),
-      loadRealUpdatedAt(db, organizationId, "initiative", initiativeRows.map((i) => i.id)),
+      loadRealUpdatedAtForObjectives(db, organizationId, [id]),
+      loadRealUpdatedAtForInitiatives(db, organizationId, initiativeRows.map((i) => i.id)),
     ]);
 
     reply.send({
@@ -233,8 +239,8 @@ export async function companyMapRoutes(app: FastifyInstance) {
     for (const row of taskStatusCounts) taskCounts[row.status] = row.count;
 
     const [realUpdatedForInitiative, realUpdatedByProject] = await Promise.all([
-      loadRealUpdatedAt(db, organizationId, "initiative", [id]),
-      loadRealUpdatedAt(db, organizationId, "project", projectRows.map((p) => p.id)),
+      loadRealUpdatedAtForInitiatives(db, organizationId, [id]),
+      loadRealUpdatedAtForProjects(db, organizationId, projectRows.map((p) => p.id)),
     ]);
 
     reply.send({
@@ -304,7 +310,7 @@ export async function companyMapRoutes(app: FastifyInstance) {
     for (const row of taskStatusCounts) taskCounts[row.status] = row.count;
 
     const [realUpdatedForProject, realUpdatedByTask] = await Promise.all([
-      loadRealUpdatedAt(db, organizationId, "project", [id]),
+      loadRealUpdatedAtForProjects(db, organizationId, [id]),
       loadRealUpdatedAt(db, organizationId, "task", taskRows.map((t) => t.id)),
     ]);
 
