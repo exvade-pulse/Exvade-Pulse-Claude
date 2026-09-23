@@ -7,11 +7,13 @@ import {
   checkDuplicateTasks,
   fetchCompanyMap,
   fetchCurrentUser,
+  suggestRelationships,
   type CompanyMapInitiative,
   type CompanyMapObjective,
   type CompanyMapProject,
   type CompanyMapResponse,
   type DuplicateCheckResult,
+  type RelationshipSuggestResult,
   type SessionUser,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
@@ -206,6 +208,10 @@ export default function CompanyMapPage() {
   const [duplicateResult, setDuplicateResult] = useState<DuplicateCheckResult | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
+  const [checkingRelationships, setCheckingRelationships] = useState(false);
+  const [relationshipResult, setRelationshipResult] = useState<RelationshipSuggestResult | null>(null);
+  const [relationshipError, setRelationshipError] = useState<string | null>(null);
+
   useEffect(() => {
     fetchCurrentUser().then(setUser);
   }, []);
@@ -221,6 +227,20 @@ export default function CompanyMapPage() {
       setDuplicateError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setCheckingDuplicates(false);
+    }
+  }
+
+  async function handleSuggestRelationships() {
+    setCheckingRelationships(true);
+    setRelationshipError(null);
+    setRelationshipResult(null);
+    try {
+      const result = await suggestRelationships();
+      setRelationshipResult(result);
+    } catch (err) {
+      setRelationshipError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setCheckingRelationships(false);
     }
   }
 
@@ -275,6 +295,9 @@ export default function CompanyMapPage() {
         <button className="decision-btn" onClick={handleCheckDuplicates} disabled={checkingDuplicates}>
           {checkingDuplicates ? "Checking…" : "Check for duplicate tasks"}
         </button>
+        <button className="decision-btn" onClick={handleSuggestRelationships} disabled={checkingRelationships}>
+          {checkingRelationships ? "Checking…" : "Suggest relationships"}
+        </button>
       </div>
 
       {duplicateResult && (
@@ -291,6 +314,21 @@ export default function CompanyMapPage() {
         </p>
       )}
       {duplicateError && <div className="error-banner">{duplicateError}</div>}
+
+      {relationshipResult && (
+        <p className="card activity-summary">
+          Checked {relationshipResult.tasksChecked} task{relationshipResult.tasksChecked === 1 ? "" : "s"} across{" "}
+          {relationshipResult.projectsChecked} project{relationshipResult.projectsChecked === 1 ? "" : "s"} -- found{" "}
+          {relationshipResult.relationshipsFound} relationship{relationshipResult.relationshipsFound === 1 ? "" : "s"}.
+          {relationshipResult.relationshipsFound > 0 && (
+            <>
+              {" "}
+              <Link href="/review">Review them</Link>.
+            </>
+          )}
+        </p>
+      )}
+      {relationshipError && <div className="error-banner">{relationshipError}</div>}
 
       {loadError && <div className="error-banner">{loadError}</div>}
 

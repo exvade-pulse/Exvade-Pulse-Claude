@@ -44,6 +44,7 @@ export const targetTypeEnum = pgEnum("target_type", [
   "project",
   "task",
   "decision",
+  "relationship",
 ]);
 
 export const changeTypeEnum = pgEnum("change_type", [
@@ -53,6 +54,7 @@ export const changeTypeEnum = pgEnum("change_type", [
   "decision",
   "deadline",
   "resolved",
+  "relationship",
 ]);
 
 export const suggestionStatusEnum = pgEnum("suggestion_status", [

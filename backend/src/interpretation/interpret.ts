@@ -52,8 +52,39 @@ const changeTypeSchema = z.enum([
   "decision",
   "deadline",
   "resolved",
+  "relationship",
 ]);
-const targetTypeSchema = z.enum(["objective", "initiative", "project", "task", "decision"]);
+const targetTypeSchema = z.enum(["objective", "initiative", "project", "task", "decision", "relationship"]);
+const relationTypeSchema = z.enum([
+  "depends_on",
+  "blocks",
+  "informs",
+  "affects",
+  "part_of",
+  "funded_by",
+  "performed_by",
+  "awaiting_response_from",
+  "coupled_with",
+  "constrains",
+]);
+
+// v1 scope for a relationship the LIVE pipeline can propose: only the five
+// entity types already present in CompanyContext -- company_entity has no
+// pool to check against here, so a source-stated relationship touching a
+// company entity is left for a human to add by hand for now (the batch
+// relationshipDetection.ts pass is task/decision-only too, same reasoning).
+const liveRelationshipEndpointTypeSchema = z.enum(["objective", "initiative", "project", "task", "decision"]);
+
+// Shape-checks a relationship draft's proposedDiff after it's already been
+// through pickAllowedFields. note is the only optional field.
+const relationshipDiffSchema = z.object({
+  fromType: liveRelationshipEndpointTypeSchema,
+  fromId: z.string().uuid(),
+  toType: liveRelationshipEndpointTypeSchema,
+  toId: z.string().uuid(),
+  relationType: relationTypeSchema,
+  note: z.string().optional(),
+});
 
 // Only checks shape/types -- membership of targetId in the context we actually
 // handed the model, and whitelisting of proposedDiff's keys, happen afterward.
@@ -90,7 +121,7 @@ const PROPOSE_SUGGESTION_TOOL: Anthropic.Tool = {
         type: "string",
         enum: targetTypeSchema.options,
         description:
-          "Which level of the hierarchy this change applies to, or 'decision' if the source describes something that needs a real human call rather than a hierarchy change.",
+          "Which level of the hierarchy this change applies to, 'decision' if the source describes something that needs a real human call rather than a hierarchy change, or 'relationship' if the source explicitly ties two already-tracked things together (targetId is always null for a relationship -- both ends go in proposedDiff instead).",
       },
       targetId: {
         type: ["string", "null"],
@@ -180,9 +211,12 @@ Not every source calls for a change to the objective/initiative/project/task tre
 
 Once you've concluded a source is decision-shaped, apply the exact same match-before-create principle as above: check whether it's really a follow-up on an EXISTING open decision (given to you in context above, each with its id, decider, and why it matters) before proposing a brand new one. Read the existing decisions' titles and whyItMatters carefully and look for the same underlying open question, even if the wording differs (e.g. "any update on the CFO scope question?" is very likely the same open question as an existing "What should the fractional CFO engagement's scope be going forward?"). If a plausible match exists, propose an update to it (targetId set to that decision's real id) rather than creating a duplicate decision for a question that's already open. Only propose a brand-new decision (targetId: null) when nothing existing plausibly matches. When genuinely uncertain between "update this existing decision" and "this is a new decision", prefer the existing decision and lower your confidence rather than defaulting to new.
 
+Some sources explicitly tie two already-tracked things together rather than describing a change to either one on its own -- "the vendor delay is affecting the manufacturing timeline task", "this is blocked by the pricing decision", "the sensor rig work depends on the calibration fixture arriving". For that, propose targetType: "relationship" with targetId: null, and proposedDiff containing fromType/fromId/toType/toId (each an exact id from the context above, never invented) plus relationType from the fixed vocabulary (depends_on, blocks, informs, affects, part_of, funded_by, performed_by, awaiting_response_from, coupled_with, constrains) and an optional note. This is for a link the source actually states, not a connection you merely suspect might exist -- do not speculate a relationship just because two things sound topically related; if the source doesn't say one thing affects or blocks another, don't propose one.
+
 targetId rules:
 - If you are proposing an update to something that already exists -- including a decision that matches one already open -- targetId MUST be the exact id string of that entity as given to you in the context above. Never invent, guess, or reformat an id.
 - If you are proposing something new -- including a brand-new decision -- targetId MUST be null.
+- A relationship's targetId is always null; its two endpoints (fromId/toId) live in proposedDiff instead, and both must be real ids from the context above.
 
 operational_update vs. context -- pick carefully, since this changes which fields your diff is allowed to touch:
 - operational_update: the thing's actual current state changed -- status moved, there's a new latest-update or next-action. Use this when the source describes what IS true now.
@@ -228,11 +262,13 @@ Received: ${source.receivedAt.toISOString()}
 ${source.body}`;
 }
 
-function isKnownEntityId(
-  targetType: z.infer<typeof targetTypeSchema>,
-  id: string,
-  context: CompanyContext,
-): boolean {
+// "relationship" is deliberately excluded from this parameter's type: a
+// relationship draft has no single targetId to check this way (see
+// isKnownRelationshipEndpoint below, which validates its two embedded
+// fromId/toId refs instead).
+type SingleTargetType = Exclude<z.infer<typeof targetTypeSchema>, "relationship">;
+
+function isKnownEntityId(targetType: SingleTargetType, id: string, context: CompanyContext): boolean {
   const pool: ContextEntity[] = {
     objective: context.objectives,
     initiative: context.initiatives,
@@ -241,6 +277,14 @@ function isKnownEntityId(
     decision: context.decisions,
   }[targetType];
   return pool.some((entity) => entity.id === id);
+}
+
+function isKnownRelationshipEndpoint(
+  type: z.infer<typeof liveRelationshipEndpointTypeSchema>,
+  id: string,
+  context: CompanyContext,
+): boolean {
+  return isKnownEntityId(type, id, context);
 }
 
 // The fields the model can't set without pointing at supporting text -- the
@@ -360,6 +404,41 @@ function validateSuggestionInput(
     return { reason: `failed schema validation: ${parsed.error.message}` };
   }
   const draft = parsed.data;
+
+  // A relationship proposal has no single target row to update -- both
+  // endpoints live inside proposedDiff -- so it's validated on its own,
+  // distinct path entirely, rather than falling through the single-targetId
+  // checks below (which don't apply to it).
+  if (draft.targetType === "relationship") {
+    if (draft.targetId !== null) {
+      return { reason: "a relationship proposal must not set targetId -- both endpoints belong in proposedDiff" };
+    }
+    const sanitizedDiff = pickAllowedFields(draft.targetType, draft.changeType, draft.proposedDiff);
+    const parsedRelationship = relationshipDiffSchema.safeParse(sanitizedDiff);
+    if (!parsedRelationship.success) {
+      return { reason: `relationship proposedDiff failed validation: ${parsedRelationship.error.message}` };
+    }
+    const { fromType, fromId, toType, toId } = parsedRelationship.data;
+    if (fromType === toType && fromId === toId) {
+      return { reason: "a relationship cannot link an entity to itself" };
+    }
+    if (!isKnownRelationshipEndpoint(fromType, fromId, context)) {
+      return { reason: `relationship fromId "${fromId}" for fromType "${fromType}" was not among the ids provided in context` };
+    }
+    if (!isKnownRelationshipEndpoint(toType, toId, context)) {
+      return { reason: `relationship toId "${toId}" for toType "${toType}" was not among the ids provided in context` };
+    }
+    return {
+      draft: {
+        changeType: draft.changeType,
+        targetType: draft.targetType,
+        targetId: null,
+        proposedDiff: sanitizedDiff,
+        reasoning: draft.reasoning,
+        confidence: draft.confidence,
+      },
+    };
+  }
 
   // Defensive: never trust that targetId actually refers to a real row we
   // showed the model, even though it passed schema validation as a UUID.

@@ -16,6 +16,8 @@ import {
 } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 import { canViewVisibility } from "../access/visibility.js";
+import { resolveNames } from "../relationships/manage.js";
+import type { EntityNodeType } from "../db/schema.js";
 
 // Every targetType a suggestion can carry, including "decision" -- unlike
 // apply.ts's own TABLE_BY_TARGET_TYPE (which deliberately excludes decision
@@ -242,6 +244,45 @@ async function loadMovingToProjects(
   return result;
 }
 
+export interface RelationshipEndpoints {
+  from: { type: EntityNodeType; id: string; title: string };
+  to: { type: EntityNodeType; id: string; title: string };
+}
+
+// For a relationship-type suggestion, resolves both endpoints' display
+// titles for the review card -- proposedDiff only carries type/id (see
+// interpret.ts's relationshipDiffSchema and relationshipDetection.ts), and a
+// reviewer needs to see what's actually being connected, not just its raw
+// id. Reuses relationships/manage.ts's resolveNames (the same batch lookup
+// RelationshipsPanel's listRelationshipsForEntity already relies on) so
+// there's one place that knows how to turn a (type, id) into a title.
+async function loadRelationshipEndpoints(
+  organizationId: string,
+  rows: Array<{ id: string; targetType: string; proposedDiff: unknown }>,
+): Promise<Map<string, RelationshipEndpoints>> {
+  const relationshipRows = rows.filter((row) => row.targetType === "relationship");
+  if (relationshipRows.length === 0) return new Map();
+
+  const refs: Array<{ type: EntityNodeType; id: string }> = [];
+  for (const row of relationshipRows) {
+    const diff = row.proposedDiff as { fromType?: EntityNodeType; fromId?: string; toType?: EntityNodeType; toId?: string };
+    if (diff.fromType && diff.fromId) refs.push({ type: diff.fromType, id: diff.fromId });
+    if (diff.toType && diff.toId) refs.push({ type: diff.toType, id: diff.toId });
+  }
+
+  const names = await resolveNames(db, organizationId, refs);
+  const result = new Map<string, RelationshipEndpoints>();
+  for (const row of relationshipRows) {
+    const diff = row.proposedDiff as { fromType?: EntityNodeType; fromId?: string; toType?: EntityNodeType; toId?: string };
+    if (!diff.fromType || !diff.fromId || !diff.toType || !diff.toId) continue;
+    result.set(row.id, {
+      from: { type: diff.fromType, id: diff.fromId, title: names.get(`${diff.fromType}:${diff.fromId}`) ?? "(unknown)" },
+      to: { type: diff.toType, id: diff.toId, title: names.get(`${diff.toType}:${diff.toId}`) ?? "(unknown)" },
+    });
+  }
+  return result;
+}
+
 // Only task/decision carry a visibility column (see schema.ts); an
 // objective/initiative/project target, or a targetId-null (brand-new
 // entity) suggestion, is always viewable -- there's nothing to restrict yet.
@@ -336,9 +377,10 @@ export async function suggestionRoutes(app: FastifyInstance) {
       .orderBy(desc(suggestions.createdAt));
 
     const currentStates = await loadCurrentStates(organizationId, rows);
-    const [breadcrumbs, movingToProjects] = await Promise.all([
+    const [breadcrumbs, movingToProjects, relationshipEndpoints] = await Promise.all([
       loadBreadcrumbs(organizationId, rows, currentStates),
       loadMovingToProjects(organizationId, rows, currentStates),
+      loadRelationshipEndpoints(organizationId, rows),
     ]);
     const role = request.user!.role;
     const withCurrentState = rows
@@ -363,6 +405,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
         ),
         breadcrumb: breadcrumbs.get(row.id) ?? null,
         movingToProject: movingToProjects.get(row.id) ?? null,
+        relationshipEndpoints: relationshipEndpoints.get(row.id) ?? null,
       }));
 
     reply.send({ suggestions: withCurrentState });

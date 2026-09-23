@@ -1,7 +1,8 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { auditLog, initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
+import { auditLog, initiatives, objectives, projects, sources, suggestions, tasks, type EntityNodeType, type RelationType } from "../db/schema.js";
 import { createDecision, updateDecision } from "../decisions/manage.js";
+import { createRelationship, RelationshipError } from "../relationships/manage.js";
 
 export class SuggestionApplyError extends Error {}
 
@@ -32,22 +33,24 @@ const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner"
 // what stops the crash, but rejecting it before it's ever stored as a
 // suggestion is better still, since a suggestion missing required fields can
 // never actually be approved no matter how many times it's retried.
-export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decision">, string[]> = {
+export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decision" | "relationship">, string[]> = {
   objective: ["title"],
   initiative: ["objectiveId", "title"],
   project: ["initiativeId", "title"],
   task: ["projectId", "title"],
 };
 
-// "decision" is a valid suggestion targetType but deliberately has no entry in
-// TABLE_BY_TARGET_TYPE: creating a decision isn't a drop-in "insert this table
-// with whitelisted fields" case like the other four (it needs org-scoped
-// relatedTaskId/sourceId validation and its own audit_log entry, which already
-// live in decisions/manage.ts's createDecision), so it's handled as its own
-// branch in approveSuggestion instead. ALLOWED_FIELDS/pickAllowedFields still
-// cover it, since interpret.ts's sanitization step whitelists every targetType
-// the model may propose, this one included.
-export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision";
+// "decision" and "relationship" are valid suggestion targetTypes but
+// deliberately have no entry in TABLE_BY_TARGET_TYPE: neither is a drop-in
+// "insert this table with whitelisted fields" case like the other four --
+// decision needs org-scoped relatedTaskId/sourceId validation and its own
+// audit_log entry (decisions/manage.ts's createDecision), and relationship
+// needs both-endpoints-exist validation with no single row to update
+// (relationships/manage.ts's createRelationship) -- so each is handled as
+// its own branch in approveSuggestion instead. ALLOWED_FIELDS/
+// pickAllowedFields still cover both, since interpret.ts's sanitization step
+// whitelists every targetType the model may propose.
+export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision" | "relationship";
 
 // Whitelists what a proposed_diff may set on each target type, so an AI-authored
 // (or hand-edited) diff can never smuggle in organization_id or other fields the
@@ -71,6 +74,7 @@ export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
     "dueDate",
     "relatedTaskId",
   ],
+  relationship: ["fromType", "fromId", "toType", "toId", "relationType", "note"],
 };
 
 // Fields a "context" (Info Share) suggestion may touch on the four hierarchy
@@ -135,7 +139,47 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
 
     let resultTargetId: string;
 
-    if (targetType === "decision") {
+    if (targetType === "relationship") {
+      // Always a create (targetId is never set for a relationship draft --
+      // see interpret.ts/relationshipDetection.ts, there's no single existing
+      // row to "update", both endpoints live in the diff itself).
+      // createRelationship already does the org-scoped existence check on
+      // both sides and rejects a self-link -- translate its own error type
+      // into SuggestionApplyError so a stale or malformed proposal (e.g. one
+      // endpoint deleted since this was proposed) fails this one suggestion
+      // gracefully instead of crashing the request, same lesson as
+      // REQUIRED_CREATE_FIELDS below for the four hierarchy types.
+      const diff = fields as {
+        fromType?: EntityNodeType;
+        fromId?: string;
+        toType?: EntityNodeType;
+        toId?: string;
+        relationType?: RelationType;
+        note?: string;
+      };
+      if (!diff.fromType || !diff.fromId || !diff.toType || !diff.toId || !diff.relationType) {
+        throw new SuggestionApplyError("Relationship suggestion is missing a required field");
+      }
+
+      try {
+        const relationship = await createRelationship(tx, {
+          organizationId: params.organizationId,
+          actorId: params.reviewerId,
+          fromType: diff.fromType,
+          fromId: diff.fromId,
+          toType: diff.toType,
+          toId: diff.toId,
+          relationType: diff.relationType,
+          note: diff.note ?? null,
+        });
+        resultTargetId = relationship.id;
+      } catch (err) {
+        if (err instanceof RelationshipError) {
+          throw new SuggestionApplyError(err.message);
+        }
+        throw err;
+      }
+    } else if (targetType === "decision") {
       const diff = fields as {
         title?: string;
         whyItMatters?: string;

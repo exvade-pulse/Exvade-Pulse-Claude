@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { auditLog, decisions, initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
+import { auditLog, decisions, entityRelationships, initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 import { createDecision, DecisionError } from "../decisions/manage.js";
 import { buildApp } from "../app.js";
@@ -1620,5 +1620,250 @@ describe("POST /api/suggestions/bulk-approve", () => {
     });
     await app.close();
     expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("approveSuggestion relationship", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("approving a relationship suggestion creates a real entity_relationships row and backfills targetId", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "relationship-approve.test" });
+    const [taskA] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Calibrate rig", status: "active" })
+      .returning();
+    const [taskB] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Run DV testing", status: "active" })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "relationship",
+        targetId: null,
+        changeType: "relationship",
+        proposedDiff: { fromType: "task", fromId: taskB.id, toType: "task", toId: taskA.id, relationType: "depends_on" },
+        reasoning: "test",
+        confidence: 0.8,
+      })
+      .returning();
+
+    const updated = await approveSuggestion(db, {
+      organizationId: fixture.org.id,
+      suggestionId: suggestion.id,
+      reviewerId: fixture.user.id,
+    });
+
+    expect(updated.status).toBe("approved");
+    expect(updated.targetId).not.toBeNull();
+
+    const [row] = await db.select().from(entityRelationships).where(eq(entityRelationships.id, updated.targetId!));
+    expect(row).toBeDefined();
+    expect(row.fromType).toBe("task");
+    expect(row.fromId).toBe(taskB.id);
+    expect(row.toType).toBe("task");
+    expect(row.toId).toBe(taskA.id);
+    expect(row.relationType).toBe("depends_on");
+    expect(row.createdBy).toBe(fixture.user.id);
+  });
+
+  it("throws SuggestionApplyError (not a crash) for a self-linking relationship", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "relationship-self-link.test" });
+    const [task] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Solo task", status: "active" })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "relationship",
+        targetId: null,
+        changeType: "relationship",
+        proposedDiff: { fromType: "task", fromId: task.id, toType: "task", toId: task.id, relationType: "blocks" },
+        reasoning: "test",
+        confidence: 0.5,
+      })
+      .returning();
+
+    await expect(
+      approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id }),
+    ).rejects.toBeInstanceOf(SuggestionApplyError);
+
+    const allRelationships = await db.select().from(entityRelationships).where(eq(entityRelationships.organizationId, fixture.org.id));
+    expect(allRelationships).toHaveLength(0);
+  });
+
+  it("throws SuggestionApplyError (not a crash) when an endpoint no longer exists", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "relationship-deleted-endpoint.test" });
+    const [task] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Still here", status: "active" })
+      .returning();
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "relationship",
+        targetId: null,
+        changeType: "relationship",
+        proposedDiff: {
+          fromType: "task",
+          fromId: task.id,
+          toType: "task",
+          toId: "99999999-9999-4999-8999-999999999999",
+          relationType: "blocks",
+        },
+        reasoning: "test",
+        confidence: 0.5,
+      })
+      .returning();
+
+    await expect(
+      approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id }),
+    ).rejects.toBeInstanceOf(SuggestionApplyError);
+  });
+
+  it("throws SuggestionApplyError when proposedDiff is missing a required field", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "relationship-missing-field.test" });
+
+    const [suggestion] = await db
+      .insert(suggestions)
+      .values({
+        organizationId: fixture.org.id,
+        sourceId: fixture.source.id,
+        targetType: "relationship",
+        targetId: null,
+        changeType: "relationship",
+        proposedDiff: { fromType: "task", toType: "task", relationType: "blocks" }, // missing fromId/toId
+        reasoning: "test",
+        confidence: 0.5,
+      })
+      .returning();
+
+    await expect(
+      approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id }),
+    ).rejects.toBeInstanceOf(SuggestionApplyError);
+  });
+});
+
+describe("GET /api/suggestions relationshipEndpoints", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("resolves both endpoints' titles for a relationship-type suggestion", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "relationship-endpoints.test" });
+    const [taskA] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Calibrate rig", status: "active" })
+      .returning();
+    const [taskB] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Run DV testing", status: "active" })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "relationship",
+      targetId: null,
+      changeType: "relationship",
+      proposedDiff: { fromType: "task", fromId: taskB.id, toType: "task", toId: taskA.id, relationType: "depends_on" },
+      reasoning: "test",
+      confidence: 0.8,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as {
+      suggestions: Array<{
+        relationshipEndpoints: {
+          from: { type: string; id: string; title: string };
+          to: { type: string; id: string; title: string };
+        } | null;
+      }>;
+    };
+    expect(body.suggestions[0].relationshipEndpoints).toEqual({
+      from: { type: "task", id: taskB.id, title: "Run DV testing" },
+      to: { type: "task", id: taskA.id, title: "Calibrate rig" },
+    });
+  });
+
+  it("is null for a non-relationship suggestion", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "relationship-endpoints-null.test" });
+    await db.insert(suggestions).values({
+      organizationId: fixture.org.id,
+      sourceId: fixture.source.id,
+      targetType: "objective",
+      targetId: fixture.objective.id,
+      changeType: "context",
+      proposedDiff: { description: "Adds context." },
+      reasoning: "test",
+      confidence: 0.7,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) },
+    });
+    await app.close();
+
+    const body = response.json() as { suggestions: Array<{ relationshipEndpoints: unknown }> };
+    expect(body.suggestions[0].relationshipEndpoints).toBeNull();
+  });
+
+  it("never resolves another organization's entity into a relationship endpoint title", async () => {
+    const orgA = await createFixtureOrg(db, { domain: "relationship-endpoints-org-a.test" });
+    const orgB = await createFixtureOrg(db, { domain: "relationship-endpoints-org-b.test" });
+    const [orgBTask] = await db
+      .insert(tasks)
+      .values({ organizationId: orgB.org.id, projectId: orgB.project.id, title: "Org B's own task", status: "active" })
+      .returning();
+    const [orgATask] = await db
+      .insert(tasks)
+      .values({ organizationId: orgA.org.id, projectId: orgA.project.id, title: "Org A's own task", status: "active" })
+      .returning();
+
+    await db.insert(suggestions).values({
+      organizationId: orgA.org.id,
+      sourceId: orgA.source.id,
+      targetType: "relationship",
+      targetId: null,
+      changeType: "relationship",
+      proposedDiff: { fromType: "task", fromId: orgATask.id, toType: "task", toId: orgBTask.id, relationType: "depends_on" },
+      reasoning: "test",
+      confidence: 0.5,
+    });
+
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/suggestions",
+      cookies: { [SESSION_COOKIE_NAME]: await tokenFor(orgA) },
+    });
+    await app.close();
+
+    const body = response.json() as {
+      suggestions: Array<{ relationshipEndpoints: { to: { title: string } } | null }>;
+    };
+    expect(body.suggestions[0].relationshipEndpoints?.to.title).toBe("(unknown)");
   });
 });

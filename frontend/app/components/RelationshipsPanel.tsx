@@ -5,48 +5,19 @@ import { useEffect, useState } from "react";
 import {
   createRelationship,
   deleteRelationship,
+  entityHref,
   fetchCompanyEntities,
   fetchCompanyMap,
   fetchOpenDecisions,
   fetchRelationships,
+  RELATION_LABEL,
   RELATION_TYPES,
+  TYPE_LABEL,
   type CompanyMapResponse,
   type EntityNodeType,
   type EntityRelationship,
   type RelationType,
 } from "../../lib/api";
-
-const TYPE_LABEL: Record<EntityNodeType, string> = {
-  objective: "Objective",
-  initiative: "Initiative",
-  project: "Project",
-  task: "Task",
-  decision: "Decision",
-  company_entity: "Company entity",
-};
-
-const RELATION_LABEL: Record<RelationType, string> = {
-  depends_on: "depends on",
-  blocks: "blocks",
-  informs: "informs",
-  affects: "affects",
-  part_of: "part of",
-  funded_by: "funded by",
-  performed_by: "performed by",
-  awaiting_response_from: "awaiting response from",
-  coupled_with: "coupled with",
-  constrains: "constrains",
-};
-
-// Only the four hierarchy types have a real detail page; a decision has no
-// per-id route (see activity/page.tsx's same LINKABLE_ENTITY_TYPES gap) and a
-// company entity's only page today is the flat /company-entities list.
-function entityHref(type: EntityNodeType, id: string): string | null {
-  if (type === "objective" || type === "initiative" || type === "project" || type === "task") return `/${type}s/${id}`;
-  if (type === "decision") return "/decisions";
-  if (type === "company_entity") return "/company-entities";
-  return null;
-}
 
 interface Pickable {
   id: string;

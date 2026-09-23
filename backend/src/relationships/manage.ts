@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, or } from "drizzle-orm";
-import type { Database } from "../db/client.js";
+import type { Database, DbOrTx } from "../db/client.js";
 import {
   companyEntities,
   decisions,
@@ -34,7 +34,7 @@ const TITLE_TABLE = {
 } as const;
 
 async function entityExists(
-  db: Database,
+  db: DbOrTx,
   organizationId: string,
   type: EntityNodeType,
   id: string,
@@ -55,8 +55,10 @@ async function entityExists(
 }
 
 // Batch name resolution for a set of (type, id) refs, grouped by type so this
-// is a handful of queries total, not N+1 per relationship.
-async function resolveNames(
+// is a handful of queries total, not N+1 per relationship. Exported so
+// suggestions.ts's loadRelationshipEndpoints can reuse it for the review
+// queue's from/to titles, instead of a second copy of the same lookup.
+export async function resolveNames(
   db: Database,
   organizationId: string,
   refs: Array<{ type: EntityNodeType; id: string }>,
@@ -107,7 +109,7 @@ export interface CreateRelationshipParams {
 // column can't reference six different tables), so this application-level
 // check is the only thing standing between a relationship and a dangling
 // pointer at another org's data (or nothing at all).
-export async function createRelationship(db: Database, params: CreateRelationshipParams) {
+export async function createRelationship(db: DbOrTx, params: CreateRelationshipParams) {
   if (params.fromType === params.toType && params.fromId === params.toId) {
     throw new RelationshipError("A relationship cannot link an entity to itself", "validation");
   }

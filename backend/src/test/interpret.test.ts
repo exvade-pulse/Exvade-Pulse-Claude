@@ -666,6 +666,139 @@ describe("interpretSource", () => {
     await expect(interpretSource(source, emptyContext(), client)).rejects.toBeInstanceOf(InterpretationError);
   });
 
+  it("accepts a relationship proposal whose fromId/toId are both known, sanitizes it to targetId null", async () => {
+    const taskAId = randomUUID();
+    const taskBId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [
+        { id: taskAId, title: "Calibrate rig", status: "active" },
+        { id: taskBId, title: "Run DV testing", status: "active" },
+      ],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "relationship",
+        targetType: "relationship",
+        targetId: null,
+        proposedDiff: { fromType: "task", fromId: taskBId, toType: "task", toId: taskAId, relationType: "depends_on" },
+        reasoning: "The email says DV testing is waiting on calibration.",
+        confidence: 0.8,
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].targetType).toBe("relationship");
+    expect(drafts[0].targetId).toBeNull();
+    expect(drafts[0].proposedDiff).toEqual({
+      fromType: "task",
+      fromId: taskBId,
+      toType: "task",
+      toId: taskAId,
+      relationType: "depends_on",
+    });
+  });
+
+  it("accepts a relationship proposal that links a task to a decision, and keeps an optional note", async () => {
+    const taskId = randomUUID();
+    const decisionId = randomUUID();
+    const context: CompanyContext = {
+      ...emptyContext(),
+      tasks: [{ id: taskId, title: "Order sensor", status: "active" }],
+      decisions: [{ id: decisionId, title: "Choose sensor vendor", status: "open", decider: "Ops lead", whyItMatters: null }],
+    };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "relationship",
+        targetType: "relationship",
+        targetId: null,
+        proposedDiff: {
+          fromType: "decision",
+          fromId: decisionId,
+          toType: "task",
+          toId: taskId,
+          relationType: "affects",
+          note: "Vendor choice determines the part number to order.",
+        },
+        reasoning: "x",
+        confidence: 0.7,
+      }),
+    );
+
+    const drafts = await interpretSource(source, context, client);
+    expect(drafts[0].proposedDiff.note).toBe("Vendor choice determines the part number to order.");
+  });
+
+  it("rejects a relationship proposal whose targetId is not null", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = { ...emptyContext(), tasks: [{ id: taskId, title: "Solo task", status: "active" }] };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "relationship",
+        targetType: "relationship",
+        targetId: taskId,
+        proposedDiff: { fromType: "task", fromId: taskId, toType: "task", toId: taskId, relationType: "depends_on" },
+        reasoning: "x",
+        confidence: 0.7,
+      }),
+    );
+
+    await expect(interpretSource(source, context, client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
+  it("rejects a relationship proposal linking an entity to itself", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = { ...emptyContext(), tasks: [{ id: taskId, title: "Solo task", status: "active" }] };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "relationship",
+        targetType: "relationship",
+        targetId: null,
+        proposedDiff: { fromType: "task", fromId: taskId, toType: "task", toId: taskId, relationType: "depends_on" },
+        reasoning: "x",
+        confidence: 0.7,
+      }),
+    );
+
+    await expect(interpretSource(source, context, client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
+  it("rejects a relationship proposal whose fromId is hallucinated (not present in context)", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = { ...emptyContext(), tasks: [{ id: taskId, title: "Real task", status: "active" }] };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "relationship",
+        targetType: "relationship",
+        targetId: null,
+        proposedDiff: { fromType: "task", fromId: randomUUID(), toType: "task", toId: taskId, relationType: "blocks" },
+        reasoning: "x",
+        confidence: 0.7,
+      }),
+    );
+
+    await expect(interpretSource(source, context, client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
+  it("rejects a relationship proposal whose toId belongs to the wrong claimed type", async () => {
+    const taskId = randomUUID();
+    const context: CompanyContext = { ...emptyContext(), tasks: [{ id: taskId, title: "Real task", status: "active" }] };
+    const client = stubClient(
+      fakeToolUseMessage({
+        changeType: "relationship",
+        targetType: "relationship",
+        targetId: null,
+        // taskId is real, but only as a task -- never as a decision
+        proposedDiff: { fromType: "task", fromId: taskId, toType: "decision", toId: taskId, relationType: "blocks" },
+        reasoning: "x",
+        confidence: 0.7,
+      }),
+    );
+
+    await expect(interpretSource(source, context, client)).rejects.toBeInstanceOf(InterpretationError);
+  });
+
   it("accepts owner in proposedDiff for a hierarchy targetType and keeps it through sanitization", async () => {
     const taskId = randomUUID();
     const context: CompanyContext = {

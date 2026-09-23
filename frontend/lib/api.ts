@@ -26,7 +26,7 @@ export interface ConflictEntry {
 
 export interface Suggestion {
   id: string;
-  targetType: "objective" | "initiative" | "project" | "task" | "decision";
+  targetType: "objective" | "initiative" | "project" | "task" | "decision" | "relationship";
   targetId: string | null;
   changeType: string;
   proposedDiff: Record<string, unknown>;
@@ -62,6 +62,13 @@ export interface Suggestion {
   // re-triage flow is the only producer of this today). The plain diff view
   // hides projectId entirely, so this is the only visual sign of the move.
   movingToProject: { id: string; title: string } | null;
+  // Set only for a targetType: "relationship" suggestion -- both endpoints'
+  // resolved type/id/title, since proposedDiff only carries the raw ids.
+  // Null for every other targetType.
+  relationshipEndpoints: {
+    from: { type: EntityNodeType; id: string; title: string };
+    to: { type: EntityNodeType; id: string; title: string };
+  } | null;
   // Null in the overwhelming common case -- see ConflictEntry.
   conflicts: ConflictEntry[] | null;
 }
@@ -884,6 +891,25 @@ export async function checkDuplicateTasks(): Promise<DuplicateCheckResult> {
   return res.json();
 }
 
+export interface RelationshipSuggestResult {
+  projectsChecked: number;
+  tasksChecked: number;
+  relationshipsFound: number;
+}
+
+// Triggers an on-demand Claude pass (one call per project with 2+ eligible
+// tasks, checked against the project's own tasks plus the org's open
+// decisions) that flags genuine relationships -- any found pair proposes a
+// new entity_relationships row as a normal suggestion in Review. Never runs
+// automatically -- see backend/src/routes/relationshipSuggestions.ts.
+export async function suggestRelationships(): Promise<RelationshipSuggestResult> {
+  const res = await fetch(`${API_URL}/api/relationships/suggest`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to check for relationships (${res.status})`);
+  }
+  return res.json();
+}
+
 export interface WeeklyReportDecision {
   id: string;
   title: string;
@@ -1052,6 +1078,38 @@ export const RELATION_TYPES = [
   "constrains",
 ] as const;
 export type RelationType = (typeof RELATION_TYPES)[number];
+
+export const TYPE_LABEL: Record<EntityNodeType, string> = {
+  objective: "Objective",
+  initiative: "Initiative",
+  project: "Project",
+  task: "Task",
+  decision: "Decision",
+  company_entity: "Company entity",
+};
+
+export const RELATION_LABEL: Record<RelationType, string> = {
+  depends_on: "depends on",
+  blocks: "blocks",
+  informs: "informs",
+  affects: "affects",
+  part_of: "part of",
+  funded_by: "funded by",
+  performed_by: "performed by",
+  awaiting_response_from: "awaiting response from",
+  coupled_with: "coupled with",
+  constrains: "constrains",
+};
+
+// Only the four hierarchy types have a real detail page; a decision has no
+// per-id route (see activity/page.tsx's same LINKABLE_ENTITY_TYPES gap) and a
+// company entity's only page today is the flat /company-entities list.
+export function entityHref(type: EntityNodeType, id: string): string | null {
+  if (type === "objective" || type === "initiative" || type === "project" || type === "task") return `/${type}s/${id}`;
+  if (type === "decision") return "/decisions";
+  if (type === "company_entity") return "/company-entities";
+  return null;
+}
 
 export interface CompanyEntity {
   id: string;

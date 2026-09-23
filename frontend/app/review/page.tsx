@@ -6,10 +6,14 @@ import {
   bulkApproveSuggestions,
   decideSuggestion,
   editSuggestion,
+  entityHref,
   fetchCurrentUser,
   fetchPendingSuggestions,
   fetchSuggestionsByStatus,
+  RELATION_LABEL,
   submitManualUpdate,
+  TYPE_LABEL,
+  type RelationType,
   type SessionUser,
   type Suggestion,
 } from "../../lib/api";
@@ -23,6 +27,7 @@ const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   project: "Project",
   task: "Task",
   decision: "Decision",
+  relationship: "Relationship",
 };
 
 // interpret.ts's system prompt frames confidence as "how sure the model is that
@@ -83,6 +88,39 @@ function WorkflowBreadcrumb({ breadcrumb }: { breadcrumb: Suggestion["breadcrumb
 function MovingToProject({ movingToProject }: { movingToProject: Suggestion["movingToProject"] }) {
   if (!movingToProject) return null;
   return <p className="card-breadcrumb card-moving-to">&rarr; Moving to: {movingToProject.title}</p>;
+}
+
+// A targetType: "relationship" suggestion has no single target row to diff
+// against -- both endpoints live in proposedDiff (see
+// backend/src/routes/suggestions.ts's loadRelationshipEndpoints) -- so the
+// review card shows "A (type) --relation--> B (type)" with real links
+// instead of the normal current/proposed diff view.
+function RelationshipEndpointsLine({
+  endpoints,
+  relationType,
+  note,
+}: {
+  endpoints: Suggestion["relationshipEndpoints"];
+  relationType: RelationType | undefined;
+  note: string | undefined;
+}) {
+  if (!endpoints) return null;
+  const fromHref = entityHref(endpoints.from.type, endpoints.from.id);
+  const toHref = entityHref(endpoints.to.type, endpoints.to.id);
+  return (
+    <>
+      <p className="card-diff">
+        {fromHref ? <a href={fromHref}>{endpoints.from.title}</a> : endpoints.from.title}
+        <span className="muted"> ({TYPE_LABEL[endpoints.from.type]})</span>
+        {" -- "}
+        {relationType ? RELATION_LABEL[relationType] : "relates to"}
+        {" --> "}
+        {toHref ? <a href={toHref}>{endpoints.to.title}</a> : endpoints.to.title}
+        <span className="muted"> ({TYPE_LABEL[endpoints.to.type]})</span>
+      </p>
+      {note && <p className="card-diff muted">{note}</p>}
+    </>
+  );
 }
 
 function humanizeField(field: string): string {
@@ -148,6 +186,7 @@ function reviewerLabel(s: Suggestion): string {
 // only name there is to show. Shared by renderCard and the project-grouping
 // below, since an objective-type suggestion groups under its own name.
 function cardTitle(s: Suggestion): string {
+  if (s.targetType === "relationship") return "New relationship";
   return s.targetId
     ? String(s.currentState?.title ?? `${TARGET_LABEL[s.targetType]} update`)
     : String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`);
@@ -355,10 +394,18 @@ export default function ReviewPage() {
           <div>
             <p className="card-title">{cardTitle(s)}</p>
             <span className="muted">
-              {s.targetId ? `Updates existing ${TARGET_LABEL[s.targetType]}` : `Proposes new ${TARGET_LABEL[s.targetType]}`}
+              {s.targetType === "relationship"
+                ? "Proposes new relationship"
+                : s.targetId
+                  ? `Updates existing ${TARGET_LABEL[s.targetType]}`
+                  : `Proposes new ${TARGET_LABEL[s.targetType]}`}
             </span>
-            <WorkflowBreadcrumb breadcrumb={s.breadcrumb} />
-            <MovingToProject movingToProject={s.movingToProject} />
+            {s.targetType !== "relationship" && (
+              <>
+                <WorkflowBreadcrumb breadcrumb={s.breadcrumb} />
+                <MovingToProject movingToProject={s.movingToProject} />
+              </>
+            )}
           </div>
           <div className="card-top-right">
             <ConfidenceBadge confidence={s.confidence} />
@@ -383,6 +430,12 @@ export default function ReviewPage() {
               </label>
             ))}
           </div>
+        ) : s.targetType === "relationship" ? (
+          <RelationshipEndpointsLine
+            endpoints={s.relationshipEndpoints}
+            relationType={s.proposedDiff.relationType as RelationType | undefined}
+            note={s.proposedDiff.note as string | undefined}
+          />
         ) : (
           <p className="card-diff">
             {isHistory ? formatDiff(s.proposedDiff) : formatDiffWithCurrentState(s.proposedDiff, s.currentState)}

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."target_type" ADD VALUE 'relationship';
