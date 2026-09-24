@@ -21,7 +21,9 @@ body {
 
 .nav {
   display: flex;
-  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
   margin-bottom: 20px;
   font-size: 14px;
 }
