@@ -35,7 +35,7 @@ export const taskStatusEnum = pgEnum("task_status", [
   "blocked",
 ]);
 
-export const sourceTypeEnum = pgEnum("source_type", ["gmail", "circleback", "document", "manual"]);
+export const sourceTypeEnum = pgEnum("source_type", ["gmail", "circleback", "document", "manual", "chatgpt"]);
 export type SourceType = (typeof sourceTypeEnum.enumValues)[number];
 
 export const targetTypeEnum = pgEnum("target_type", [
@@ -78,7 +78,10 @@ export type UserRole = (typeof userRoleEnum.enumValues)[number];
 // today's guessed provider means swapping providers later doesn't require a
 // migration, matching how this app already avoids baking in assumptions that
 // would make adding a second source a rewrite.
-export const integrationTypeEnum = pgEnum("integration_type", ["circleback", "email"]);
+// "chatgpt" is an API key, not a webhook: the user's ChatGPT Custom GPT sends
+// it as a Bearer header to the /api/public/chatgpt/* routes. It shares this
+// table for the same hash-only storage, one-per-org rotation and audit trail.
+export const integrationTypeEnum = pgEnum("integration_type", ["circleback", "email", "chatgpt"]);
 export type IntegrationType = (typeof integrationTypeEnum.enumValues)[number];
 
 // Every kind of node a relationship can point at -- the four hierarchy

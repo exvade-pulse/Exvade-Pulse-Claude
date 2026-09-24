@@ -10,6 +10,7 @@ import {
   fetchIntegrationActivity,
   fetchIntegrations,
   generateIntegrationToken,
+  revokeIntegrationToken,
   triggerGmailSync,
   type GeneratedIntegrationToken,
   type GmailConnectionStatus,
@@ -24,7 +25,18 @@ const LABELS: Record<string, string> = {
   circleback: "Circleback",
   email: "Email",
   gmail: "Gmail",
+  chatgpt: "ChatGPT assistant",
 };
+
+// Pasted into the Custom GPT's "Instructions" box. The confirm-before-sending
+// rule here is belt-and-braces: the comment action is also marked
+// consequential in the OpenAPI spec, so ChatGPT's own UI asks every time too.
+const CHATGPT_INSTRUCTIONS = `You are my assistant for Exvade Pulse, the system that tracks Exvade Bioscience's objectives, projects, tasks and decisions.
+
+- Use getCompanyOverview to answer questions about status, what's stuck, what's overdue or what changed recently. Use getTask for detail on one task, listOpenDecisions for decisions, and listPendingReview for what's waiting for my approval.
+- Only state facts that come from Pulse. If Pulse doesn't say, tell me you don't know rather than guessing.
+- Before sending anything with sendCommentToPulse, show me the exact comment you plan to send and wait for me to say yes. Name the specific task, project or decision the comment is about.
+- Comments become suggestions I approve or reject on Pulse's Review page -- they never change anything directly. Say so when you send one.`;
 
 // Per-type instructions for the one-time "here's your webhook URL" card --
 // looped over by type below rather than a second copy of the whole card's JSX.
@@ -68,7 +80,7 @@ function IntegrationsPageInner() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyType, setBusyType] = useState<string | null>(null);
   const [justGenerated, setJustGenerated] = useState<GeneratedIntegrationToken | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   const [gmailError, setGmailError] = useState<string | null>(searchParams.get("gmail_error"));
   const [gmailBusy, setGmailBusy] = useState(false);
@@ -138,15 +150,18 @@ function IntegrationsPageInner() {
   async function handleGenerate(type: string, alreadyConfigured: boolean) {
     if (alreadyConfigured) {
       const confirmed = window.confirm(
-        `Rotating the ${LABELS[type] ?? type} token immediately invalidates the current one -- any webhook already ` +
-          "configured with the old URL will start failing until you update it. Continue?",
+        type === "chatgpt"
+          ? "Rotating the ChatGPT key immediately stops the current one working -- you'll need to paste the new key " +
+              "into your Custom GPT's Action settings. Continue?"
+          : `Rotating the ${LABELS[type] ?? type} token immediately invalidates the current one -- any webhook already ` +
+              "configured with the old URL will start failing until you update it. Continue?",
       );
       if (!confirmed) return;
     }
 
     setBusyType(type);
     setActionError(null);
-    setCopied(false);
+    setCopied(null);
     try {
       const result = await generateIntegrationToken(type as IntegrationType);
       setJustGenerated(result);
@@ -170,13 +185,30 @@ function IntegrationsPageInner() {
     fetchActivity.then(setActivity).catch((err) => setActivityError(err.message));
   }
 
-  async function handleCopy() {
-    if (!justGenerated) return;
+  async function handleRevoke(type: string) {
+    const confirmed = window.confirm(
+      `Turn off ${LABELS[type] ?? type}? Its current key stops working immediately. You can generate a new one later.`,
+    );
+    if (!confirmed) return;
+    setBusyType(type);
+    setActionError(null);
     try {
-      await navigator.clipboard.writeText(justGenerated.webhookUrl);
-      setCopied(true);
+      await revokeIntegrationToken(type as IntegrationType);
+      if (justGenerated?.type === type) setJustGenerated(null);
+      load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setBusyType(null);
+    }
+  }
+
+  async function handleCopy(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(label);
     } catch {
-      setActionError("Couldn't copy automatically -- select and copy the URL manually.");
+      setActionError("Couldn't copy automatically -- select and copy it manually.");
     }
   }
 
@@ -230,7 +262,63 @@ function IntegrationsPageInner() {
       {gmailError && <div className="error-banner">{gmailError}</div>}
       {gmailSyncResult && <p className="card activity-summary">{gmailSyncResult}</p>}
 
-      {justGenerated && (
+      {justGenerated && justGenerated.type === "chatgpt" && (
+        <div className="card">
+          <div className="card-title">ChatGPT key {justGenerated.rotated ? "rotated" : "generated"}</div>
+          <div className="token-warning">
+            Copy the key now -- it won&rsquo;t be shown again. If you lose it, just rotate to get a new one.
+          </div>
+
+          <div className="edit-field-label">1. Your key</div>
+          <div className="token-box">
+            <span>{justGenerated.token}</span>
+          </div>
+          <div className="card-actions">
+            <button className="decision-btn save" onClick={() => handleCopy(justGenerated.token, "key")}>
+              {copied === "key" ? "Copied" : "Copy key"}
+            </button>
+          </div>
+
+          <div className="edit-field-label">2. Connection address</div>
+          <div className="token-box">
+            <span>{justGenerated.schemaUrl}</span>
+          </div>
+          <div className="card-actions">
+            <button className="decision-btn" onClick={() => handleCopy(justGenerated.schemaUrl ?? "", "schema")}>
+              {copied === "schema" ? "Copied" : "Copy address"}
+            </button>
+          </div>
+
+          <div className="edit-field-label">3. Set it up in ChatGPT</div>
+          <ol className="setup-steps">
+            <li>In ChatGPT, open <strong>GPTs</strong> &rarr; <strong>Create</strong>, then the <strong>Configure</strong> tab.</li>
+            <li>Name it (e.g. &ldquo;Pulse Assistant&rdquo;) and paste the instructions below into <strong>Instructions</strong>.</li>
+            <li>
+              Under <strong>Actions</strong>, click <strong>Create new action</strong> &rarr; <strong>Import from URL</strong>,
+              paste the connection address, and import.
+            </li>
+            <li>
+              Set <strong>Authentication</strong> to <strong>API Key</strong>, auth type <strong>Bearer</strong>, and paste your
+              key.
+            </li>
+            <li>Save the GPT with sharing set to <strong>Only me</strong>.</li>
+            <li>
+              Ask it something like &ldquo;What&rsquo;s stuck right now?&rdquo; You can let it read Pulse without asking each
+              time, but it will always ask before sending a comment.
+            </li>
+          </ol>
+
+          <div className="edit-field-label">Instructions to paste into the GPT</div>
+          <pre className="token-box setup-instructions">{CHATGPT_INSTRUCTIONS}</pre>
+          <div className="card-actions">
+            <button className="decision-btn" onClick={() => handleCopy(CHATGPT_INSTRUCTIONS, "instructions")}>
+              {copied === "instructions" ? "Copied" : "Copy instructions"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {justGenerated && justGenerated.webhookUrl && (
         <div className="card">
           <div className="card-title">
             {LABELS[justGenerated.type] ?? justGenerated.type} webhook {justGenerated.rotated ? "rotated" : "generated"}
@@ -244,8 +332,8 @@ function IntegrationsPageInner() {
             <span>{justGenerated.webhookUrl}</span>
           </div>
           <div className="card-actions">
-            <button className="decision-btn save" onClick={handleCopy}>
-              {copied ? "Copied" : "Copy URL"}
+            <button className="decision-btn save" onClick={() => handleCopy(justGenerated.webhookUrl ?? "", "url")}>
+              {copied === "url" ? "Copied" : "Copy URL"}
             </button>
           </div>
         </div>
@@ -258,7 +346,7 @@ function IntegrationsPageInner() {
               <tr>
                 <th>Source</th>
                 <th>Status</th>
-                <th>Last received</th>
+                <th>Last activity</th>
                 <th>Suggestions</th>
                 <th></th>
                 <th></th>
@@ -328,13 +416,20 @@ function IntegrationsPageInner() {
                       </button>
                     </td>
                     <td>
-                      <button
-                        className="decision-btn save"
-                        disabled={busy}
-                        onClick={() => handleGenerate(row.type, row.configured)}
-                      >
-                        {row.configured ? "Rotate token" : "Generate token"}
-                      </button>
+                      <div className="card-actions">
+                        <button
+                          className="decision-btn save"
+                          disabled={busy}
+                          onClick={() => handleGenerate(row.type, row.configured)}
+                        >
+                          {row.configured ? "Rotate" : "Generate"} {row.type === "chatgpt" ? "key" : "token"}
+                        </button>
+                        {row.configured && (
+                          <button className="decision-btn reject" disabled={busy} onClick={() => handleRevoke(row.type)}>
+                            Turn off
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

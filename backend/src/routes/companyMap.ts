@@ -2,7 +2,17 @@ import type { FastifyInstance } from "fastify";
 import { and, count, desc, eq } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { decisions, initiatives, objectives, projects, suggestions, tasks, visibilityEnum, type Visibility } from "../db/schema.js";
+import {
+  decisions,
+  initiatives,
+  objectives,
+  projects,
+  suggestions,
+  tasks,
+  visibilityEnum,
+  type UserRole,
+  type Visibility,
+} from "../db/schema.js";
 import { emptyTaskCounts } from "../tasks/rollup.js";
 import { blockingDecisionsForTasks } from "../tasks/blockingDecisions.js";
 import { taskSourceCounts } from "../tasks/sourceCounts.js";
@@ -18,130 +28,197 @@ import { UUID_RE } from "./uuid.js";
 
 const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
 
+// The full Objective -> Initiative -> Project -> Task tree, assembled in
+// memory from four org-scoped queries (one per level) rather than one query
+// per objective, so this stays flat regardless of how many objectives an org
+// has. Shared by the Company Map page and the ChatGPT overview.
+export async function loadCompanyMapTree(organizationId: string, role: UserRole) {
+  const [objectiveRows, initiativeRows, projectRows, taskRows] = await Promise.all([
+    db
+      .select({
+        id: objectives.id,
+        title: objectives.title,
+        description: objectives.description,
+        status: objectives.status,
+        priority: objectives.priority,
+        owner: objectives.owner,
+        updatedAt: objectives.updatedAt,
+      })
+      .from(objectives)
+      .where(eq(objectives.organizationId, organizationId))
+      .orderBy(objectives.title),
+    db
+      .select({
+        id: initiatives.id,
+        objectiveId: initiatives.objectiveId,
+        title: initiatives.title,
+        status: initiatives.status,
+        priority: initiatives.priority,
+        owner: initiatives.owner,
+        updatedAt: initiatives.updatedAt,
+      })
+      .from(initiatives)
+      .where(eq(initiatives.organizationId, organizationId))
+      .orderBy(initiatives.title),
+    db
+      .select({
+        id: projects.id,
+        initiativeId: projects.initiativeId,
+        title: projects.title,
+        status: projects.status,
+        owner: projects.owner,
+        updatedAt: projects.updatedAt,
+      })
+      .from(projects)
+      .where(eq(projects.organizationId, organizationId))
+      .orderBy(projects.title),
+    db
+      .select({
+        id: tasks.id,
+        projectId: tasks.projectId,
+        title: tasks.title,
+        status: tasks.status,
+        latestUpdate: tasks.latestUpdate,
+        nextAction: tasks.nextAction,
+        owner: tasks.owner,
+        updatedAt: tasks.updatedAt,
+      })
+      .from(tasks)
+      .where(and(eq(tasks.organizationId, organizationId), visibilityFilter(role, tasks.visibility)))
+      .orderBy(tasks.title),
+  ]);
+
+  const allTaskIds = taskRows.map((task) => task.id);
+  const [blockingDecisionByTaskId, sourceCountByTaskId, realUpdatedByObjective, realUpdatedByInitiative, realUpdatedByProject, realUpdatedByTask] =
+    await Promise.all([
+      blockingDecisionsForTasks(db, organizationId, allTaskIds),
+      taskSourceCounts(db, organizationId, allTaskIds),
+      loadRealUpdatedAtForObjectives(db, organizationId, objectiveRows.map((o) => o.id)),
+      loadRealUpdatedAtForInitiatives(db, organizationId, initiativeRows.map((i) => i.id)),
+      loadRealUpdatedAtForProjects(db, organizationId, projectRows.map((p) => p.id)),
+      loadRealUpdatedAt(db, organizationId, "task", allTaskIds),
+    ]);
+  const taskRowsWithTags = taskRows.map((task) => ({
+    ...task,
+    blockingDecision: blockingDecisionByTaskId.get(task.id) ?? null,
+    sourceCount: sourceCountByTaskId.get(task.id) ?? 0,
+    updatedAt: resolveRealUpdatedAt(task.updatedAt, realUpdatedByTask.get(task.id)),
+  }));
+
+  const tasksByProject = new Map<string, typeof taskRowsWithTags>();
+  for (const task of taskRowsWithTags) {
+    const list = tasksByProject.get(task.projectId) ?? [];
+    list.push(task);
+    tasksByProject.set(task.projectId, list);
+  }
+
+  const projectsByInitiative = new Map<
+    string,
+    Array<(typeof projectRows)[number] & { tasks: typeof taskRowsWithTags }>
+  >();
+  for (const project of projectRows) {
+    const list = projectsByInitiative.get(project.initiativeId) ?? [];
+    list.push({
+      ...project,
+      updatedAt: resolveRealUpdatedAt(project.updatedAt, realUpdatedByProject.get(project.id)),
+      tasks: tasksByProject.get(project.id) ?? [],
+    });
+    projectsByInitiative.set(project.initiativeId, list);
+  }
+
+  const initiativesByObjective = new Map<
+    string,
+    Array<(typeof initiativeRows)[number] & { projects: ReturnType<typeof projectsByInitiative.get> }>
+  >();
+  for (const initiative of initiativeRows) {
+    const list = initiativesByObjective.get(initiative.objectiveId) ?? [];
+    list.push({
+      ...initiative,
+      updatedAt: resolveRealUpdatedAt(initiative.updatedAt, realUpdatedByInitiative.get(initiative.id)),
+      projects: projectsByInitiative.get(initiative.id) ?? [],
+    });
+    initiativesByObjective.set(initiative.objectiveId, list);
+  }
+
+  return objectiveRows.map((objective) => ({
+    ...objective,
+    updatedAt: resolveRealUpdatedAt(objective.updatedAt, realUpdatedByObjective.get(objective.id)),
+    initiatives: initiativesByObjective.get(objective.id) ?? [],
+  }));
+}
+
+// One task with its breadcrumb chain, approved-suggestion history and any
+// open decision blocking it. Null when the task doesn't exist in this org or
+// the given role can't see it -- callers 404 either way, so "exists but
+// hidden" is indistinguishable from "doesn't exist". Shared by the task page
+// and ChatGPT's task lookup.
+export async function loadTaskDetail(organizationId: string, id: string, role: UserRole) {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.id, id), eq(tasks.organizationId, organizationId)));
+
+  if (!task || !canViewVisibility(role, task.visibility)) return null;
+
+  // Resolve the full breadcrumb chain in one join rather than three
+  // separate round trips -- one page load, one query.
+  const [chain] = await db
+    .select({
+      project: { id: projects.id, title: projects.title },
+      initiative: { id: initiatives.id, title: initiatives.title },
+      objective: { id: objectives.id, title: objectives.title },
+    })
+    .from(projects)
+    .innerJoin(initiatives, and(eq(initiatives.id, projects.initiativeId), eq(initiatives.organizationId, organizationId)))
+    .innerJoin(objectives, and(eq(objectives.id, initiatives.objectiveId), eq(objectives.organizationId, organizationId)))
+    .where(and(eq(projects.id, task.projectId), eq(projects.organizationId, organizationId)));
+
+  const approvedSuggestions = await db
+    .select({
+      id: suggestions.id,
+      changeType: suggestions.changeType,
+      reasoning: suggestions.reasoning,
+      proposedDiff: suggestions.proposedDiff,
+      reviewedAt: suggestions.reviewedAt,
+    })
+    .from(suggestions)
+    .where(
+      and(
+        eq(suggestions.organizationId, organizationId),
+        eq(suggestions.targetType, "task"),
+        eq(suggestions.targetId, id),
+        eq(suggestions.status, "approved"),
+      ),
+    )
+    .orderBy(desc(suggestions.reviewedAt));
+
+  // The "why is this stuck" signal for a blocked/needs_attention task --
+  // same open-decision-pointing-at-this-task lookup as the dashboard's
+  // needs-attention endpoint, just scoped to a single task here rather than
+  // batched across many.
+  const [blockingDecision] = await db
+    .select({ id: decisions.id, title: decisions.title })
+    .from(decisions)
+    .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"), eq(decisions.relatedTaskId, id)));
+
+  const realUpdatedForTask = await loadRealUpdatedAt(db, organizationId, "task", [id]);
+
+  return {
+    task: { ...task, updatedAt: resolveRealUpdatedAt(task.updatedAt, realUpdatedForTask.get(id)) },
+    project: chain?.project ?? null,
+    initiative: chain?.initiative ?? null,
+    objective: chain?.objective ?? null,
+    approvedSuggestions,
+    blockingDecision: blockingDecision ?? null,
+  };
+}
+
 export async function companyMapRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
 
-  // The full Objective -> Initiative -> Project -> Task tree in one response,
-  // for the Company Map overview page -- assembled in memory from four
-  // org-scoped queries (one per level) rather than one query per objective,
-  // so this stays flat regardless of how many objectives an org has.
   app.get("/api/company-map", async (request, reply) => {
-    const organizationId = request.user!.organizationId;
-
-    const [objectiveRows, initiativeRows, projectRows, taskRows] = await Promise.all([
-      db
-        .select({
-          id: objectives.id,
-          title: objectives.title,
-          description: objectives.description,
-          status: objectives.status,
-          priority: objectives.priority,
-          owner: objectives.owner,
-          updatedAt: objectives.updatedAt,
-        })
-        .from(objectives)
-        .where(eq(objectives.organizationId, organizationId))
-        .orderBy(objectives.title),
-      db
-        .select({
-          id: initiatives.id,
-          objectiveId: initiatives.objectiveId,
-          title: initiatives.title,
-          status: initiatives.status,
-          priority: initiatives.priority,
-          owner: initiatives.owner,
-          updatedAt: initiatives.updatedAt,
-        })
-        .from(initiatives)
-        .where(eq(initiatives.organizationId, organizationId))
-        .orderBy(initiatives.title),
-      db
-        .select({
-          id: projects.id,
-          initiativeId: projects.initiativeId,
-          title: projects.title,
-          status: projects.status,
-          owner: projects.owner,
-          updatedAt: projects.updatedAt,
-        })
-        .from(projects)
-        .where(eq(projects.organizationId, organizationId))
-        .orderBy(projects.title),
-      db
-        .select({
-          id: tasks.id,
-          projectId: tasks.projectId,
-          title: tasks.title,
-          status: tasks.status,
-          latestUpdate: tasks.latestUpdate,
-          nextAction: tasks.nextAction,
-          owner: tasks.owner,
-          updatedAt: tasks.updatedAt,
-        })
-        .from(tasks)
-        .where(and(eq(tasks.organizationId, organizationId), visibilityFilter(request.user!.role, tasks.visibility)))
-        .orderBy(tasks.title),
-    ]);
-
-    const allTaskIds = taskRows.map((task) => task.id);
-    const [blockingDecisionByTaskId, sourceCountByTaskId, realUpdatedByObjective, realUpdatedByInitiative, realUpdatedByProject, realUpdatedByTask] =
-      await Promise.all([
-        blockingDecisionsForTasks(db, organizationId, allTaskIds),
-        taskSourceCounts(db, organizationId, allTaskIds),
-        loadRealUpdatedAtForObjectives(db, organizationId, objectiveRows.map((o) => o.id)),
-        loadRealUpdatedAtForInitiatives(db, organizationId, initiativeRows.map((i) => i.id)),
-        loadRealUpdatedAtForProjects(db, organizationId, projectRows.map((p) => p.id)),
-        loadRealUpdatedAt(db, organizationId, "task", allTaskIds),
-      ]);
-    const taskRowsWithTags = taskRows.map((task) => ({
-      ...task,
-      blockingDecision: blockingDecisionByTaskId.get(task.id) ?? null,
-      sourceCount: sourceCountByTaskId.get(task.id) ?? 0,
-      updatedAt: resolveRealUpdatedAt(task.updatedAt, realUpdatedByTask.get(task.id)),
-    }));
-
-    const tasksByProject = new Map<string, typeof taskRowsWithTags>();
-    for (const task of taskRowsWithTags) {
-      const list = tasksByProject.get(task.projectId) ?? [];
-      list.push(task);
-      tasksByProject.set(task.projectId, list);
-    }
-
-    const projectsByInitiative = new Map<
-      string,
-      Array<(typeof projectRows)[number] & { tasks: typeof taskRowsWithTags }>
-    >();
-    for (const project of projectRows) {
-      const list = projectsByInitiative.get(project.initiativeId) ?? [];
-      list.push({
-        ...project,
-        updatedAt: resolveRealUpdatedAt(project.updatedAt, realUpdatedByProject.get(project.id)),
-        tasks: tasksByProject.get(project.id) ?? [],
-      });
-      projectsByInitiative.set(project.initiativeId, list);
-    }
-
-    const initiativesByObjective = new Map<
-      string,
-      Array<(typeof initiativeRows)[number] & { projects: ReturnType<typeof projectsByInitiative.get> }>
-    >();
-    for (const initiative of initiativeRows) {
-      const list = initiativesByObjective.get(initiative.objectiveId) ?? [];
-      list.push({
-        ...initiative,
-        updatedAt: resolveRealUpdatedAt(initiative.updatedAt, realUpdatedByInitiative.get(initiative.id)),
-        projects: projectsByInitiative.get(initiative.id) ?? [],
-      });
-      initiativesByObjective.set(initiative.objectiveId, list);
-    }
-
-    const tree = objectiveRows.map((objective) => ({
-      ...objective,
-      updatedAt: resolveRealUpdatedAt(objective.updatedAt, realUpdatedByObjective.get(objective.id)),
-      initiatives: initiativesByObjective.get(objective.id) ?? [],
-    }));
-
-    reply.send({ objectives: tree });
+    const objectives = await loadCompanyMapTree(request.user!.organizationId, request.user!.role);
+    reply.send({ objectives });
   });
 
   app.get<{ Params: { id: string } }>("/api/objectives/:id", async (request, reply) => {
@@ -333,70 +410,15 @@ export async function companyMapRoutes(app: FastifyInstance) {
       return;
     }
 
-    const [task] = await db
-      .select()
-      .from(tasks)
-      .where(and(eq(tasks.id, id), eq(tasks.organizationId, organizationId)));
-
-    if (!task || !canViewVisibility(request.user!.role, task.visibility)) {
+    const detail = await loadTaskDetail(organizationId, id, request.user!.role);
+    if (!detail) {
       // Same 404 either way -- a member requesting a restricted task's real
       // id must not be able to distinguish "doesn't exist" from "exists but
       // you can't see it", the same principle org-isolation already applies.
       reply.code(404).send({ error: "Task not found" });
       return;
     }
-
-    // Resolve the full breadcrumb chain in one join rather than three
-    // separate round trips -- one page load, one query.
-    const [chain] = await db
-      .select({
-        project: { id: projects.id, title: projects.title },
-        initiative: { id: initiatives.id, title: initiatives.title },
-        objective: { id: objectives.id, title: objectives.title },
-      })
-      .from(projects)
-      .innerJoin(initiatives, and(eq(initiatives.id, projects.initiativeId), eq(initiatives.organizationId, organizationId)))
-      .innerJoin(objectives, and(eq(objectives.id, initiatives.objectiveId), eq(objectives.organizationId, organizationId)))
-      .where(and(eq(projects.id, task.projectId), eq(projects.organizationId, organizationId)));
-
-    const approvedSuggestions = await db
-      .select({
-        id: suggestions.id,
-        changeType: suggestions.changeType,
-        reasoning: suggestions.reasoning,
-        proposedDiff: suggestions.proposedDiff,
-        reviewedAt: suggestions.reviewedAt,
-      })
-      .from(suggestions)
-      .where(
-        and(
-          eq(suggestions.organizationId, organizationId),
-          eq(suggestions.targetType, "task"),
-          eq(suggestions.targetId, id),
-          eq(suggestions.status, "approved"),
-        ),
-      )
-      .orderBy(desc(suggestions.reviewedAt));
-
-    // The "why is this stuck" signal for a blocked/needs_attention task --
-    // same open-decision-pointing-at-this-task lookup as the dashboard's
-    // needs-attention endpoint, just scoped to a single task here rather than
-    // batched across many.
-    const [blockingDecision] = await db
-      .select({ id: decisions.id, title: decisions.title })
-      .from(decisions)
-      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"), eq(decisions.relatedTaskId, id)));
-
-    const realUpdatedForTask = await loadRealUpdatedAt(db, organizationId, "task", [id]);
-
-    reply.send({
-      task: { ...task, updatedAt: resolveRealUpdatedAt(task.updatedAt, realUpdatedForTask.get(id)) },
-      project: chain?.project ?? null,
-      initiative: chain?.initiative ?? null,
-      objective: chain?.objective ?? null,
-      approvedSuggestions,
-      blockingDecision: blockingDecision ?? null,
-    });
+    reply.send(detail);
   });
 
   // Admin-only: raising or lowering who can see a task is a deliberate human

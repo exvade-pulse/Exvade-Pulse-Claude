@@ -7,10 +7,11 @@ import {
   getGmailConnectionStatus,
   listIntegrationActivity,
   listIntegrations,
+  revokeIntegrationToken,
 } from "../integrations/manage.js";
 import { syncGmailConnection } from "../integrations/gmailSync.js";
 
-const VALID_TYPES: IntegrationType[] = ["circleback", "email"];
+const VALID_TYPES: IntegrationType[] = ["circleback", "email", "chatgpt"];
 
 export async function integrationRoutes(app: FastifyInstance) {
   app.addHook("preHandler", requireAuth);
@@ -72,9 +73,29 @@ export async function integrationRoutes(app: FastifyInstance) {
       type: result.type,
       token: result.rawToken,
       webhookUrl: result.webhookUrl,
+      schemaUrl: result.schemaUrl,
       rotated: result.rotated,
       createdAt: result.createdAt,
       lastReceivedAt: result.lastReceivedAt,
     });
+  });
+
+  app.delete<{ Params: { type: string } }>("/api/integrations/:type/token", async (request, reply) => {
+    const type = request.params.type as IntegrationType;
+    if (!VALID_TYPES.includes(type)) {
+      reply.code(400).send({ error: `Unknown integration type "${request.params.type}"` });
+      return;
+    }
+
+    const revoked = await revokeIntegrationToken(db, {
+      organizationId: request.user!.organizationId,
+      actorId: request.user!.userId,
+      type,
+    });
+    if (!revoked) {
+      reply.code(404).send({ error: "No key is configured for this integration" });
+      return;
+    }
+    reply.send({ ok: true });
   });
 }

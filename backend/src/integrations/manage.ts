@@ -21,6 +21,7 @@ import { config } from "../config.js";
 export const SOURCE_TYPE_BY_INTEGRATION: Record<IntegrationType, SourceType> = {
   circleback: "circleback",
   email: "gmail",
+  chatgpt: "chatgpt",
 };
 
 // sha256, not bcrypt/scrypt: this is a high-entropy machine-generated token,
@@ -153,8 +154,15 @@ export async function listIntegrationActivity(
 // The path itself is keyed by type so a second transcript source later just
 // adds another integrationTypeEnum value and another public route, not a
 // rewrite of this URL-building logic.
-export function webhookUrlFor(type: IntegrationType, rawToken: string): string {
+export function webhookUrlFor(type: IntegrationType, rawToken: string): string | null {
+  if (type === "chatgpt") return null;
   return `${config.backendUrl}/api/public/webhooks/${type}?token=${rawToken}`;
+}
+
+// What a Custom GPT's "Import from URL" box needs. Holds no secret -- the key
+// travels separately, as a Bearer header ChatGPT stores on its side.
+export function chatGptSchemaUrl(): string {
+  return `${config.backendUrl}/api/public/chatgpt/openapi.json`;
 }
 
 interface GenerateTokenParams {
@@ -166,7 +174,8 @@ interface GenerateTokenParams {
 export interface GeneratedToken {
   type: IntegrationType;
   rawToken: string;
-  webhookUrl: string;
+  webhookUrl: string | null;
+  schemaUrl: string | null;
   rotated: boolean;
   createdAt: Date;
   lastReceivedAt: Date | null;
@@ -207,9 +216,50 @@ export async function generateIntegrationToken(db: Database, params: GenerateTok
       type: record.type,
       rawToken,
       webhookUrl: webhookUrlFor(record.type, rawToken),
+      schemaUrl: record.type === "chatgpt" ? chatGptSchemaUrl() : null,
       rotated: existing !== undefined,
       createdAt: record.createdAt,
       lastReceivedAt: record.lastReceivedAt,
     };
   });
+}
+
+// Deletes the credential outright -- the "switch it off" button. Rotating
+// also kills the old key, but always issues a new one; this leaves none.
+export async function revokeIntegrationToken(
+  db: Database,
+  params: { organizationId: string; actorId: string; type: IntegrationType },
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [deleted] = await tx
+      .delete(webhookIntegrations)
+      .where(and(eq(webhookIntegrations.organizationId, params.organizationId), eq(webhookIntegrations.type, params.type)))
+      .returning({ id: webhookIntegrations.id });
+    if (!deleted) return false;
+
+    await tx.insert(auditLog).values({
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      action: "integration.token_revoked",
+      entityType: "webhook_integration",
+      entityId: deleted.id,
+      details: { type: params.type },
+    });
+    return true;
+  });
+}
+
+// Resolves a ChatGPT Bearer key to its org, stamping lastReceivedAt so the
+// Integrations page shows when ChatGPT last used it. Filtered by type so a
+// Circleback/email webhook token can never authenticate here (or vice versa).
+export async function authenticateChatGptKey(
+  db: Database,
+  rawKey: string,
+): Promise<{ integrationId: string; organizationId: string } | null> {
+  const [row] = await db
+    .update(webhookIntegrations)
+    .set({ lastReceivedAt: new Date() })
+    .where(and(eq(webhookIntegrations.type, "chatgpt"), eq(webhookIntegrations.tokenHash, hashToken(rawKey))))
+    .returning({ integrationId: webhookIntegrations.id, organizationId: webhookIntegrations.organizationId });
+  return row ?? null;
 }

@@ -623,7 +623,7 @@ export async function changeUserRole(email: string, role: UserRole): Promise<voi
   }
 }
 
-export type IntegrationType = "circleback" | "email";
+export type IntegrationType = "circleback" | "email" | "chatgpt";
 
 export interface IntegrationStatus {
   type: IntegrationType;
@@ -636,7 +636,10 @@ export interface IntegrationStatus {
 export interface GeneratedIntegrationToken {
   type: IntegrationType;
   token: string;
-  webhookUrl: string;
+  // Null for "chatgpt" -- its key is an API key sent as a header, not a
+  // webhook URL; schemaUrl is what ChatGPT's "Import from URL" needs instead.
+  webhookUrl: string | null;
+  schemaUrl: string | null;
   rotated: boolean;
   createdAt: string;
   lastReceivedAt: string | null;
@@ -720,6 +723,17 @@ export async function generateIntegrationToken(type: IntegrationType): Promise<G
     throw new Error((body as { error?: string }).error ?? "Failed to generate token");
   }
   return res.json();
+}
+
+export async function revokeIntegrationToken(type: IntegrationType): Promise<void> {
+  const res = await fetch(`${API_URL}/api/integrations/${type}/token`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to turn off key");
+  }
 }
 
 export interface ActivityEntry {

@@ -12,7 +12,7 @@ import { getClaudeClient, type ClaudeClient } from "./claudeClient.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
 export interface RawIncomingSource {
-  type: "gmail" | "circleback" | "document" | "manual";
+  type: "gmail" | "circleback" | "document" | "manual" | "chatgpt";
   externalId: string;
   subject: string;
   from: string;

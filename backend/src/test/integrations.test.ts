@@ -770,7 +770,7 @@ describe("GET /api/integrations with both circleback and email types", () => {
     });
     expect(listA.statusCode).toBe(200);
     const bodyA = listA.json() as { integrations: Array<{ type: string; configured: boolean }> };
-    expect(bodyA.integrations.map((i) => i.type).sort()).toEqual(["circleback", "email"]);
+    expect(bodyA.integrations.map((i) => i.type).sort()).toEqual(["chatgpt", "circleback", "email"]);
     expect(bodyA.integrations.find((i) => i.type === "email")?.configured).toBe(false);
 
     const tokenB = await tokenFor(orgB);

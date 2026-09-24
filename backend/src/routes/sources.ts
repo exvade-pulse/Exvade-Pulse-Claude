@@ -14,7 +14,7 @@ import { UUID_RE } from "./uuid.js";
 // distinguishing first line (shouldn't happen once the length check below
 // passes, but keeps this total).
 const SUBJECT_LENGTH = 80;
-function deriveSubject(note: string): string {
+export function deriveSubject(note: string): string {
   const firstLine = note.split("\n")[0]?.trim();
   if (!firstLine) return "Manual update";
   return firstLine.length > SUBJECT_LENGTH ? `${firstLine.slice(0, SUBJECT_LENGTH)}…` : firstLine;
