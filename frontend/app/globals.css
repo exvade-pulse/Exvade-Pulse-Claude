@@ -713,6 +713,31 @@ body {
   background: #eef2ff;
 }
 
+.chatgpt-panel {
+  margin-bottom: 24px;
+}
+
+.chatgpt-panel-help {
+  font-size: 13px;
+  margin: 4px 0 10px;
+}
+
+.chatgpt-panel-status {
+  font-size: 14px;
+  margin: 10px 0 0;
+}
+
+.chatgpt-fallback {
+  width: 100%;
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.chatgpt-link {
+  margin-top: 14px;
+}
+
 .setup-steps {
   margin: 6px 0 12px;
   padding-left: 20px;

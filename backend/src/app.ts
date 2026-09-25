@@ -21,6 +21,7 @@ import { unsortedRoutes } from "./routes/unsorted.js";
 import { duplicateRoutes } from "./routes/duplicates.js";
 import { relationshipSuggestionRoutes } from "./routes/relationshipSuggestions.js";
 import { chatGptRoutes } from "./routes/chatgpt.js";
+import { publicReviewRoutes } from "./routes/publicReview.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -52,6 +53,7 @@ export async function buildApp() {
   await app.register(duplicateRoutes);
   await app.register(relationshipSuggestionRoutes);
   await app.register(chatGptRoutes);
+  await app.register(publicReviewRoutes);
 
   return app;
 }

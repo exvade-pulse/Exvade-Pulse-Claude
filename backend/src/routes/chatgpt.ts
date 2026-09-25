@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import { and, count, desc, eq, gte, inArray } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
-import { decisions, sources, suggestions, type EntityNodeType } from "../db/schema.js";
+import { decisions, sources, suggestions } from "../db/schema.js";
 import { authenticateChatGptKey } from "../integrations/manage.js";
 import { runInterpretationPipeline } from "../interpretation/pipeline.js";
-import { listRelationshipsForEntity, resolveNames } from "../relationships/manage.js";
+import { listRelationshipsForEntity } from "../relationships/manage.js";
+import { describeSuggestions } from "../suggestions/describe.js";
 import { loadCompanyMapTree, loadTaskDetail } from "./companyMap.js";
 import { deriveSubject } from "./sources.js";
 import { UUID_RE } from "./uuid.js";
@@ -201,34 +202,8 @@ export async function chatGptRoutes(app: FastifyInstance) {
         .orderBy(desc(suggestions.createdAt))
         .limit(REVIEW_LIMIT);
 
-      // Name what each suggestion is about -- a raw id means nothing in a
-      // conversation. Existing targets and relationship endpoints resolve in
-      // one batched lookup; a brand-new entity's name is its proposed title.
-      const refs: Array<{ type: EntityNodeType; id: string }> = [];
-      for (const row of rows) {
-        const diff = row.proposedDiff as Record<string, unknown>;
-        if (row.targetType === "relationship") {
-          if (typeof diff.fromId === "string") refs.push({ type: diff.fromType as EntityNodeType, id: diff.fromId });
-          if (typeof diff.toId === "string") refs.push({ type: diff.toType as EntityNodeType, id: diff.toId });
-        } else if (row.targetId) {
-          refs.push({ type: row.targetType, id: row.targetId });
-        }
-      }
-      const names = await resolveNames(db, organizationId, refs);
-      const nameOf = (type: unknown, id: unknown) => names.get(`${String(type)}:${String(id)}`) ?? "(unknown)";
-
-      reply.send({
-        suggestions: rows.map((row) => {
-          const diff = row.proposedDiff as Record<string, unknown>;
-          const about =
-            row.targetType === "relationship"
-              ? `${nameOf(diff.fromType, diff.fromId)} ${String(diff.relationType)} ${nameOf(diff.toType, diff.toId)}`
-              : row.targetId
-                ? nameOf(row.targetType, row.targetId)
-                : `New ${row.targetType}: ${String(diff.title ?? "(untitled)")}`;
-          return { ...row, about };
-        }),
-      });
+      const about = await describeSuggestions(db, organizationId, rows);
+      reply.send({ suggestions: rows.map((row) => ({ ...row, about: about.get(row.id) })) });
     });
 
     authed.post<{ Body: { comment?: unknown } }>("/api/public/chatgpt/comments", async (request, reply) => {

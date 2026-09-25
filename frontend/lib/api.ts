@@ -725,6 +725,28 @@ export async function generateIntegrationToken(type: IntegrationType): Promise<G
   return res.json();
 }
 
+// Plain-text snapshot of the whole org for pasting into ChatGPT -- see
+// backend/src/reports/executiveReview.ts.
+export async function fetchExecutiveReview(): Promise<{ text: string; generatedAt: string }> {
+  const res = await fetch(`${API_URL}/api/reports/executive-review`, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to build the review (${res.status})`);
+  }
+  return res.json();
+}
+
+// Admin-only: a private 7-day link to the same review that ChatGPT's web
+// browsing can open (it can't sign in). Dies on expiry or when the ChatGPT
+// key on the Integrations page is rotated or turned off.
+export async function createReviewLink(): Promise<{ url: string; expiresAt: string }> {
+  const res = await fetch(`${API_URL}/api/reports/executive-review/link`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to create the link");
+  }
+  return res.json();
+}
+
 export async function revokeIntegrationToken(type: IntegrationType): Promise<void> {
   const res = await fetch(`${API_URL}/api/integrations/${type}/token`, {
     method: "DELETE",

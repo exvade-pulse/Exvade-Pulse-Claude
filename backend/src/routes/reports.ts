@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
-import { requireAuth } from "../auth/middleware.js";
+import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, sources, suggestions, tasks } from "../db/schema.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
 import { visibilityFilter } from "../access/visibility.js";
+import { buildExecutiveReview } from "../reports/executiveReview.js";
+import { createReviewLink } from "../reports/reviewLinks.js";
 
 const WEEK_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -165,5 +167,23 @@ export async function reportRoutes(app: FastifyInstance) {
       sources: sourcesAppendix,
       taskCount: updatedRows.length,
     });
+  });
+
+  // The "Copy for ChatGPT" text, built with the caller's own visibility.
+  app.get("/api/reports/executive-review", async (request, reply) => {
+    const generatedAt = new Date();
+    const text = await buildExecutiveReview(request.user!.organizationId, request.user!.role, generatedAt);
+    reply.send({ text, generatedAt });
+  });
+
+  // Admin-only: a link shows the whole org (every visibility level) to
+  // whoever holds it, so only someone who can already see all of it may
+  // create one.
+  app.post("/api/reports/executive-review/link", { preHandler: requireAdmin }, async (request, reply) => {
+    const link = await createReviewLink(db, {
+      organizationId: request.user!.organizationId,
+      actorId: request.user!.userId,
+    });
+    reply.code(201).send(link);
   });
 }

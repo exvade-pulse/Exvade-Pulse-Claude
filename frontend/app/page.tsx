@@ -18,6 +18,7 @@ import {
 } from "../lib/api";
 import { relativeTime } from "../lib/time";
 import { Nav } from "./components/Nav";
+import { ChatGptReviewPanel } from "./components/ChatGptReviewPanel";
 import { chipClass, STATUS_LABEL, TaskStatusChips } from "./components/TaskStatusChips";
 
 const SNIPPET_LENGTH = 100;
@@ -131,6 +132,8 @@ export default function DashboardPage() {
       </div>
 
       {loadError && <div className="error-banner">{loadError}</div>}
+
+      <ChatGptReviewPanel isAdmin={user.role === "admin"} />
 
       <h2 className="section-title">Decisions needed</h2>
       {topDecisions.length === 0 ? (
