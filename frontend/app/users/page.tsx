@@ -177,7 +177,7 @@ export default function UsersPage() {
 
       {rows.length > 0 && (
         <div className="card users-table-wrap">
-          <table className="users-table">
+          <table className="users-table stack-on-narrow">
             <thead>
               <tr>
                 <th>Email</th>
@@ -194,16 +194,16 @@ export default function UsersPage() {
                 const busy = busyEmail === row.email;
                 return (
                   <tr key={row.email}>
-                    <td>{row.email}</td>
-                    <td>{row.name ?? <span className="muted">&mdash;</span>}</td>
-                    <td>
+                    <td data-label="Email">{row.email}</td>
+                    <td data-label="Name">{row.name ?? <span className="muted">&mdash;</span>}</td>
+                    <td data-label="Status">
                       {row.hasSignedIn ? (
                         <span className="chip chip-done">Signed in</span>
                       ) : (
                         <span className="chip">Pending</span>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Role">
                       <select
                         className="edit-input"
                         value={row.role}
@@ -214,7 +214,7 @@ export default function UsersPage() {
                         <option value="admin">Admin</option>
                       </select>
                     </td>
-                    <td>{formatDate(row.createdAt)}</td>
+                    <td data-label="Authorized">{formatDate(row.createdAt)}</td>
                     <td>
                       {!isSelf && (
                         <button

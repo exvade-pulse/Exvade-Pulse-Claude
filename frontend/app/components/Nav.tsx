@@ -19,6 +19,7 @@ export function Nav({ user }: { user?: SessionUser | null }) {
   return (
     <nav className="nav">
       <Link href="/">Dashboard</Link>
+      <Link href="/executive">Executive</Link>
       <Link href="/company-map">Company Map</Link>
       <Link href="/company-entities">Entities</Link>
       <Link href="/unsorted">Unsorted</Link>

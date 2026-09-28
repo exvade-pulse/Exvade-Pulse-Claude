@@ -725,9 +725,53 @@ export async function generateIntegrationToken(type: IntegrationType): Promise<G
   return res.json();
 }
 
-// Plain-text snapshot of the whole org for pasting into ChatGPT -- see
-// backend/src/reports/executiveReview.ts.
-export async function fetchExecutiveReview(): Promise<{ text: string; generatedAt: string }> {
+export interface ReviewTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  objective: string;
+  project: string;
+  owner: string | null;
+  nextAction: string | null;
+  latestUpdate: string | null;
+  lastEvidenceAt: string;
+  daysSinceEvidence: number;
+  waitingOnDecision: string | null;
+  attentionScore: number;
+  attentionReasons: string[];
+}
+
+export interface ReviewDecision {
+  id: string;
+  title: string;
+  decider: string;
+  stakeholders: string[];
+  dueDate: string | null;
+  daysOverdue: number | null;
+  whyItMatters: string | null;
+  relevantContext: string | null;
+  suggestedNextStep: string | null;
+  relatedTask: string | null;
+}
+
+export interface ExecutiveReviewData {
+  generatedAt: string;
+  headline: string[];
+  decisionsNeeded: ReviewDecision[];
+  deadlinePassed: ReviewDecision[];
+  risks: ReviewTask[];
+  operatingActions: ReviewTask[];
+  needsDisposition: ReviewTask[];
+  recentDevelopments: Array<{ id: string; date: string; about: string; source: string; summary: string }>;
+  awaitingReview: Array<{ id: string; about: string; changeType: string; confidence: number; reasoning: string }>;
+  awaitingReviewTotal: number;
+  counts: { openTasks: number; blocked: number; needsAttention: number; waiting: number; openDecisions: number };
+}
+
+// The executive review for the signed-in user's visibility: structured data
+// for the Executive page, and the same content as text for pasting into
+// ChatGPT -- see backend/src/reports/executiveReview.ts.
+export async function fetchExecutiveReview(): Promise<{ text: string; data: ExecutiveReviewData; generatedAt: string }> {
   const res = await fetch(`${API_URL}/api/reports/executive-review`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to build the review (${res.status})`);

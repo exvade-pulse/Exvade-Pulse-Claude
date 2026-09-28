@@ -341,7 +341,7 @@ function IntegrationsPageInner() {
 
       {(rows.length > 0 || gmail) && (
         <div className="card users-table-wrap">
-          <table className="users-table">
+          <table className="users-table stack-on-narrow">
             <thead>
               <tr>
                 <th>Source</th>
@@ -356,7 +356,7 @@ function IntegrationsPageInner() {
               {gmail && (
                 <tr>
                   <td>Gmail</td>
-                  <td>
+                  <td data-label="Status">
                     {gmail.connected ? (
                       <span className="chip chip-done" title={gmail.emailAddress ?? undefined}>
                         Connected{gmail.emailAddress ? ` (${gmail.emailAddress})` : ""}
@@ -370,8 +370,8 @@ function IntegrationsPageInner() {
                       </div>
                     )}
                   </td>
-                  <td>{formatDateTime(gmail.lastSyncedAt)}</td>
-                  <td>{gmail.totalSuggestions}</td>
+                  <td data-label="Last activity">{formatDateTime(gmail.lastSyncedAt)}</td>
+                  <td data-label="Suggestions">{gmail.totalSuggestions}</td>
                   <td>
                     <button className="decision-btn" onClick={() => toggleActivity("gmail")}>
                       {openActivityType === "gmail" ? "Hide activity" : "View activity"}
@@ -401,15 +401,15 @@ function IntegrationsPageInner() {
                 return (
                   <tr key={row.type}>
                     <td>{LABELS[row.type] ?? row.type}</td>
-                    <td>
+                    <td data-label="Status">
                       {row.configured ? (
                         <span className="chip chip-done">Configured</span>
                       ) : (
                         <span className="chip">Not configured</span>
                       )}
                     </td>
-                    <td>{formatDateTime(row.lastReceivedAt)}</td>
-                    <td>{row.totalSuggestions}</td>
+                    <td data-label="Last activity">{formatDateTime(row.lastReceivedAt)}</td>
+                    <td data-label="Suggestions">{row.totalSuggestions}</td>
                     <td>
                       <button className="decision-btn" onClick={() => toggleActivity(row.type)}>
                         {activityOpen ? "Hide activity" : "View activity"}

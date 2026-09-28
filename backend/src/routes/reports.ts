@@ -5,7 +5,7 @@ import { db } from "../db/client.js";
 import { decisions, sources, suggestions, tasks } from "../db/schema.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
 import { visibilityFilter } from "../access/visibility.js";
-import { buildExecutiveReview } from "../reports/executiveReview.js";
+import { buildExecutiveReviewData, renderExecutiveReviewText } from "../reports/executiveReview.js";
 import { createReviewLink } from "../reports/reviewLinks.js";
 
 const WEEK_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -169,11 +169,11 @@ export async function reportRoutes(app: FastifyInstance) {
     });
   });
 
-  // The "Copy for ChatGPT" text, built with the caller's own visibility.
+  // The executive review for the caller's own visibility: structured data
+  // for the in-app page, plus the same content as text for "Copy for ChatGPT".
   app.get("/api/reports/executive-review", async (request, reply) => {
-    const generatedAt = new Date();
-    const text = await buildExecutiveReview(request.user!.organizationId, request.user!.role, generatedAt);
-    reply.send({ text, generatedAt });
+    const data = await buildExecutiveReviewData(request.user!.organizationId, request.user!.role);
+    reply.send({ text: renderExecutiveReviewText(data), data, generatedAt: data.generatedAt });
   });
 
   // Admin-only: a link shows the whole org (every visibility level) to

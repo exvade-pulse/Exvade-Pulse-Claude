@@ -6,7 +6,7 @@ import { createFixtureOrg } from "./fixtures.js";
 import { decisions, objectives, sources, suggestions, tasks } from "../db/schema.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
-import { buildExecutiveReview } from "../reports/executiveReview.js";
+import { buildExecutiveReview, buildExecutiveReviewData, renderExecutiveReviewText, scoreAttention } from "../reports/executiveReview.js";
 import { createReviewLink } from "../reports/reviewLinks.js";
 import { generateIntegrationToken, revokeIntegrationToken } from "../integrations/manage.js";
 
@@ -48,88 +48,113 @@ function section(report: string, heading: string): string {
   return next === -1 ? report.slice(start) : report.slice(start, start + heading.length + next);
 }
 
-describe("buildExecutiveReview", () => {
+describe("executive review", () => {
   beforeEach(async () => {
     await truncateAll(db);
   });
 
-  it("has all six sections, a generated timestamp and an at-a-glance line", async () => {
+  it("leads with 'This week', then the sections in order, with raw counts last", async () => {
     const fixture = await createFixtureOrg(db, { domain: "exec-sections.test" });
     const report = await buildExecutiveReview(fixture.org.id, "admin", NOW);
 
     expect(report).toContain("Generated: 2026-09-25 12:00 UTC");
-    expect(report).toContain("At a glance: 0 open tasks");
-    for (const heading of [
-      "1. CURRENT PRIORITIES",
-      "2. OUTSTANDING DECISIONS",
-      "3. BLOCKED, STUCK OR OVERDUE",
-      "4. RECENT DEVELOPMENTS",
-      "5. AWAITING REVIEW IN PULSE",
-      "6. FULL OPEN-TASK INVENTORY",
-    ]) {
-      expect(report).toContain(heading);
-    }
+    const headings = [
+      "THIS WEEK",
+      "1. DECISIONS NEEDED",
+      "2. DEADLINE PASSED",
+      "3. RISKS & BLOCKERS",
+      "4. OPERATING ACTIONS",
+      "5. NEEDS DISPOSITION",
+      "6. RECENT DEVELOPMENTS",
+      "7. AWAITING REVIEW IN PULSE",
+      "8. FULL OPEN-TASK INVENTORY",
+      "Reference counts:",
+    ];
+    const positions = headings.map((h) => report.indexOf(h));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     expect(report).toContain("Pulse doesn't record due dates on tasks");
   });
 
-  it("lists every open task in the inventory, leaves out finished ones, and puts high-priority work under priorities", async () => {
-    const fixture = await createFixtureOrg(db, { domain: "exec-inventory.test" });
+  it("files an old, unsupported record under needs disposition, not as a priority or a risk", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-disposition.test" });
     await db.update(objectives).set({ priority: "critical" }).where(eq(objectives.id, fixture.objective.id));
-    const [lowObjective] = await db.insert(objectives).values({ organizationId: fixture.org.id, title: "Side quest", priority: "low" }).returning();
+    await db.insert(tasks).values([
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Ancient active task", status: "active", nextAction: "Do it", updatedAt: new Date(NOW.getTime() - 120 * DAY) },
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Long-blocked task", status: "blocked", updatedAt: new Date(NOW.getTime() - 100 * DAY) },
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Freshly blocked task", status: "blocked", updatedAt: new Date(NOW.getTime() - 5 * DAY) },
+    ]);
+
+    const data = await buildExecutiveReviewData(fixture.org.id, "admin", NOW);
+    expect(data.needsDisposition.map((t) => t.title)).toEqual(["Ancient active task", "Long-blocked task"]);
+    expect(data.risks.map((t) => t.title)).toEqual(["Freshly blocked task"]);
+    expect(data.operatingActions).toEqual([]);
+    expect(data.headline.some((h) => h.startsWith("2 old records need disposition"))).toBe(true);
+
+    const disposition = section(renderExecutiveReviewText(data), "5. NEEDS DISPOSITION");
+    expect(disposition).toContain("Ancient active task (Test project) — last evidence");
+    expect(disposition).toContain("120 days ago");
+  });
+
+  it("moves an open decision past its due date to 'deadline passed' instead of treating it as upcoming", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-deadline.test" });
+    await db.insert(decisions).values([
+      { organizationId: fixture.org.id, title: "Late call", decider: "CEO", dueDate: new Date(NOW.getTime() - 3 * DAY), whyItMatters: "Deadline passed." },
+      { organizationId: fixture.org.id, title: "Upcoming call", decider: "Board", dueDate: new Date(NOW.getTime() + 10 * DAY) },
+      { organizationId: fixture.org.id, title: "Open-ended call", decider: "Board" },
+      { organizationId: fixture.org.id, title: "Settled call", decider: "CEO", status: "decided" },
+    ]);
+    const data = await buildExecutiveReviewData(fixture.org.id, "admin", NOW);
+
+    expect(data.deadlinePassed.map((d) => d.title)).toEqual(["Late call"]);
+    expect(data.deadlinePassed[0].daysOverdue).toBe(3);
+    expect(data.decisionsNeeded.map((d) => d.title)).toEqual(["Upcoming call", "Open-ended call"]);
+    expect(data.headline[0]).toBe("2 decisions need a call");
+    expect(data.headline[1]).toContain("1 decision is past deadline with no recorded outcome");
+
+    const report = renderExecutiveReviewText(data);
+    expect(section(report, "2. DEADLINE PASSED")).toContain("3 days past due with no recorded outcome.");
+    expect(section(report, "1. DECISIONS NEEDED")).not.toContain("Late call");
+    expect(section(report, "1. DECISIONS NEEDED")).toContain("no due date recorded");
+    expect(report).not.toContain("Settled call");
+  });
+
+  it("ranks operating actions by attention, and shows a blocked task's decision under risks", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-ranking.test" });
+    await db.insert(tasks).values([
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Vague task", status: "active", updatedAt: new Date(NOW.getTime() - 40 * DAY) },
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Clear task", status: "active", nextAction: "Call vendor", owner: "Karen", updatedAt: new Date(NOW.getTime() - 2 * DAY) },
+    ]);
+    const [blocked] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Ship harness", status: "blocked", updatedAt: new Date(NOW.getTime() - 12 * DAY) })
+      .returning();
+    await db.insert(decisions).values({ organizationId: fixture.org.id, title: "Pick a vendor", decider: "CEO", relatedTaskId: blocked.id });
+
+    const data = await buildExecutiveReviewData(fixture.org.id, "admin", NOW);
+    expect(data.operatingActions.map((t) => t.title)).toEqual(["Clear task", "Vague task"]);
+    expect(data.operatingActions[1].attentionReasons).toEqual(["no next action recorded", "no new evidence in 40 days"]);
+    expect(data.risks[0]).toMatchObject({ title: "Ship harness", waitingOnDecision: "Pick a vendor", daysSinceEvidence: 12 });
+
+    const risks = section(renderExecutiveReviewText(data), "3. RISKS & BLOCKERS");
+    expect(risks).toContain("[BLOCKED] Ship harness");
+    expect(risks).toContain("Waiting on decision: Pick a vendor");
+  });
+
+  it("lists every open task in the inventory and leaves out finished ones", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-inventory.test" });
     await db.insert(tasks).values([
       { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Calibrate rig", status: "active", owner: "Karen", nextAction: "Call vendor" },
       { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Old finished work", status: "completed" },
     ]);
     const report = await buildExecutiveReview(fixture.org.id, "admin", NOW);
 
-    const inventory = section(report, "6. FULL OPEN-TASK INVENTORY");
+    const inventory = section(report, "8. FULL OPEN-TASK INVENTORY");
+    expect(inventory).toContain("Test objective [medium priority] › Test initiative › Test project");
     expect(inventory).toContain("Calibrate rig");
     expect(inventory).toContain("Owner: Karen");
     expect(inventory).toContain("Next: Call vendor");
-    expect(inventory).toContain(`${lowObjective.title} [low priority, active]`);
-    expect(inventory).toContain("(no open tasks)");
     expect(report).not.toContain("Old finished work");
-    expect(section(report, "1. CURRENT PRIORITIES")).toContain("Calibrate rig");
-  });
-
-  it("flags blocked work with how long it's been stuck and what decision it's waiting on, and stale active tasks", async () => {
-    const fixture = await createFixtureOrg(db, { domain: "exec-blocked.test" });
-    const [blocked] = await db
-      .insert(tasks)
-      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Ship harness", status: "blocked", updatedAt: new Date(NOW.getTime() - 12 * DAY) })
-      .returning();
-    await db.insert(tasks).values({
-      organizationId: fixture.org.id,
-      projectId: fixture.project.id,
-      title: "Forgotten task",
-      status: "active",
-      updatedAt: new Date(NOW.getTime() - 45 * DAY),
-    });
-    await db.insert(decisions).values({ organizationId: fixture.org.id, title: "Pick a vendor", decider: "CEO", relatedTaskId: blocked.id });
-
-    const stuck = section(await buildExecutiveReview(fixture.org.id, "admin", NOW), "3. BLOCKED, STUCK OR OVERDUE");
-    expect(stuck).toContain("[BLOCKED] Ship harness");
-    expect(stuck).toContain("No update in 12 days | Waiting on decision: Pick a vendor");
-    expect(stuck).toContain("Forgotten task");
-    expect(stuck).toContain("No update in 45 days");
-  });
-
-  it("shows decisions with due dates, marks overdue ones, and says when no due date is recorded", async () => {
-    const fixture = await createFixtureOrg(db, { domain: "exec-decisions.test" });
-    await db.insert(decisions).values([
-      { organizationId: fixture.org.id, title: "Late call", decider: "CEO", dueDate: new Date(NOW.getTime() - 3 * DAY), whyItMatters: "Deadline passed." },
-      { organizationId: fixture.org.id, title: "Open-ended call", decider: "Board" },
-      { organizationId: fixture.org.id, title: "Settled call", decider: "CEO", status: "decided" },
-    ]);
-    const report = await buildExecutiveReview(fixture.org.id, "admin", NOW);
-
-    const decisionsSection = section(report, "2. OUTSTANDING DECISIONS");
-    expect(decisionsSection).toContain("Late call");
-    expect(decisionsSection).toContain("OVERDUE");
-    expect(decisionsSection).toContain("Why it matters: Deadline passed.");
-    expect(decisionsSection).toContain("no due date recorded");
-    expect(report).not.toContain("Settled call");
-    expect(section(report, "3. BLOCKED, STUCK OR OVERDUE")).toContain("Overdue decision: Late call");
   });
 
   it("counts a development as recent by when its evidence is dated, not when it was approved", async () => {
@@ -151,7 +176,7 @@ describe("buildExecutiveReview", () => {
       },
     ]);
 
-    const recent = section(await buildExecutiveReview(fixture.org.id, "admin", NOW), "4. RECENT DEVELOPMENTS");
+    const recent = section(await buildExecutiveReview(fixture.org.id, "admin", NOW), "6. RECENT DEVELOPMENTS");
     expect(recent).toContain("Sep 22, 2026 · Needle testing (from meeting)");
     expect(recent).toContain("latestUpdate: 18G passed the leak test");
     expect(recent).not.toContain("Old 2019 note");
@@ -167,7 +192,7 @@ describe("buildExecutiveReview", () => {
       proposedDiff: { fromType: "task", fromId: a.id, toType: "task", toId: b.id, relationType: "informs" },
       reasoning: "x", confidence: 0.9, status: "approved", reviewedAt: NOW,
     });
-    const recent = section(await buildExecutiveReview(fixture.org.id, "admin", NOW), "4. RECENT DEVELOPMENTS");
+    const recent = section(await buildExecutiveReview(fixture.org.id, "admin", NOW), "6. RECENT DEVELOPMENTS");
     expect(recent).toContain("Needle testing informs Choose needle size (from meeting)");
     expect(recent).not.toContain("fromType");
   });
@@ -178,12 +203,12 @@ describe("buildExecutiveReview", () => {
       organizationId: fixture.org.id, sourceId: fixture.source.id, targetType: "task", targetId: null, changeType: "new_task",
       proposedDiff: { projectId: fixture.project.id, title: "Call the vendor" }, reasoning: "Follow-up from the meeting.", confidence: 0.82,
     });
-    const pending = section(await buildExecutiveReview(fixture.org.id, "admin", NOW), "5. AWAITING REVIEW IN PULSE");
+    const pending = section(await buildExecutiveReview(fixture.org.id, "admin", NOW), "7. AWAITING REVIEW IN PULSE");
     expect(pending).toContain("New task: Call the vendor — new task, 82% confidence");
     expect(pending).toContain("Why: Follow-up from the meeting.");
   });
 
-  it("a member's report leaves out restricted tasks everywhere, including the review section; an admin's includes them", async () => {
+  it("a member's review leaves out restricted tasks everywhere, including the review section; an admin's includes them", async () => {
     const fixture = await createFixtureOrg(db, { domain: "exec-visibility.test" });
     const [secret] = await db
       .insert(tasks)
@@ -202,6 +227,44 @@ describe("buildExecutiveReview", () => {
   });
 });
 
+describe("scoreAttention", () => {
+  const base = {
+    objectivePriority: "critical",
+    status: "blocked",
+    waitingOnDecision: true,
+    decisionDueSoonOrOverdue: false,
+    hasNextAction: true,
+    daysSinceEvidence: 5,
+  };
+
+  it("scores a fresh, blocked, critical, actionable item at the top", () => {
+    expect(scoreAttention(base).score).toBe(100);
+  });
+
+  it("lets staleness lower a score without dominating it", () => {
+    const fresh = scoreAttention({ ...base, status: "active", waitingOnDecision: false }).score;
+    const month = scoreAttention({ ...base, status: "active", waitingOnDecision: false, daysSinceEvidence: 45 }).score;
+    const quarter = scoreAttention({ ...base, status: "active", waitingOnDecision: false, daysSinceEvidence: 85 }).score;
+    expect(month).toBeLessThan(fresh);
+    expect(quarter).toBeLessThan(month);
+    // Importance still outweighs freshness: a critical item going quiet
+    // outranks a fresh low-priority one.
+    const lowFresh = scoreAttention({ ...base, objectivePriority: "low", status: "active", waitingOnDecision: false }).score;
+    expect(quarter).toBeGreaterThan(lowFresh);
+  });
+
+  it("explains its ranking in plain words", () => {
+    const { reasons } = scoreAttention({ ...base, hasNextAction: false, decisionDueSoonOrOverdue: true, daysSinceEvidence: 50 });
+    expect(reasons).toEqual([
+      "critical-priority objective",
+      "blocked",
+      "blocking decision is due soon or overdue",
+      "waiting on an open decision",
+      "no next action recorded",
+      "no new evidence in 50 days",
+    ]);
+  });
+});
 describe("GET /api/reports/executive-review", () => {
   beforeEach(async () => {
     await truncateAll(db);
