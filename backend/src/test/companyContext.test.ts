@@ -134,7 +134,7 @@ describe("company context", () => {
           seen.redaction = systemText(params);
           return toolUseMessage("redact_text", { redactedText: String(params.messages[0].content) });
         }
-        if (params.model === NOISE_FILTER_MODEL && params.tools?.[0]?.name === "classify_source") {
+        if (params.model === NOISE_FILTER_MODEL && (params.tools?.[0] as { name?: string } | undefined)?.name === "classify_source") {
           seen.noise = systemText(params);
           return toolUseMessage("classify_source", { isNoise: false, reason: "Operational." });
         }
