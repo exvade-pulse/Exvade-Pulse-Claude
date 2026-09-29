@@ -4,6 +4,8 @@ import {
   decisions,
   entityRelationships,
   LIVE_DECISION_STATUSES,
+  strategicQuestionLinks,
+  strategicQuestions,
   sources,
   suggestions,
   tasks,
@@ -68,6 +70,8 @@ export interface ReviewTask {
   nextActionStale: boolean;
   attentionScore: number;
   attentionReasons: string[];
+  // Open strategic questions this work is part of.
+  questions: string[];
 }
 
 export interface ReviewDecision {
@@ -88,6 +92,7 @@ export interface ReviewDecision {
   coupledWith: string[];
   nextStepAgeDays: number | null;
   nextStepStale: boolean;
+  questions: string[];
 }
 
 // One workstream (project) rolled up to a single line, so the review shows
@@ -108,10 +113,34 @@ export interface ReviewWorkstream {
 // every section and ranked by consequence -- the answer to "what should I
 // focus on next?".
 export interface ReviewFocusItem {
-  kind: "deadline" | "conflict" | "decision" | "blocker" | "stale_next";
+  kind: "deadline" | "conflict" | "decision" | "blocker" | "stale_next" | "question";
   title: string;
   detail: string;
   weight: number;
+}
+
+// A strategic question rolled up from the decisions and work linked to it:
+// "Sampling reliability — needs attention", expanding to what's under it.
+// Open questions, plus resolved ones whose decisions still need closing.
+export interface ReviewQuestion {
+  id: string;
+  title: string;
+  objective: string;
+  hypothesis: string | null;
+  status: "open" | "resolved";
+  resolution: string | null;
+  state: "needs attention" | "decision needed" | "waiting" | "on track" | "resolved";
+  // Undecided decisions under it (the calls still to make).
+  openDecisions: Array<{ title: string; overdue: boolean }>;
+  decisionsInProgress: string[];
+  counts: { blocked: number; needsAttention: number; waiting: number; active: number };
+  conflicts: number;
+  staleNextActions: number;
+  // Linked live work, most attention-worthy first.
+  work: Array<{ title: string; status: string; project: string }>;
+  lastEvidenceAt: string | null;
+  // Resolved, but decisions under it are still open: close or update them.
+  needsCloseOut: boolean;
 }
 
 export interface ReviewDevelopment {
@@ -161,6 +190,7 @@ export interface ExecutiveReviewData {
   sinceLastReview?: SinceLastReview | null;
   headline: string[];
   focus: ReviewFocusItem[];
+  questions: ReviewQuestion[];
   workstreams: ReviewWorkstream[];
   contradictions: ReviewContradiction[];
   decisionsNeeded: ReviewDecision[];
@@ -273,7 +303,7 @@ export async function buildExecutiveReviewData(
 ): Promise<ExecutiveReviewData> {
   const recentSince = new Date(now.getTime() - RECENT_DAYS * MS_PER_DAY);
 
-  const [tree, openDecisionRows, recentRows, pendingRows, relationshipRows, taskEvidenceRows] = await Promise.all([
+  const [tree, openDecisionRows, recentRows, pendingRows, relationshipRows, taskEvidenceRows, questionRows, questionLinkRows] = await Promise.all([
     loadCompanyMapTree(organizationId, role),
     db
       .select({
@@ -328,6 +358,8 @@ export async function buildExecutiveReviewData(
       .select({ id: tasks.id, fieldEvidence: tasks.fieldEvidence })
       .from(tasks)
       .where(and(eq(tasks.organizationId, organizationId), notInArray(tasks.status, TERMINAL_TASK_STATUSES))),
+    db.select().from(strategicQuestions).where(eq(strategicQuestions.organizationId, organizationId)),
+    db.select().from(strategicQuestionLinks).where(eq(strategicQuestionLinks.organizationId, organizationId)),
   ]);
   const nextActionAsOf = new Map(
     taskEvidenceRows.map((row) => [row.id, (row.fieldEvidence as Record<string, { asOf?: string }> | null)?.nextAction?.asOf ?? null]),
@@ -341,6 +373,8 @@ export async function buildExecutiveReviewData(
   const inventory: ReviewInventoryProject[] = [];
   const openTasks: ReviewTask[] = [];
   const taskTitleById = new Map<string, string>();
+  const taskIdsByProject = new Map<string, string[]>();
+  const objectiveTitleById = new Map(tree.map((o) => [o.id, o.title]));
   for (const objective of tree) {
     for (const initiative of objective.initiatives) {
       for (const project of initiative.projects ?? []) {
@@ -373,8 +407,10 @@ export async function buildExecutiveReviewData(
             ...nextActionFreshness(task.nextAction, nextActionAsOf.get(task.id) ?? task.updatedAt, now),
             attentionScore: score,
             attentionReasons: reasons,
+            questions: [],
           };
           projectTasks.push(item);
+          taskIdsByProject.set(project.id, [...(taskIdsByProject.get(project.id) ?? []), task.id]);
           openTasks.push(item);
           taskTitleById.set(task.id, task.title);
         }
@@ -416,6 +452,7 @@ export async function buildExecutiveReviewData(
       waitingOn: [],
       informedBy: [],
       coupledWith: [],
+      questions: [],
       ...(() => {
         const f = nextActionFreshness(d.suggestedNextStep, resolveRealUpdatedAt(d.updatedAt, decisionUpdated.get(d.id)), now);
         return { nextStepAgeDays: f.nextActionAgeDays, nextStepStale: f.nextActionStale };
@@ -523,6 +560,66 @@ export async function buildExecutiveReviewData(
     ];
   });
 
+  // Strategic questions, rolled up from what's linked to them. A linked
+  // project counts all its live tasks; only records this viewer can see
+  // (the ones already in this review) are counted.
+  const taskById = new Map(openTasks.map((t) => [t.id, t]));
+  const decisionById = new Map(allDecisions.map((d) => [d.id, d]));
+  const deadlinePassedIds = new Set(deadlinePassed.map((d) => d.id));
+  const conflictsOn = new Map<string, number>();
+  for (const c of contradictions) conflictsOn.set(`${c.recordType}:${c.recordId}`, (conflictsOn.get(`${c.recordType}:${c.recordId}`) ?? 0) + 1);
+  const STATE_RANK: Record<ReviewQuestion["state"], number> = { "needs attention": 0, "decision needed": 1, waiting: 2, "on track": 3, resolved: 4 };
+  const questions: ReviewQuestion[] = [];
+  for (const q of questionRows) {
+    const links = questionLinkRows.filter((l) => l.questionId === q.id);
+    const taskIds = new Set<string>();
+    for (const l of links) {
+      if (l.entityType === "task" && taskById.has(l.entityId)) taskIds.add(l.entityId);
+      if (l.entityType === "project") for (const id of taskIdsByProject.get(l.entityId) ?? []) taskIds.add(id);
+    }
+    const work = [...taskIds].map((id) => taskById.get(id)!).filter((t) => t.daysSinceEvidence <= DISPOSITION_DAYS).sort(byScore);
+    const linkedDecisions = links.filter((l) => l.entityType === "decision").map((l) => decisionById.get(l.entityId)).filter((d): d is ReviewDecision => !!d);
+    const undecidedHere = linkedDecisions.filter((d) => d.status !== "action_in_progress");
+    const count = (status: string) => work.filter((t) => t.status === status).length;
+    const qCounts = { blocked: count("blocked"), needsAttention: count("needs_attention"), waiting: count("waiting"), active: count("active") };
+    const conflicts = [...taskIds].reduce((n, id) => n + (conflictsOn.get(`task:${id}`) ?? 0), 0) +
+      linkedDecisions.reduce((n, d) => n + (conflictsOn.get(`decision:${d.id}`) ?? 0), 0);
+    const resolved = q.status === "resolved";
+    const needsCloseOut = resolved && undecidedHere.length > 0;
+    if (resolved && !needsCloseOut) continue;
+    const state: ReviewQuestion["state"] = resolved
+      ? "resolved"
+      : qCounts.blocked + qCounts.needsAttention > 0 || conflicts > 0 || undecidedHere.some((d) => deadlinePassedIds.has(d.id))
+        ? "needs attention"
+        : undecidedHere.length > 0
+          ? "decision needed"
+          : qCounts.waiting > 0
+            ? "waiting"
+            : "on track";
+    if (!resolved) {
+      for (const t of work) t.questions.push(q.title);
+      for (const d of linkedDecisions) d.questions.push(q.title);
+    }
+    questions.push({
+      id: q.id,
+      title: q.title,
+      objective: objectiveTitleById.get(q.objectiveId) ?? "(unknown objective)",
+      hypothesis: q.hypothesis,
+      status: q.status,
+      resolution: q.resolution,
+      state,
+      openDecisions: undecidedHere.map((d) => ({ title: d.title, overdue: deadlinePassedIds.has(d.id) })),
+      decisionsInProgress: linkedDecisions.filter((d) => d.status === "action_in_progress").map((d) => d.title),
+      counts: qCounts,
+      conflicts,
+      staleNextActions: work.filter((t) => t.nextActionStale).length + undecidedHere.filter((d) => d.nextStepStale).length,
+      work: work.map((t) => ({ title: t.title, status: t.status, project: t.project })),
+      lastEvidenceAt: work.map((t) => t.lastEvidenceAt).sort().at(-1) ?? null,
+      needsCloseOut,
+    });
+  }
+  questions.sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || a.title.localeCompare(b.title));
+
   const counts = {
     openTasks: openTasks.length,
     blocked: openTasks.filter((t) => t.status === "blocked").length,
@@ -533,6 +630,15 @@ export async function buildExecutiveReviewData(
 
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const headline: string[] = [];
+  const openQuestions = questions.filter((q) => q.status === "open");
+  if (openQuestions.length > 0) {
+    const attention = openQuestions.filter((q) => q.state === "needs attention").length;
+    headline.push(`${plural(openQuestions.length, "strategic question is", "strategic questions are")} open${attention ? ` (${attention} need${attention === 1 ? "s" : ""} attention)` : ""}`);
+  }
+  const closeOuts = questions.filter((q) => q.needsCloseOut);
+  if (closeOuts.length > 0) {
+    headline.push(`${plural(closeOuts.length, "resolved question still has", "resolved questions still have")} open decisions to close or update`);
+  }
   if (decisionsNeeded.length > 0) headline.push(`${plural(decisionsNeeded.length, "decision needs", "decisions need")} a call`);
   if (deadlinePassed.length > 0) {
     headline.push(`${plural(deadlinePassed.length, "decision is", "decisions are")} past deadline with no recorded outcome — confirm what happened`);
@@ -597,6 +703,24 @@ export async function buildExecutiveReviewData(
     const what = count > 1 ? `${count} conflicts (${[...fields].join(", ")})` : `Conflicting information (${[...fields][0]})`;
     focus.push({ kind: "conflict", title, detail: `${what} — resolve before relying on it`, weight: 95 });
   }
+  for (const q of questions) {
+    if (q.state === "needs attention") {
+      const parts = [
+        q.counts.blocked && `${q.counts.blocked} blocked`,
+        q.counts.needsAttention && `${q.counts.needsAttention} need attention`,
+        q.conflicts && `${q.conflicts} conflict${q.conflicts === 1 ? "" : "s"}`,
+        q.openDecisions.some((d) => d.overdue) && "a decision past its deadline",
+      ].filter(Boolean);
+      focus.push({ kind: "question", title: q.title, detail: `Strategic question needs attention — ${parts.join(", ")}`, weight: 80 });
+    } else if (q.needsCloseOut) {
+      focus.push({
+        kind: "question",
+        title: q.title,
+        detail: `Resolved, but ${plural(q.openDecisions.length, "decision under it is", "decisions under it are")} still open — close or update ${q.openDecisions.length === 1 ? "it" : "them"}`,
+        weight: 60,
+      });
+    }
+  }
   for (const d of decisionsNeeded) {
     const dueSoon = !!d.dueDate && new Date(d.dueDate).getTime() <= soon;
     const parts = [dueSoon ? `due ${formatDate(d.dueDate)}` : null, d.waitingOn.length ? `waiting on ${d.waitingOn.join(", ")}` : `decider: ${d.decider}`];
@@ -617,6 +741,7 @@ export async function buildExecutiveReviewData(
     generatedAt: now.toISOString(),
     headline,
     focus: focus.slice(0, FOCUS_LIMIT),
+    questions,
     workstreams,
     contradictions,
     decisionsNeeded,
@@ -681,6 +806,7 @@ function decisionLines(d: ReviewDecision): string[] {
   if (d.coupledWith.length > 0) lines.push(`    Consider together with: ${d.coupledWith.join(", ")}`);
   if (d.informedBy.length > 0) lines.push(`    Informed by: ${d.informedBy.join(", ")}`);
   if (d.relatedTask) lines.push(`    Related task: ${d.relatedTask}`);
+  if (d.questions.length > 0) lines.push(`    Part of strategic question: ${d.questions.join("; ")}`);
   return lines;
 }
 
@@ -718,6 +844,29 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
         `    Newer${c.newerDate ? ` (${formatDate(c.newerDate)})` : ""}: ${clip(c.newerStatement, 300)}`,
         `    Proposed correction, awaiting approval: ${clip(c.correctedValue, 300)}`,
       );
+    }
+  }
+
+  if (data.questions.length > 0) {
+    lines.push("", "STRATEGIC QUESTIONS (objective → question → decisions and work)");
+    for (const q of data.questions) {
+      const c = q.counts;
+      const mix = [
+        q.openDecisions.length && `${q.openDecisions.length} open decision${q.openDecisions.length === 1 ? "" : "s"}`,
+        c.blocked && `${c.blocked} blocked`,
+        c.needsAttention && `${c.needsAttention} need attention`,
+        c.waiting && `${c.waiting} waiting`,
+        c.active && `${c.active} active`,
+        q.conflicts && `${q.conflicts} conflict${q.conflicts === 1 ? "" : "s"}`,
+      ].filter(Boolean);
+      lines.push(`- ${q.title} — ${q.state}${mix.length ? ` (${mix.join(", ")})` : ""} [${q.objective}]`);
+      if (q.hypothesis) lines.push(`    Working hypothesis: ${clip(q.hypothesis, 400)}`);
+      if (q.resolution) lines.push(`    Answer: ${clip(q.resolution, 400)}`);
+      if (q.needsCloseOut) lines.push("    Resolved, but these decisions are still open — close or update them:");
+      for (const d of q.openDecisions) lines.push(`    ${q.needsCloseOut ? "  " : ""}Decision: ${d.title}${d.overdue ? " (past deadline)" : ""}`);
+      for (const title of q.decisionsInProgress) lines.push(`    Decided, in progress: ${title}`);
+      for (const w of q.work.slice(0, 8)) lines.push(`    Work: [${statusLabel(w.status)}] ${w.title} (${w.project})`);
+      if (q.work.length > 8) lines.push(`    …and ${q.work.length - 8} more work items`);
     }
   }
 

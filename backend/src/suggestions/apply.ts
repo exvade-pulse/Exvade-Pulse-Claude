@@ -4,6 +4,7 @@ import { auditLog, initiatives, objectives, projects, sources, suggestions, task
 import { createDecision, DecisionError, supersedeDecision, updateDecision } from "../decisions/manage.js";
 import { createRelationship, RelationshipError } from "../relationships/manage.js";
 import { supersedeHierarchy } from "../entities/supersedeHierarchy.js";
+import { applyQuestionProposal, QuestionError, type QuestionProposal } from "../questions/manage.js";
 import { supersedeTask, SupersedeError } from "../tasks/supersede.js";
 
 export class SuggestionApplyError extends Error {}
@@ -35,7 +36,7 @@ const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner"
 // what stops the crash, but rejecting it before it's ever stored as a
 // suggestion is better still, since a suggestion missing required fields can
 // never actually be approved no matter how many times it's retried.
-export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decision" | "relationship">, string[]> = {
+export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decision" | "relationship" | "question">, string[]> = {
   objective: ["title"],
   initiative: ["objectiveId", "title"],
   project: ["initiativeId", "title"],
@@ -52,7 +53,7 @@ export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decis
 // its own branch in approveSuggestion instead. ALLOWED_FIELDS/
 // pickAllowedFields still cover both, since interpret.ts's sanitization step
 // whitelists every targetType the model may propose.
-export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision" | "relationship";
+export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision" | "relationship" | "question";
 
 // Whitelists what a proposed_diff may set on each target type, so an AI-authored
 // (or hand-edited) diff can never smuggle in organization_id or other fields the
@@ -77,6 +78,7 @@ export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
     "relatedTaskId",
   ],
   relationship: ["fromType", "fromId", "toType", "toId", "relationType", "note"],
+  question: ["objectiveId", "title", "hypothesis", "decisionIds", "taskIds", "projectIds", "convertDecisionId", "newDecisions"],
 };
 
 // Fields a "context" (Info Share) suggestion may touch on the four hierarchy
@@ -228,6 +230,39 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         throw err;
       }
       resultTargetId = old.id;
+    } else if (suggestion.changeType === "question") {
+      // A proposed strategic question: create it, any smaller decisions it
+      // breaks a broad one into, and its links, in this one transaction.
+      const diff = fields as Partial<QuestionProposal>;
+      if (typeof diff.objectiveId !== "string" || typeof diff.title !== "string" || !diff.title.trim()) {
+        throw new SuggestionApplyError("Question suggestion is missing its objective or title");
+      }
+      const ids = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+      try {
+        const { question } = await applyQuestionProposal(tx, {
+          organizationId: params.organizationId,
+          actorId: params.reviewerId,
+          sourceId: suggestion.sourceId,
+          proposal: {
+            objectiveId: diff.objectiveId,
+            title: diff.title,
+            hypothesis: typeof diff.hypothesis === "string" ? diff.hypothesis : null,
+            decisionIds: ids(diff.decisionIds),
+            taskIds: ids(diff.taskIds),
+            projectIds: ids(diff.projectIds),
+            convertDecisionId: typeof diff.convertDecisionId === "string" ? diff.convertDecisionId : null,
+            newDecisions: Array.isArray(diff.newDecisions)
+              ? diff.newDecisions
+                  .filter((d): d is { title: string; decider: string | null } => !!d && typeof d.title === "string" && !!d.title.trim())
+                  .map((d) => ({ title: d.title.trim(), decider: typeof d.decider === "string" ? d.decider : null }))
+              : [],
+          },
+        });
+        resultTargetId = question.id;
+      } catch (err) {
+        if (err instanceof QuestionError || err instanceof DecisionError) throw new SuggestionApplyError(err.message);
+        throw err;
+      }
     } else if (targetType === "relationship") {
       // Always a create (targetId is never set for a relationship draft --
       // see interpret.ts/relationshipDetection.ts, there's no single existing
@@ -334,6 +369,8 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         });
         resultTargetId = decision.id;
       }
+    } else if (targetType === "question") {
+      throw new SuggestionApplyError("A question suggestion must propose a new question");
     } else {
       const table = TABLE_BY_TARGET_TYPE[targetType];
 

@@ -162,6 +162,13 @@
       "when": 1790655295231,
       "tag": "0022_big_mother_askani",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790656447348,
+      "tag": "0023_nappy_squirrel_girl",
+      "breakpoints": true
     }
   ]
 }

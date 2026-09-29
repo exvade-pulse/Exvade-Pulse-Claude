@@ -26,7 +26,7 @@ export async function describeSuggestions(
     if (row.targetType === "relationship") {
       if (typeof diff.fromId === "string") refs.push({ type: diff.fromType as EntityNodeType, id: diff.fromId });
       if (typeof diff.toId === "string") refs.push({ type: diff.toType as EntityNodeType, id: diff.toId });
-    } else if (row.targetId) {
+    } else if (row.targetId && row.targetType !== "question") {
       refs.push({ type: row.targetType as EntityNodeType, id: row.targetId });
       if (row.changeType === "merge" && typeof diff.supersededById === "string") {
         refs.push({ type: row.targetType as EntityNodeType, id: diff.supersededById });
@@ -40,7 +40,9 @@ export async function describeSuggestions(
   for (const row of rows) {
     const diff = row.proposedDiff as Record<string, unknown>;
     const about =
-      row.targetType === "relationship"
+      row.targetType === "question"
+        ? `Strategic question: ${String(diff.title ?? "(untitled)")}`
+        : row.targetType === "relationship"
         ? `${nameOf(diff.fromType, diff.fromId)} ${String(diff.relationType)} ${nameOf(diff.toType, diff.toId)}`
         : row.changeType === "merge" && row.targetId
           ? `Merge duplicate ${row.targetType} "${nameOf(row.targetType, row.targetId)}" into "${nameOf(row.targetType, diff.supersededById)}"`

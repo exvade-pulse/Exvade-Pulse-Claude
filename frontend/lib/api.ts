@@ -39,7 +39,7 @@ export interface ContradictionDetail {
 
 export interface Suggestion {
   id: string;
-  targetType: "objective" | "initiative" | "project" | "task" | "decision" | "relationship";
+  targetType: "objective" | "initiative" | "project" | "task" | "decision" | "relationship" | "question";
   targetId: string | null;
   changeType: string;
   proposedDiff: Record<string, unknown>;
@@ -88,6 +88,9 @@ export interface Suggestion {
   // A free wording-similarity hint on pending "create new task/decision"
   // suggestions that read like an existing record or an earlier pending one.
   likelyDuplicateOf: { kind: "existing" | "pending"; id: string; title: string; similarity: number } | null;
+  // Set only for a changeType "question" suggestion: names of everything
+  // the proposed strategic question would link or convert.
+  questionDetails: { objective: string; decisions: string[]; tasks: string[]; projects: string[]; convertDecision: string | null } | null;
   // Null in the overwhelming common case -- see ConflictEntry,
   // ContradictionDetail and CleanupDetail.
   conflicts: Array<ConflictEntry | ContradictionDetail | CleanupDetail> | null;
@@ -831,7 +834,87 @@ export interface ReviewTask {
   nextActionStale: boolean;
   attentionScore: number;
   attentionReasons: string[];
+  questions: string[];
 }
+
+export interface ReviewQuestion {
+  id: string;
+  title: string;
+  objective: string;
+  hypothesis: string | null;
+  status: "open" | "resolved";
+  resolution: string | null;
+  state: "needs attention" | "decision needed" | "waiting" | "on track" | "resolved";
+  openDecisions: Array<{ title: string; overdue: boolean }>;
+  decisionsInProgress: string[];
+  counts: { blocked: number; needsAttention: number; waiting: number; active: number };
+  conflicts: number;
+  staleNextActions: number;
+  work: Array<{ title: string; status: string; project: string }>;
+  lastEvidenceAt: string | null;
+  needsCloseOut: boolean;
+}
+
+export type QuestionLinkType = "decision" | "task" | "project";
+
+export interface StrategicQuestion {
+  id: string;
+  objectiveId: string;
+  objective: string;
+  title: string;
+  hypothesis: string | null;
+  status: "open" | "resolved";
+  resolution: string | null;
+  resolvedAt: string | null;
+  owner: string | null;
+  convertedFromDecisionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  links: Array<{ type: QuestionLinkType; id: string; title: string; status: string }>;
+}
+
+export interface QuestionsResponse {
+  questions: StrategicQuestion[];
+  linkable: {
+    decisions: Array<{ id: string; title: string; status: string }>;
+    tasks: Array<{ id: string; title: string; status: string; project: string }>;
+    projects: Array<{ id: string; title: string; status: string }>;
+    objectives: Array<{ id: string; title: string }>;
+  };
+}
+
+async function questionRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method,
+    credentials: "include",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(err?.error ?? `Request failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export const fetchQuestions = () => questionRequest<QuestionsResponse>("/api/questions", "GET");
+export const createQuestion = (body: { objectiveId: string; title: string; hypothesis?: string | null }) =>
+  questionRequest<{ question: StrategicQuestion }>("/api/questions", "POST", body);
+export const updateQuestion = (id: string, body: { title?: string; hypothesis?: string | null; objectiveId?: string }) =>
+  questionRequest<{ question: StrategicQuestion }>(`/api/questions/${id}`, "PATCH", body);
+export const resolveQuestion = (id: string, resolution: string) =>
+  questionRequest<{ question: StrategicQuestion; openDecisions: Array<{ id: string; title: string; status: string }> }>(
+    `/api/questions/${id}/resolve`,
+    "POST",
+    { resolution },
+  );
+export const reopenQuestion = (id: string) => questionRequest<{ question: StrategicQuestion }>(`/api/questions/${id}/reopen`, "POST");
+export const linkToQuestion = (id: string, entityType: QuestionLinkType, entityId: string) =>
+  questionRequest<{ ok: true }>(`/api/questions/${id}/links`, "POST", { entityType, entityId });
+export const unlinkFromQuestion = (id: string, entityType: QuestionLinkType, entityId: string) =>
+  questionRequest<{ ok: true }>(`/api/questions/${id}/links/${entityType}/${entityId}`, "DELETE");
+export const suggestQuestions = () =>
+  questionRequest<{ objectivesChecked: number; questionsProposed: number; conversionsProposed: number }>("/api/questions/suggest", "POST");
 
 export interface ReviewWorkstream {
   project: string;
@@ -845,7 +928,7 @@ export interface ReviewWorkstream {
 }
 
 export interface ReviewFocusItem {
-  kind: "deadline" | "conflict" | "decision" | "blocker" | "stale_next";
+  kind: "deadline" | "conflict" | "decision" | "blocker" | "stale_next" | "question";
   title: string;
   detail: string;
   weight: number;
@@ -868,6 +951,7 @@ export interface ReviewDecision {
   coupledWith: string[];
   nextStepAgeDays: number | null;
   nextStepStale: boolean;
+  questions: string[];
 }
 
 export interface ReviewChange {
@@ -895,6 +979,7 @@ export interface ExecutiveReviewData {
   sinceLastReview: { lastReviewedAt: string; changes: ReviewChange[] } | null;
   headline: string[];
   focus: ReviewFocusItem[];
+  questions: ReviewQuestion[];
   workstreams: ReviewWorkstream[];
   contradictions: ReviewContradiction[];
   decisionsNeeded: ReviewDecision[];

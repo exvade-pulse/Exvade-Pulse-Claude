@@ -32,6 +32,7 @@ const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   task: "Task",
   decision: "Decision",
   relationship: "Relationship",
+  question: "Strategic question",
 };
 
 // interpret.ts's system prompt frames confidence as "how sure the model is that
@@ -235,6 +236,7 @@ function cardTitle(s: Suggestion): string {
   if (s.changeType === "merge") return `Possible duplicate: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
   if (s.changeType === "contradiction") return `Conflict detected: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
   if (s.changeType === "cleanup") return `Cleanup: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
+  if (s.changeType === "question") return `${s.questionDetails?.convertDecision ? "Convert to strategic question" : "New strategic question"}: ${String(s.proposedDiff.title ?? "")}`;
   if (s.changeType === "replace") return `Replace: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
   if (s.changeType === "deadline_passed") return `Deadline passed: ${String(s.currentState?.title ?? "decision")}`;
   return s.targetId
@@ -490,6 +492,42 @@ export default function ReviewPage() {
             relationType={s.proposedDiff.relationType as RelationType | undefined}
             note={s.proposedDiff.note as string | undefined}
           />
+        ) : s.changeType === "question" && s.questionDetails ? (
+          <div className="merge-explainer">
+            <p className="rc-meta">Under objective: {s.questionDetails.objective}</p>
+            {typeof s.proposedDiff.hypothesis === "string" && s.proposedDiff.hypothesis && (
+              <p className="card-diff">Working hypothesis: {s.proposedDiff.hypothesis}</p>
+            )}
+            {s.questionDetails.convertDecision && (
+              <p className="card-diff">
+                Replaces the broad decision &ldquo;{s.questionDetails.convertDecision}&rdquo;
+                {Array.isArray(s.proposedDiff.newDecisions) && s.proposedDiff.newDecisions.length > 0 && (
+                  <>
+                    {" "}
+                    with these specific decisions:{" "}
+                    {(s.proposedDiff.newDecisions as Array<{ title: string }>).map((d) => `“${d.title}”`).join(", ")}
+                  </>
+                )}
+                .
+              </p>
+            )}
+            {[
+              ["Decisions", s.questionDetails.decisions],
+              ["Work", s.questionDetails.tasks],
+              ["Projects", s.questionDetails.projects],
+            ].map(([label, items]) =>
+              (items as string[]).length > 0 ? (
+                <p key={label as string} className="rc-line">
+                  <span className="rc-label">{label as string}</span> {(items as string[]).join(" · ")}
+                </p>
+              ) : null,
+            )}
+            <p className="rc-meta">
+              Approving creates the question and links these records
+              {s.questionDetails.convertDecision ? "; the broad decision is kept, linked and marked as converted" : ""}. You can edit it
+              afterwards on the Questions page.
+            </p>
+          </div>
         ) : s.changeType === "replace" ? (
           <div className="merge-explainer">
             <p className="card-diff">
@@ -588,7 +626,7 @@ export default function ReviewPage() {
                   {s.changeType === "deadline_passed" ? "Dismiss" : "Reject"}
                 </button>
                 {/* A merge is a yes/no question; its only field is an internal id. */}
-                {s.changeType !== "merge" && s.changeType !== "replace" && (
+                {s.changeType !== "merge" && s.changeType !== "replace" && s.changeType !== "question" && (
                   <button
                     className="decision-btn edit"
                     disabled={pendingActionId === s.id}

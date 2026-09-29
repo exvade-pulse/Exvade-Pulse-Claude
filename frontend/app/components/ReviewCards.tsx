@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReviewContradiction, ReviewDecision, ReviewTask, ReviewWorkstream } from "../../lib/api";
+import type { ReviewContradiction, ReviewDecision, ReviewQuestion, ReviewTask, ReviewWorkstream } from "../../lib/api";
 import { chipClass, STATUS_LABEL } from "./TaskStatusChips";
 
 function formatDate(iso: string): string {
@@ -54,7 +54,10 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
       {decision.coupledWith.length > 0 && (
         <p className="rc-meta">Consider together with: {decision.coupledWith.join(" · ")}</p>
       )}
-      <p className="rc-meta">Decider: {decision.decider}</p>
+      <p className="rc-meta">
+        Decider: {decision.decider}
+        {decision.questions.length > 0 && <> · Part of: {decision.questions.join(" · ")}</>}
+      </p>
 
       {hasDetails && (
         <details className="rc-details">
@@ -112,6 +115,92 @@ export function ContradictionCard({ contradiction: c }: { contradiction: ReviewC
 // A workstream (project) as one line: its state and task mix up front, the
 // individual tasks behind an expander -- the executive view shows the
 // workstream, the operating detail stays one click away.
+const QUESTION_CHIP: Record<ReviewQuestion["state"], string> = {
+  "needs attention": "chip chip-attention",
+  "decision needed": "chip chip-attention",
+  waiting: "chip",
+  "on track": "chip chip-done",
+  resolved: "chip chip-done",
+};
+
+// A strategic question rolled up to one line ("Can we sample reliably
+// enough? — needs attention"), with its hypothesis, the calls still to
+// make, and the work under it behind an expander.
+export function QuestionCard({ question: q }: { question: ReviewQuestion }) {
+  const c = q.counts;
+  const mix = [
+    q.openDecisions.length > 0 && `${q.openDecisions.length} open decision${q.openDecisions.length === 1 ? "" : "s"}`,
+    c.blocked > 0 && `${c.blocked} blocked`,
+    c.needsAttention > 0 && `${c.needsAttention} need attention`,
+    c.waiting > 0 && `${c.waiting} waiting`,
+    c.active > 0 && `${c.active} active`,
+    q.conflicts > 0 && `${q.conflicts} conflict${q.conflicts === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  return (
+    <article className={`card rc-card${q.state === "needs attention" ? " rc-card-attention" : ""}`}>
+      <div className="rc-top">
+        <p className="card-title rc-title">{q.title}</p>
+        <span className={QUESTION_CHIP[q.state]}>{q.state}</span>
+      </div>
+      <p className="rc-meta">
+        {q.objective}
+        {mix.length > 0 && <> · {mix.join(", ")}</>}
+        {q.staleNextActions > 0 && (
+          <span className="stale-note">
+            {" "}
+            · {q.staleNextActions} next action{q.staleNextActions === 1 ? "" : "s"} may be stale
+          </span>
+        )}
+      </p>
+      {q.hypothesis && (
+        <p className="rc-line">
+          <span className="rc-label">Hypothesis</span> {q.hypothesis}
+        </p>
+      )}
+      {q.resolution && (
+        <p className="rc-line">
+          <span className="rc-label">Answer</span> {q.resolution}
+        </p>
+      )}
+      {q.needsCloseOut && (
+        <p className="rc-line stale-note">Resolved, but these decisions are still open. Close or update them on the Decisions page.</p>
+      )}
+      {q.openDecisions.length > 0 && (
+        <ul className="rc-list">
+          {q.openDecisions.map((d) => (
+            <li key={d.title}>
+              Decision: {d.title}
+              {d.overdue && <span className="stale-note"> (past deadline)</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(q.work.length > 0 || q.decisionsInProgress.length > 0) && (
+        <details className="rc-details">
+          <summary>
+            {q.work.length} work item{q.work.length === 1 ? "" : "s"}
+            {q.decisionsInProgress.length > 0 && ` · ${q.decisionsInProgress.length} decided, in progress`}
+          </summary>
+          <ul className="rc-list">
+            {q.decisionsInProgress.map((title) => (
+              <li key={title}>Decided, in progress: {title}</li>
+            ))}
+            {q.work.map((w) => (
+              <li key={`${w.project}:${w.title}`}>
+                <span className={chipClass(w.status as ReviewTask["status"])}>{STATUS_LABEL[w.status as ReviewTask["status"]] ?? w.status}</span>{" "}
+                {w.title} <span className="muted">({w.project})</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <p className="rc-meta">
+        <Link href="/questions">Open in Questions</Link>
+      </p>
+    </article>
+  );
+}
+
 export function WorkstreamCard({ workstream: w }: { workstream: ReviewWorkstream }) {
   const c = w.counts;
   const mix = [

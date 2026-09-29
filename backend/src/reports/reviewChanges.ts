@@ -16,6 +16,8 @@ export interface ReviewSnapshotSummary {
   tasks: Array<{ id: string; title: string; status: string; section: TaskSection; score: number }>;
   // Absent on snapshots saved before contradiction tracking existed.
   contradictions?: Array<{ id: string; title: string }>;
+  // Absent on snapshots saved before strategic questions existed.
+  questions?: Array<{ id: string; title: string; state: string }>;
 }
 
 export type ReviewChangeKind =
@@ -32,7 +34,11 @@ export type ReviewChangeKind =
   | "WORK_CLOSED"
   | "PRIORITY_DECREASED"
   | "NOW_STALE"
-  | "CONFLICT_RESOLVED";
+  | "CONFLICT_RESOLVED"
+  | "NEW_QUESTION"
+  | "QUESTION_NEEDS_ATTENTION"
+  | "QUESTION_RESOLVED"
+  | "QUESTION_STATE_CHANGED";
 
 export interface ReviewChange {
   kind: ReviewChangeKind;
@@ -61,6 +67,10 @@ const WEIGHT: Record<ReviewChangeKind, number> = {
   PRIORITY_DECREASED: 35,
   NOW_STALE: 30,
   CONFLICT_RESOLVED: 55,
+  QUESTION_NEEDS_ATTENTION: 92,
+  NEW_QUESTION: 75,
+  QUESTION_RESOLVED: 72,
+  QUESTION_STATE_CHANGED: 42,
 };
 
 const SCORE_SHIFT = 15;
@@ -78,6 +88,7 @@ export function summarizeReview(data: ExecutiveReviewData): ReviewSnapshotSummar
       ...data.needsDisposition.map((t) => ({ id: t.id, title: t.title, status: t.status, section: "disposition" as const, score: t.attentionScore })),
     ],
     contradictions: data.contradictions.map((c) => ({ id: c.suggestionId, title: `${c.recordTitle} (${c.field})` })),
+    questions: data.questions.map((q) => ({ id: q.id, title: q.title, state: q.state })),
   };
 }
 
@@ -157,6 +168,30 @@ export function diffReviews(previous: ReviewSnapshotSummary, current: ReviewSnap
   }
   for (const c of previous.contradictions ?? []) {
     if (!currConflicts.has(c.id)) changes.push({ kind: "CONFLICT_RESOLVED", title: c.title, detail: "Conflict resolved" });
+  }
+
+  // An old snapshot without questions says nothing about them, rather than
+  // reporting every question as new.
+  if (previous.questions) {
+    const prevQuestions = new Map(previous.questions.map((q) => [q.id, q]));
+    const currQuestions = new Map((current.questions ?? []).map((q) => [q.id, q]));
+    for (const q of current.questions ?? []) {
+      const before = prevQuestions.get(q.id);
+      if (!before) {
+        if (q.state !== "resolved") changes.push({ kind: "NEW_QUESTION", title: q.title, detail: `New strategic question (${q.state})` });
+      } else if (q.state === "resolved" && before.state !== "resolved") {
+        changes.push({ kind: "QUESTION_RESOLVED", title: q.title, detail: "Resolved; some decisions under it are still open" });
+      } else if (q.state === "needs attention" && before.state !== "needs attention") {
+        changes.push({ kind: "QUESTION_NEEDS_ATTENTION", title: q.title, detail: `Now needs attention (was ${before.state})` });
+      } else if (q.state !== before.state) {
+        changes.push({ kind: "QUESTION_STATE_CHANGED", title: q.title, detail: `${before.state} → ${q.state}` });
+      }
+    }
+    for (const q of previous.questions) {
+      if (!currQuestions.has(q.id) && q.state !== "resolved") {
+        changes.push({ kind: "QUESTION_RESOLVED", title: q.title, detail: "Resolved" });
+      }
+    }
   }
 
   return changes.sort((a, b) => WEIGHT[b.kind] - WEIGHT[a.kind] || a.title.localeCompare(b.title));

@@ -55,6 +55,7 @@ export const targetTypeEnum = pgEnum("target_type", [
   "task",
   "decision",
   "relationship",
+  "question",
 ]);
 
 export const changeTypeEnum = pgEnum("change_type", [
@@ -85,11 +86,15 @@ export const changeTypeEnum = pgEnum("change_type", [
   // Cleanup found the work has changed: approving creates proposedDiff.newTask
   // in the same project and supersedes the old task with it.
   "replace",
+  // A proposed strategic question (targetType "question", targetId null):
+  // proposedDiff holds the question, the records to link, and optionally a
+  // broad decision to convert into it plus smaller decisions to create.
+  "question",
 ]);
 
 // Change types that are their own question for the reviewer, never folded
 // into (or absorbing) an ordinary pending update on the same record.
-export const STANDALONE_CHANGE_TYPES = ["merge", "contradiction", "deadline_passed", "cleanup", "replace"] as const;
+export const STANDALONE_CHANGE_TYPES = ["merge", "contradiction", "deadline_passed", "cleanup", "replace", "question"] as const;
 
 export const suggestionStatusEnum = pgEnum("suggestion_status", [
   "pending",
@@ -450,6 +455,59 @@ export const decisions = pgTable("decisions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const questionStatusEnum = pgEnum("question_status", ["open", "resolved"]);
+
+// A strategic question under an objective ("Can we sample reliably
+// enough?"): the level between an objective and the individual decisions
+// and work that answer it. Holds the current working hypothesis and, once
+// resolved, the answer. Decisions, tasks and projects are linked to it via
+// strategicQuestionLinks, never moved -- a record can inform more than one
+// question.
+export const strategicQuestions = pgTable("strategic_questions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  objectiveId: uuid("objective_id")
+    .notNull()
+    .references(() => objectives.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  hypothesis: text("hypothesis"),
+  status: questionStatusEnum("status").notNull().default("open"),
+  // The answer, recorded when resolved.
+  resolution: text("resolution"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  owner: text("owner"),
+  // The broad decision this question was converted from, if any.
+  convertedFromDecisionId: uuid("converted_from_decision_id").references(() => decisions.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const questionLinkTypeEnum = pgEnum("question_link_type", ["decision", "task", "project"]);
+export type QuestionLinkType = (typeof questionLinkTypeEnum.enumValues)[number];
+
+// A decision, task or project that is part of answering a question. Plain
+// uuid entityId (validated in application code), same pattern as
+// entityRelationships.
+export const strategicQuestionLinks = pgTable(
+  "strategic_question_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => strategicQuestions.id, { onDelete: "cascade" }),
+    entityType: questionLinkTypeEnum("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: uuid("created_by").references(() => users.id),
+  },
+  (table) => [uniqueIndex("strategic_question_links_unique").on(table.questionId, table.entityType, table.entityId)],
+);
 
 // What one person's executive review looked like when they last marked it
 // reviewed -- the baseline "Since last review" compares against. Stores a

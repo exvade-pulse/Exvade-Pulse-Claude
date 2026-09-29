@@ -83,6 +83,9 @@ export async function resolveNames(
         return;
       }
       const table = TITLE_TABLE[type];
+      // A type with no title table (e.g. a strategic question) resolves to
+      // nothing here; callers fall back to their own label.
+      if (!table) return;
       const rows = await db
         .select({ id: table.id, title: table.title })
         .from(table)

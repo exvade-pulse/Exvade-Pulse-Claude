@@ -1492,3 +1492,44 @@ summary:focus-visible {
     justify-content: flex-start;
   }
 }
+
+/* Strategic questions */
+.rc-list {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.rc-list li + li {
+  margin-top: var(--space-1);
+}
+.question-resolved {
+  opacity: 0.8;
+}
+.question-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.question-link-row select {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.link-btn:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+.error-inline {
+  color: var(--attention);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 0;
+}

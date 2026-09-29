@@ -14,7 +14,7 @@ import {
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
-import { ContradictionCard, DecisionCard, TaskRow, WorkstreamCard } from "../components/ReviewCards";
+import { ContradictionCard, DecisionCard, QuestionCard, TaskRow, WorkstreamCard } from "../components/ReviewCards";
 import { TaskDisposition } from "../components/TaskDisposition";
 
 // Long lists show their top items; the rest sit behind "Show all" so the
@@ -214,6 +214,15 @@ export default function ExecutivePage() {
             </button>
             {checkResult && <span className="muted">{checkResult}</span>}
           </div>
+
+          <h2 className="section-title">Strategic questions</h2>
+          {data.questions.length === 0 ? (
+            <p className="empty-inline">
+              No strategic questions yet. <Link href="/questions">Set them up in Questions</Link> (the AI can suggest a first set).
+            </p>
+          ) : (
+            data.questions.map((q) => <QuestionCard key={q.id} question={q} />)
+          )}
 
           {data.deadlinePassed.length > 0 && (
             <>

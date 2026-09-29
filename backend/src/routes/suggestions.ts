@@ -309,6 +309,72 @@ async function loadMergeTargets(
   return result;
 }
 
+export interface QuestionDetails {
+  objective: string;
+  decisions: string[];
+  tasks: string[];
+  projects: string[];
+  convertDecision: string | null;
+}
+
+// Names for everything a proposed strategic question would link, so the
+// card reads "Links: Needle gauge testing, ..." instead of ids. Also
+// reports which proposals involve a restricted task/decision, so a member
+// never sees one (same rule as a suggestion targeting a restricted row).
+async function loadQuestionDetails(
+  organizationId: string,
+  rows: Array<{ id: string; changeType: string; proposedDiff: unknown }>,
+  role: UserRole,
+): Promise<{ details: Map<string, QuestionDetails>; hidden: Set<string> }> {
+  const questions = rows.filter((row) => row.changeType === "question");
+  const details = new Map<string, QuestionDetails>();
+  const hidden = new Set<string>();
+  if (questions.length === 0) return { details, hidden };
+  const idList = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+  const parsed = questions.map((row) => {
+    const diff = row.proposedDiff as Record<string, unknown>;
+    const convert = typeof diff.convertDecisionId === "string" ? diff.convertDecisionId : null;
+    return {
+      row,
+      objectiveId: typeof diff.objectiveId === "string" ? diff.objectiveId : null,
+      decisionIds: [...idList(diff.decisionIds), ...(convert ? [convert] : [])],
+      convert,
+      taskIds: idList(diff.taskIds),
+      projectIds: idList(diff.projectIds),
+    };
+  });
+  const refs: Array<{ type: EntityNodeType; id: string }> = parsed.flatMap((p) => [
+    ...(p.objectiveId ? [{ type: "objective" as const, id: p.objectiveId }] : []),
+    ...p.decisionIds.map((id) => ({ type: "decision" as const, id })),
+    ...p.taskIds.map((id) => ({ type: "task" as const, id })),
+    ...p.projectIds.map((id) => ({ type: "project" as const, id })),
+  ]);
+  const allDecisionIds = [...new Set(parsed.flatMap((p) => p.decisionIds))];
+  const allTaskIds = [...new Set(parsed.flatMap((p) => p.taskIds))];
+  const [names, decisionVis, taskVis] = await Promise.all([
+    resolveNames(db, organizationId, refs),
+    allDecisionIds.length && role !== "admin"
+      ? db.select({ id: decisions.id, visibility: decisions.visibility }).from(decisions).where(and(eq(decisions.organizationId, organizationId), inArray(decisions.id, allDecisionIds)))
+      : [],
+    allTaskIds.length && role !== "admin"
+      ? db.select({ id: tasks.id, visibility: tasks.visibility }).from(tasks).where(and(eq(tasks.organizationId, organizationId), inArray(tasks.id, allTaskIds)))
+      : [],
+  ]);
+  const restricted = new Set([...decisionVis, ...taskVis].filter((r) => !canViewVisibility(role, r.visibility)).map((r) => r.id));
+  const nameOf = (type: string, id: string) => names.get(`${type}:${id}`) ?? "(no longer exists)";
+  for (const p of parsed) {
+    if ([...p.decisionIds, ...p.taskIds].some((id) => restricted.has(id))) hidden.add(p.row.id);
+    details.set(p.row.id, {
+      objective: p.objectiveId ? nameOf("objective", p.objectiveId) : "(unknown objective)",
+      decisions: p.decisionIds.filter((id) => id !== p.convert).map((id) => nameOf("decision", id)),
+      tasks: p.taskIds.map((id) => nameOf("task", id)),
+      projects: p.projectIds.map((id) => nameOf("project", id)),
+      convertDecision: p.convert ? nameOf("decision", p.convert) : null,
+    });
+  }
+  return { details, hidden };
+}
+
 export interface DuplicateHint {
   kind: "existing" | "pending";
   id: string;
@@ -473,20 +539,22 @@ export async function suggestionRoutes(app: FastifyInstance) {
     const currentStates = await loadCurrentStates(organizationId, rows);
     // Duplicate hints only make sense while something is still awaiting a call.
     const awaitingRows = rows.filter((row) => row.status === "pending" || row.status === "edited");
-    const [breadcrumbs, movingToProjects, relationshipEndpoints, mergeTargets, duplicateHints] = await Promise.all([
+    const role = request.user!.role;
+    const [breadcrumbs, movingToProjects, relationshipEndpoints, mergeTargets, duplicateHints, questionInfo] = await Promise.all([
       loadBreadcrumbs(organizationId, rows, currentStates),
       loadMovingToProjects(organizationId, rows, currentStates),
       loadRelationshipEndpoints(organizationId, rows),
       loadMergeTargets(organizationId, rows),
       loadDuplicateHints(organizationId, awaitingRows),
+      loadQuestionDetails(organizationId, rows, role),
     ]);
-    const role = request.user!.role;
     const withCurrentState = rows
       // A suggestion targeting a task/decision the caller can't view (per
       // that row's own visibility, already fetched above) is hidden from the
       // queue entirely -- not just its currentState -- since reasoning/
       // proposedDiff can themselves describe the restricted content.
       .filter((row) => {
+        if (questionInfo.hidden.has(row.id)) return false;
         if (row.targetId === null || (row.targetType !== "task" && row.targetType !== "decision")) return true;
         const currentRow = currentStates.get(`${row.targetType}:${row.targetId}`);
         const visibility = currentRow?.visibility as Visibility | undefined;
@@ -506,6 +574,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
         relationshipEndpoints: relationshipEndpoints.get(row.id) ?? null,
         mergeInto: mergeTargets.get(row.id) ?? null,
         likelyDuplicateOf: duplicateHints.get(row.id) ?? null,
+        questionDetails: questionInfo.details.get(row.id) ?? null,
       }));
 
     reply.send({ suggestions: withCurrentState });

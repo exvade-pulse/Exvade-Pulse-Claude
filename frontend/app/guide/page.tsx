@@ -60,7 +60,8 @@ export default function GuidePage() {
         </ol>
         <Defs
           items={[
-            ["Decisions", "Open questions with a decider and (ideally) a due date. They sit alongside the tree and can be linked to the task they block."],
+            ["Strategic questions", "The few big open questions an objective depends on (e.g. Can we sample reliably enough?), with a working hypothesis. Decisions, tasks and projects are linked to them; the Executive review rolls each one up to a single status."],
+            ["Decisions", "Specific calls with a decider and (ideally) a due date. They sit alongside the tree, can be linked to the task they block, and can be part of a strategic question."],
             ["Relationships", "Links between any two items: depends on, blocks, informs, and so on. Shown on each item's page."],
             ["Entities", "Outside organizations and people (vendors, sites, investors) that items can be linked to."],
             ["Unsorted", "Where a new task lands when the AI can't tell which project it belongs to."],
@@ -102,7 +103,9 @@ export default function GuidePage() {
         <p className="guide-subhead">You run these (each uses a little AI credit):</p>
         <Defs
           items={[
-            ["Check for duplicates", <>Company Map. Proposes merging copies; approving keeps one, marks the other superseded, and copies its notes over. Nothing is deleted.</>],
+            ["Check for duplicates", <>Company Map. Proposes merging copies of tasks, decisions, projects, initiatives or objectives; approving keeps one, marks the other superseded, and moves or copies what was under it. Nothing is deleted.</>],
+            ["Suggest questions with AI", <>Questions. Proposes strategic questions and the records that belong to each, and can suggest splitting an over-broad decision into a question with smaller decisions.</>],
+            ["Clean up stale records", <>Executive. For each old record or outdated next action, proposes one fix: close it, mark it covered by newer work, replace it, give it a new next action, or confirm it            ["Check for duplicates", <>Company Map. Proposes merging copies; approving keeps one, marks the other superseded, and copies its notes over. Nothing is deleted.</>],rsquo;s still active.</>],
             ["Suggest relationships", <>Company Map. Proposes links between related tasks and decisions.</>],
             ["Suggest where these belong", <>Unsorted. Proposes a project for each unsorted task.</>],
             ["Check for contradictions", <>Executive. Flags newer information that contradicts what&rsquo;s recorded, with a proposed correction.</>],
@@ -122,7 +125,7 @@ export default function GuidePage() {
         <li>
           Open <Link href="/executive">Executive</Link>. Read <em>This week</em> and <em>Since last review</em>.
         </li>
-        <li>Resolve <em>Conflicts</em> and <em>Deadline passed</em> items, then work through <em>Decisions needed</em>.</li>
+        <li>Scan <em>Focus</em> and <em>Strategic questions</em>. Resolve <em>Conflicts</em> and <em>Deadline passed</em> items, then work through <em>Decisions needed</em>.</li>
         <li>
           Clear the <Link href="/review">Review</Link> queue. Start with <em>Ready to approve</em>; the high-confidence items can be
           bulk-approved.
@@ -170,6 +173,7 @@ export default function GuidePage() {
           items={[
             [<Link href="/">Dashboard</Link>, "Quick status: decisions needed, counts, what needs attention."],
             [<Link href="/executive">Executive</Link>, "The weekly review: what needs you, what changed, what's stale."],
+            [<Link href="/questions">Questions</Link>, "Strategic questions: add, link records, record the answer when resolved."],
             [<Link href="/company-map">Company Map</Link>, "The whole tree; duplicate and relationship checks."],
             [<Link href="/review">Review</Link>, "Approve, edit or reject every AI suggestion; add your own updates."],
             [<Link href="/decisions">Decisions</Link>, "Work open decisions: add info, assign, decide, close."],
