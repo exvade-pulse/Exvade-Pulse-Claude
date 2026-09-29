@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
 import type { DbOrTx } from "../db/client.js";
-import { auditLog, suggestions, tasks } from "../db/schema.js";
+import { auditLog, STANDALONE_CHANGE_TYPES, suggestions, tasks } from "../db/schema.js";
 import type { SuggestionDraft } from "../interpretation/fakeInterpret.js";
 
 export interface MergeOrInsertParams {
@@ -145,10 +145,11 @@ export async function mergeOrInsertSuggestion(
     sourceReceivedAt,
   );
 
-  // A merge proposal is its own kind of decision for the reviewer ("are
-  // these the same thing?"), so it never folds into -- or absorbs -- an
-  // ordinary pending update on the same record.
-  if (draft.targetId !== null && draft.changeType !== "merge") {
+  // A merge, contradiction or deadline question is its own decision for the
+  // reviewer, so it never folds into -- or absorbs -- an ordinary pending
+  // update on the same record.
+  const standalone = (STANDALONE_CHANGE_TYPES as readonly string[]).includes(draft.changeType);
+  if (draft.targetId !== null && !standalone) {
     const [existing] = await tx
       .select()
       .from(suggestions)
@@ -158,7 +159,7 @@ export async function mergeOrInsertSuggestion(
           eq(suggestions.targetType, draft.targetType),
           eq(suggestions.targetId, draft.targetId),
           inArray(suggestions.status, ["pending", "edited"]),
-          ne(suggestions.changeType, "merge"),
+          notInArray(suggestions.changeType, [...STANDALONE_CHANGE_TYPES]),
         ),
       )
       .orderBy(desc(suggestions.createdAt))

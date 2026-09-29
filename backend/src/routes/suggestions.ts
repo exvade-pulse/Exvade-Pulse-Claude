@@ -21,6 +21,7 @@ import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyErr
 import { canViewVisibility } from "../access/visibility.js";
 import { resolveNames } from "../relationships/manage.js";
 import { LIKELY_DUPLICATE_THRESHOLD, titleSimilarity, titleTokens } from "../suggestions/similarity.js";
+import { syncDeadlineItems } from "../reports/deadlineItems.js";
 
 // Every targetType a suggestion can carry, including "decision" -- unlike
 // apply.ts's own TABLE_BY_TARGET_TYPE (which deliberately excludes decision
@@ -425,6 +426,9 @@ export async function suggestionRoutes(app: FastifyInstance) {
 
   app.get<{ Querystring: { status?: string } }>("/api/suggestions", async (request, reply) => {
     const organizationId = request.user!.organizationId;
+    // Model-free and idempotent: keeps "deadline passed" questions current
+    // before the queue is read.
+    await syncDeadlineItems(db, organizationId);
     // No explicit status means "awaiting a review decision" -- an edited
     // suggestion hasn't been approved/rejected yet, so it belongs in that set too.
     const statusFilter = request.query.status

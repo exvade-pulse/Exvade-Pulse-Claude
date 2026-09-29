@@ -968,6 +968,11 @@ summary:focus-visible {
   margin: var(--space-1) 0;
 }
 
+.exec-check-row {
+  margin-top: 0;
+  margin-bottom: var(--space-2);
+}
+
 .exec-in-progress {
   margin-top: 0;
 }

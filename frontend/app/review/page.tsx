@@ -13,10 +13,13 @@ import {
   RELATION_LABEL,
   submitManualUpdate,
   TYPE_LABEL,
+  type ConflictEntry,
+  type ContradictionDetail,
   type RelationType,
   type SessionUser,
   type Suggestion,
 } from "../../lib/api";
+import Link from "next/link";
 import { formatDiff, formatDiffWithCurrentState, HIDDEN_DIFF_KEYS } from "../../lib/formatDiff";
 import { Nav } from "../components/Nav";
 import { SourceToggle } from "../components/SourceToggle";
@@ -144,16 +147,42 @@ function formatConflictDate(iso: string): string {
 // can still use Edit to manually re-add a stripped field if they judge the
 // older source is actually correct after reading both.
 function ConflictCallout({ conflicts }: { conflicts: Suggestion["conflicts"] }) {
-  if (!conflicts || conflicts.length === 0) return null;
+  const regressions = (conflicts ?? []).filter((c): c is ConflictEntry => c.kind === undefined);
+  if (regressions.length === 0) return null;
   return (
     <div className="conflict-callout">
       <p className="conflict-callout-title">Conflicting information -- not applied</p>
-      {conflicts.map((c) => (
+      {regressions.map((c) => (
         <p className="conflict-callout-row" key={c.field}>
           <strong>{humanizeField(c.field)}</strong>: this suggestion proposed &ldquo;{formatConflictValue(c.proposedValue)}
           &rdquo; (source dated {formatConflictDate(c.proposedAsOf)}), but &ldquo;{formatConflictValue(c.currentValue)}
           &rdquo; was confirmed more recently (as of {formatConflictDate(c.currentAsOf)}).
         </p>
+      ))}
+    </div>
+  );
+}
+
+// On a "contradiction" suggestion: what's recorded vs the newer information
+// that contradicts it. The proposed correction is the card's diff below;
+// Approve applies it, Edit adjusts it, Reject means it isn't a real conflict.
+function ContradictionCallout({ conflicts }: { conflicts: Suggestion["conflicts"] }) {
+  const details = (conflicts ?? []).filter((c): c is ContradictionDetail => c.kind === "contradiction");
+  if (details.length === 0) return null;
+  return (
+    <div className="conflict-callout">
+      <p className="conflict-callout-title">Conflict detected: resolve before relying on this</p>
+      {details.map((c) => (
+        <div key={c.field}>
+          <p className="conflict-callout-row">
+            <strong>Recorded {humanizeField(c.field)}</strong>
+            {c.olderDate ? ` (${formatConflictDate(c.olderDate)})` : ""}: &ldquo;{c.olderStatement}&rdquo;
+          </p>
+          <p className="conflict-callout-row">
+            <strong>Newer information</strong>
+            {c.newerDate ? ` (${formatConflictDate(c.newerDate)})` : ""}: &ldquo;{c.newerStatement}&rdquo;
+          </p>
+        </div>
       ))}
     </div>
   );
@@ -188,6 +217,8 @@ function reviewerLabel(s: Suggestion): string {
 function cardTitle(s: Suggestion): string {
   if (s.targetType === "relationship") return "New relationship";
   if (s.changeType === "merge") return `Possible duplicate: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
+  if (s.changeType === "contradiction") return `Conflict detected: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
+  if (s.changeType === "deadline_passed") return `Deadline passed: ${String(s.currentState?.title ?? "decision")}`;
   return s.targetId
     ? String(s.currentState?.title ?? `${TARGET_LABEL[s.targetType]} update`)
     : String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`);
@@ -457,6 +488,12 @@ export default function ReviewPage() {
         )}
 
         <ConflictCallout conflicts={s.conflicts} />
+        <ContradictionCallout conflicts={s.conflicts} />
+        {s.changeType === "deadline_passed" && !isHistory && (
+          <p className="rc-meta">
+            <Link href="/decisions">Open in Decisions</Link> to record what happened, or use Edit to set a new due date.
+          </p>
+        )}
 
         {s.likelyDuplicateOf && !isHistory && (
           <p className="duplicate-hint">
@@ -496,19 +533,22 @@ export default function ReviewPage() {
               </>
             ) : (
               <>
-                <button
-                  className="decision-btn approve"
-                  disabled={pendingActionId === s.id}
-                  onClick={() => handleDecision(s.id, "approve")}
-                >
-                  Approve
-                </button>
+                {/* A deadline question has nothing to approve until a new due date is edited in. */}
+                {(s.changeType !== "deadline_passed" || s.status === "edited") && (
+                  <button
+                    className="decision-btn approve"
+                    disabled={pendingActionId === s.id}
+                    onClick={() => handleDecision(s.id, "approve")}
+                  >
+                    {s.changeType === "deadline_passed" ? "Save new due date" : "Approve"}
+                  </button>
+                )}
                 <button
                   className="decision-btn reject"
                   disabled={pendingActionId === s.id}
                   onClick={() => handleDecision(s.id, "reject")}
                 >
-                  Reject
+                  {s.changeType === "deadline_passed" ? "Dismiss" : "Reject"}
                 </button>
                 {/* A merge is a yes/no question; its only field is an internal id. */}
                 {s.changeType !== "merge" && (

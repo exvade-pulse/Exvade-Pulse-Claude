@@ -14,9 +14,12 @@ type TaskSection = "risk" | "operating" | "disposition";
 export interface ReviewSnapshotSummary {
   decisions: Array<{ id: string; title: string; bucket: DecisionBucket }>;
   tasks: Array<{ id: string; title: string; status: string; section: TaskSection; score: number }>;
+  // Absent on snapshots saved before contradiction tracking existed.
+  contradictions?: Array<{ id: string; title: string }>;
 }
 
 export type ReviewChangeKind =
+  | "NEW_CONTRADICTION"
   | "BECAME_OVERDUE"
   | "NEW_DECISION"
   | "NEW_RISK"
@@ -28,7 +31,8 @@ export type ReviewChangeKind =
   | "STATUS_CHANGED"
   | "WORK_CLOSED"
   | "PRIORITY_DECREASED"
-  | "NOW_STALE";
+  | "NOW_STALE"
+  | "CONFLICT_RESOLVED";
 
 export interface ReviewChange {
   kind: ReviewChangeKind;
@@ -43,6 +47,7 @@ export interface SinceLastReview {
 
 // Most consequential first -- the page shows the top few.
 const WEIGHT: Record<ReviewChangeKind, number> = {
+  NEW_CONTRADICTION: 95,
   BECAME_OVERDUE: 100,
   NEW_DECISION: 90,
   NEW_RISK: 85,
@@ -55,6 +60,7 @@ const WEIGHT: Record<ReviewChangeKind, number> = {
   WORK_CLOSED: 38,
   PRIORITY_DECREASED: 35,
   NOW_STALE: 30,
+  CONFLICT_RESOLVED: 55,
 };
 
 const SCORE_SHIFT = 15;
@@ -71,6 +77,7 @@ export function summarizeReview(data: ExecutiveReviewData): ReviewSnapshotSummar
       ...data.operatingActions.map((t) => ({ id: t.id, title: t.title, status: t.status, section: "operating" as const, score: t.attentionScore })),
       ...data.needsDisposition.map((t) => ({ id: t.id, title: t.title, status: t.status, section: "disposition" as const, score: t.attentionScore })),
     ],
+    contradictions: data.contradictions.map((c) => ({ id: c.suggestionId, title: `${c.recordTitle} (${c.field})` })),
   };
 }
 
@@ -139,6 +146,17 @@ export function diffReviews(previous: ReviewSnapshotSummary, current: ReviewSnap
         ? { kind: "RISK_CLEARED", title: t.title, detail: "Finished or closed" }
         : { kind: "WORK_CLOSED", title: t.title, detail: "Finished or closed" },
     );
+  }
+
+  const prevConflicts = new Set((previous.contradictions ?? []).map((c) => c.id));
+  const currConflicts = new Set((current.contradictions ?? []).map((c) => c.id));
+  for (const c of current.contradictions ?? []) {
+    if (!prevConflicts.has(c.id)) {
+      changes.push({ kind: "NEW_CONTRADICTION", title: c.title, detail: "Newer information contradicts what's recorded" });
+    }
+  }
+  for (const c of previous.contradictions ?? []) {
+    if (!currConflicts.has(c.id)) changes.push({ kind: "CONFLICT_RESOLVED", title: c.title, detail: "Conflict resolved" });
   }
 
   return changes.sort((a, b) => WEIGHT[b.kind] - WEIGHT[a.kind] || a.title.localeCompare(b.title));

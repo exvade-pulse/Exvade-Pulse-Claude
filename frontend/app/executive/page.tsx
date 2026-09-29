@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   API_URL,
   fetchCurrentUser,
+  checkContradictions,
   fetchExecutiveReview,
   markExecutiveReviewReviewed,
   type ExecutiveReviewData,
@@ -12,7 +13,7 @@ import {
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
-import { DecisionCard, TaskRow } from "../components/ReviewCards";
+import { ContradictionCard, DecisionCard, TaskRow } from "../components/ReviewCards";
 import { TaskDisposition } from "../components/TaskDisposition";
 
 // Long lists show their top items; the rest sit behind "Show all" so the
@@ -32,6 +33,8 @@ export default function ExecutivePage() {
   const [showAllOperating, setShowAllOperating] = useState(false);
   const [marking, setMarking] = useState(false);
   const [markedAt, setMarkedAt] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -44,6 +47,23 @@ export default function ExecutivePage() {
         .catch((err) => setLoadError(err.message));
     }
   }, [user]);
+
+  async function handleCheckContradictions() {
+    setChecking(true);
+    setCheckResult(null);
+    try {
+      const { recordsChecked, contradictionsFound } = await checkContradictions();
+      setCheckResult(
+        `Checked ${recordsChecked} record${recordsChecked === 1 ? "" : "s"} -- found ${contradictionsFound} new conflict${contradictionsFound === 1 ? "" : "s"}.`,
+      );
+      const refreshed = await fetchExecutiveReview();
+      setData(refreshed.data);
+    } catch (err) {
+      setCheckResult(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setChecking(false);
+    }
+  }
 
   async function handleMarkReviewed() {
     setMarking(true);
@@ -148,6 +168,19 @@ export default function ExecutivePage() {
               )}
             </section>
           )}
+
+          <h2 className="section-title">Conflicts detected</h2>
+          {data.contradictions.length === 0 ? (
+            <p className="empty-inline">No known conflicts between newer and older information.</p>
+          ) : (
+            data.contradictions.map((c) => <ContradictionCard key={c.suggestionId} contradiction={c} />)
+          )}
+          <div className="card-actions exec-check-row">
+            <button className="decision-btn" disabled={checking} onClick={handleCheckContradictions}>
+              {checking ? "Checking…" : "Check for contradictions"}
+            </button>
+            {checkResult && <span className="muted">{checkResult}</span>}
+          </div>
 
           {data.deadlinePassed.length > 0 && (
             <>

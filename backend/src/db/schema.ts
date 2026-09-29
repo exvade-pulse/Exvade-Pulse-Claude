@@ -70,7 +70,15 @@ export const changeTypeEnum = pgEnum("change_type", [
   // proposedDiff is the proposed correction; the older/newer statements
   // themselves live in suggestions.conflicts (kind: "contradiction").
   "contradiction",
+  // Generated automatically (no model) for an undecided decision past its
+  // due date: "what actually happened?" Resolves itself once the decision
+  // is decided, closed or given a new due date.
+  "deadline_passed",
 ]);
+
+// Change types that are their own question for the reviewer, never folded
+// into (or absorbing) an ordinary pending update on the same record.
+export const STANDALONE_CHANGE_TYPES = ["merge", "contradiction", "deadline_passed"] as const;
 
 export const suggestionStatusEnum = pgEnum("suggestion_status", [
   "pending",

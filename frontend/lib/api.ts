@@ -16,12 +16,25 @@ export interface SessionUser {
 // this is purely informational so a reviewer can see both facts and judge
 // which is actually right.
 export interface ConflictEntry {
+  kind?: undefined;
   field: string;
   proposedValue: unknown;
   proposedSourceId: string;
   proposedAsOf: string;
   currentValue: unknown;
   currentAsOf: string;
+}
+
+// On a "contradiction" suggestion: the older statement still recorded as
+// current, and the newer information that contradicts it. The suggestion's
+// proposedDiff is the proposed correction.
+export interface ContradictionDetail {
+  kind: "contradiction";
+  field: string;
+  olderStatement: string;
+  olderDate: string | null;
+  newerStatement: string;
+  newerDate: string | null;
 }
 
 export interface Suggestion {
@@ -75,8 +88,9 @@ export interface Suggestion {
   // A free wording-similarity hint on pending "create new task/decision"
   // suggestions that read like an existing record or an earlier pending one.
   likelyDuplicateOf: { kind: "existing" | "pending"; id: string; title: string; similarity: number } | null;
-  // Null in the overwhelming common case -- see ConflictEntry.
-  conflicts: ConflictEntry[] | null;
+  // Null in the overwhelming common case -- see ConflictEntry and
+  // ContradictionDetail.
+  conflicts: Array<ConflictEntry | ContradictionDetail> | null;
 }
 
 export async function fetchCurrentUser(): Promise<SessionUser | null> {
@@ -813,11 +827,25 @@ export interface ReviewChange {
   detail: string;
 }
 
+export interface ReviewContradiction {
+  suggestionId: string;
+  recordType: string;
+  recordId: string;
+  recordTitle: string;
+  field: string;
+  olderStatement: string;
+  olderDate: string | null;
+  newerStatement: string;
+  newerDate: string | null;
+  correctedValue: string;
+}
+
 export interface ExecutiveReviewData {
   generatedAt: string;
   // Null until the viewer first marks the review as reviewed.
   sinceLastReview: { lastReviewedAt: string; changes: ReviewChange[] } | null;
   headline: string[];
+  contradictions: ReviewContradiction[];
   decisionsNeeded: ReviewDecision[];
   deadlinePassed: ReviewDecision[];
   decisionsInProgress: ReviewDecision[];
@@ -837,6 +865,17 @@ export async function fetchExecutiveReview(): Promise<{ text: string; data: Exec
   const res = await fetch(`${API_URL}/api/reports/executive-review`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to build the review (${res.status})`);
+  }
+  return res.json();
+}
+
+// On-demand Claude pass (one call per project's tasks, one for decisions)
+// looking for newer information that contradicts what's still recorded.
+// Each finding becomes a "Conflict detected" suggestion in Review.
+export async function checkContradictions(): Promise<{ recordsChecked: number; contradictionsFound: number }> {
+  const res = await fetch(`${API_URL}/api/reviews/check-contradictions`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to check for contradictions (${res.status})`);
   }
   return res.json();
 }

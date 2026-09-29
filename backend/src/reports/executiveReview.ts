@@ -80,6 +80,22 @@ export interface ReviewPending {
   reasoning: string;
 }
 
+// A pending "contradiction" suggestion: newer information conflicts with a
+// statement still recorded as current. Shown prominently until resolved in
+// Review (approve the correction, edit it, or reject it as not a conflict).
+export interface ReviewContradiction {
+  suggestionId: string;
+  recordType: string;
+  recordId: string;
+  recordTitle: string;
+  field: string;
+  olderStatement: string;
+  olderDate: string | null;
+  newerStatement: string;
+  newerDate: string | null;
+  correctedValue: string;
+}
+
 export interface ReviewInventoryProject {
   objective: string;
   objectivePriority: string;
@@ -94,6 +110,7 @@ export interface ExecutiveReviewData {
   // they last marked it reviewed); null when they never have.
   sinceLastReview?: SinceLastReview | null;
   headline: string[];
+  contradictions: ReviewContradiction[];
   decisionsNeeded: ReviewDecision[];
   deadlinePassed: ReviewDecision[];
   // Decided and still being carried out -- no call needed, worth a glance.
@@ -215,6 +232,7 @@ export async function buildExecutiveReviewData(
         proposedDiff: suggestions.proposedDiff,
         reasoning: suggestions.reasoning,
         confidence: suggestions.confidence,
+        conflicts: suggestions.conflicts,
       })
       .from(suggestions)
       .where(and(eq(suggestions.organizationId, organizationId), inArray(suggestions.status, ["pending", "edited"])))
@@ -337,7 +355,27 @@ export async function buildExecutiveReviewData(
   const recent = recentRows.filter(canSee);
   const pending = pendingRows.filter(canSee);
   const shownPending = pending.slice(0, REVIEW_LIMIT);
-  const about = await describeSuggestions(db, organizationId, [...recent, ...shownPending]);
+  const contradictionRows = pending.filter((row) => row.changeType === "contradiction" && row.targetId);
+  const about = await describeSuggestions(db, organizationId, [...recent, ...shownPending, ...contradictionRows]);
+  const contradictions: ReviewContradiction[] = contradictionRows.flatMap((row) => {
+    const detail = ((row.conflicts ?? []) as Array<Record<string, unknown>>).find((c) => c.kind === "contradiction");
+    if (!detail) return [];
+    const field = String(detail.field);
+    return [
+      {
+        suggestionId: row.id,
+        recordType: row.targetType,
+        recordId: row.targetId!,
+        recordTitle: about.get(row.id) ?? "(unknown)",
+        field,
+        olderStatement: String(detail.olderStatement),
+        olderDate: (detail.olderDate as string | null) ?? null,
+        newerStatement: String(detail.newerStatement),
+        newerDate: (detail.newerDate as string | null) ?? null,
+        correctedValue: String((row.proposedDiff as Record<string, unknown>)[field] ?? ""),
+      },
+    ];
+  });
 
   const counts = {
     openTasks: openTasks.length,
@@ -353,6 +391,11 @@ export async function buildExecutiveReviewData(
   if (deadlinePassed.length > 0) {
     headline.push(`${plural(deadlinePassed.length, "decision is", "decisions are")} past deadline with no recorded outcome — confirm what happened`);
   }
+  if (contradictions.length > 0) {
+    headline.push(
+      `${plural(contradictions.length, "conflict", "conflicts")}: newer information contradicts what's recorded — resolve before relying on ${contradictions.length === 1 ? "it" : "them"}`,
+    );
+  }
   if (risks.length > 0) headline.push(`${plural(risks.length, "item is", "items are")} blocked, waiting or flagged for attention`);
   if (needsDisposition.length > 0) {
     headline.push(`${plural(needsDisposition.length, "old record needs", "old records need")} disposition (no evidence in ${DISPOSITION_DAYS}+ days) — close, update or confirm; not urgent`);
@@ -363,6 +406,7 @@ export async function buildExecutiveReviewData(
   return {
     generatedAt: now.toISOString(),
     headline,
+    contradictions,
     decisionsNeeded,
     deadlinePassed,
     decisionsInProgress,
@@ -437,6 +481,18 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
     if (changes.length === 0) lines.push("- Nothing material has changed.");
     for (const c of changes.slice(0, 10)) lines.push(`- ${c.title}: ${c.detail}`);
     if (changes.length > 10) lines.push(`- …and ${changes.length - 10} smaller changes.`);
+  }
+
+  if (data.contradictions.length > 0) {
+    lines.push("", "CONFLICTS DETECTED — newer information contradicts what's recorded; resolve before relying on these");
+    for (const c of data.contradictions) {
+      lines.push(
+        `- ${c.recordTitle} (${c.field})`,
+        `    Recorded${c.olderDate ? ` (${formatDate(c.olderDate)})` : ""}: ${clip(c.olderStatement, 300)}`,
+        `    Newer${c.newerDate ? ` (${formatDate(c.newerDate)})` : ""}: ${clip(c.newerStatement, 300)}`,
+        `    Proposed correction, awaiting approval: ${clip(c.correctedValue, 300)}`,
+      );
+    }
   }
 
   lines.push("", "1. DECISIONS NEEDED");

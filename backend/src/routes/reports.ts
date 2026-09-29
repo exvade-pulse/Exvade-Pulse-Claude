@@ -8,6 +8,7 @@ import { visibilityFilter } from "../access/visibility.js";
 import { buildExecutiveReviewData, renderExecutiveReviewText } from "../reports/executiveReview.js";
 import { createReviewLink } from "../reports/reviewLinks.js";
 import { markReviewed, sinceLastReview } from "../reports/reviewChanges.js";
+import { syncDeadlineItems } from "../reports/deadlineItems.js";
 
 const WEEK_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -174,6 +175,7 @@ export async function reportRoutes(app: FastifyInstance) {
   // for the in-app page, plus the same content as text for "Copy for ChatGPT".
   app.get("/api/reports/executive-review", async (request, reply) => {
     const { organizationId, userId, role } = request.user!;
+    await syncDeadlineItems(db, organizationId);
     const data = await buildExecutiveReviewData(organizationId, role);
     data.sinceLastReview = await sinceLastReview(db, organizationId, userId, data);
     reply.send({ text: renderExecutiveReviewText(data), data, generatedAt: data.generatedAt });

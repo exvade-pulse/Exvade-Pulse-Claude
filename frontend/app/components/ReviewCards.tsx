@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReviewDecision, ReviewTask } from "../../lib/api";
+import type { ReviewContradiction, ReviewDecision, ReviewTask } from "../../lib/api";
 import { chipClass, STATUS_LABEL } from "./TaskStatusChips";
 
 function formatDate(iso: string): string {
@@ -58,6 +58,40 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
       <div className="card-actions">
         <Link className="decision-btn" href="/decisions">
           {deadlinePassed ? "Record what happened" : "Open in Decisions"}
+        </Link>
+      </div>
+    </article>
+  );
+}
+
+// Recorded vs newer, side by side, and the correction waiting for approval.
+// Uses the same restrained attention edge as a passed deadline: until it's
+// resolved, the record can't be relied on.
+export function ContradictionCard({ contradiction: c }: { contradiction: ReviewContradiction }) {
+  const recordHref = c.recordType === "task" ? `/tasks/${c.recordId}` : "/decisions";
+  return (
+    <article className="card rc-card rc-card-attention">
+      <div className="rc-top">
+        <p className="card-title rc-title">
+          <Link className="card-title-link" href={recordHref}>
+            {c.recordTitle}
+          </Link>
+        </p>
+        <span className="chip chip-attention">Conflict</span>
+      </div>
+      <p className="rc-line">
+        <span className="rc-label">Recorded{c.olderDate ? ` · ${formatDate(c.olderDate)}` : ""}</span> {c.olderStatement}
+      </p>
+      <p className="rc-line">
+        <span className="rc-label">Newer{c.newerDate ? ` · ${formatDate(c.newerDate)}` : ""}</span> {c.newerStatement}
+      </p>
+      <details className="rc-details">
+        <summary>Proposed correction</summary>
+        <p className="rc-line">{c.correctedValue}</p>
+      </details>
+      <div className="card-actions">
+        <Link className="decision-btn" href="/review">
+          Resolve in Review
         </Link>
       </div>
     </article>
