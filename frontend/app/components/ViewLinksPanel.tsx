@@ -54,7 +54,7 @@ export function ViewLinksPanel() {
   }
 
   const agentPrompt = created
-    ? `Please review Exvade Pulse, our internal operations tool, in read-only mode.\nOpen: ${created.url}\nEnter the password I'll give you on the password screen, then click Open.\nBrowse every page in the top menu, open collapsed sections and Details, and report back on (1) usability and layout: what's hard to scan, confusing, cluttered or broken, especially on the Executive page, and (2) accuracy: anything that looks wrong, stale, duplicated, contradictory or missing given what you know about Exvade. You can't change anything, so just report. Don't share the link or password anywhere.`
+    ? `Please review Exvade Pulse, our internal operations tool, in Read-Only Review Mode.\nOpen: ${created.url}\nEnter the password I'll give you on the password screen, then click Open.\nBrowse every page in the top menu, open collapsed sections and Details, and report back on (1) usability and layout: what's hard to scan, confusing, cluttered or broken, especially on the Executive page, and (2) accuracy: anything that looks wrong, stale, duplicated, contradictory or missing given what you know about Exvade. You can't change anything, so just report. Don't share the link or password anywhere.`
     : "";
 
   return (

@@ -2,12 +2,18 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SessionUser } from "../../lib/api";
 
 export function Nav({ user }: { user?: SessionUser | null }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
+
+  // Read-only review mode greys out and disables every action button
+  // across the app (see .read-only-mode in globals.css); navigation stays.
+  useEffect(() => {
+    document.body.classList.toggle("read-only-mode", !!user?.readOnly);
+  }, [user?.readOnly]);
 
   function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -20,7 +26,7 @@ export function Nav({ user }: { user?: SessionUser | null }) {
     <>
     {user?.readOnly && (
       <div className="readonly-banner" role="status">
-        <strong>Read-only view.</strong> You can look around every page; changes are disabled.
+        <strong>Read-Only Review Mode.</strong> Browse every page; creating, editing, approving and admin actions are disabled.
       </div>
     )}
     <nav className="nav">

@@ -268,7 +268,7 @@ export default function GuidePage() {
             ["Invite only", "Anyone an admin adds on the Users page can sign in with that Google account, on any email domain."],
             ["Any browser", "Works in Chrome, Safari (including iPhone and iPad), Firefox, Edge, Brave and Incognito windows."],
             ["Not approved yet?", "Ask an Exvade admin to add the exact Google email you're signing in with."],
-            ["View-only links", "Admins can create a password-protected, read-only link on the Integrations page (e.g. for a ChatGPT agent to review the site). It can browse every page but never change anything, expires on its own, and can be switched off at any time."],
+            ["View-only links", "Admins can create a password-protected link on the Integrations page that opens Read-Only Review Mode (e.g. for a ChatGPT agent to review the site). It browses every page with action buttons disabled, can never change anything, expires on its own, and can be switched off at any time."],
           ]}
         />
       </div>

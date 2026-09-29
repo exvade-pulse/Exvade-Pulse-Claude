@@ -1770,3 +1770,11 @@ summary:focus-visible {
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-sm);
 }
+
+/* Read-only review mode: actions visibly disabled, navigation untouched. */
+.read-only-mode button.decision-btn,
+.read-only-mode button.link-btn {
+  opacity: 0.4;
+  pointer-events: none;
+  cursor: not-allowed;
+}
