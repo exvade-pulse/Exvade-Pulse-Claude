@@ -4,7 +4,8 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, initiatives, LIVE_DECISION_STATUSES, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
-import { findDuplicateDecisions, findDuplicateHierarchy, findDuplicateTasks, type DuplicateCandidateHierarchy } from "../interpretation/duplicateDetection.js";
+import { findDuplicateDecisions, findDuplicateHierarchy, findDuplicateTasks, type DuplicateCandidateHierarchy, type DuplicateCandidateTask } from "../interpretation/duplicateDetection.js";
+import { AI_CONCURRENCY, mapLimited } from "../interpretation/concurrency.js";
 import { getContextualClaudeClient } from "../context/companyContext.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
@@ -154,6 +155,10 @@ export async function duplicateRoutes(app: FastifyInstance) {
       alreadyProposed.add(duplicateId);
     }
 
+    // Gather every list to compare first, then run the AI comparisons
+    // several at a time, then record the findings in the original order --
+    // the same outcome as one-by-one, just without waiting on each call.
+    const projectTaskLists: DuplicateCandidateTask[][] = [];
     for (const project of projectRows) {
       const taskRows = await db
         .select({
@@ -172,25 +177,10 @@ export async function duplicateRoutes(app: FastifyInstance) {
             notInArray(tasks.status, DUPLICATE_CHECK_EXCLUDED_STATUSES),
           ),
         );
-
       if (taskRows.length < 2) continue;
       projectsChecked++;
       tasksChecked += taskRows.length;
-
-      for (const pair of await findDuplicateTasks(taskRows, claudeClient)) {
-        if (alreadyProposed.has(pair.supersedeTaskId)) continue;
-        await proposeMerge("task", pair.supersedeTaskId, pair.keepTaskId, pair.reasoning, pair.confidence);
-        duplicatesFound++;
-      }
-    }
-
-    if (decisionRows.length >= 2) {
-      decisionsChecked = decisionRows.length;
-      for (const pair of await findDuplicateDecisions(decisionRows, claudeClient)) {
-        if (alreadyProposed.has(pair.supersedeDecisionId)) continue;
-        await proposeMerge("decision", pair.supersedeDecisionId, pair.keepDecisionId, pair.reasoning, pair.confidence);
-        decisionDuplicatesFound++;
-      }
+      projectTaskLists.push(taskRows);
     }
 
     // Objectives, initiatives and projects, each level company-wide.
@@ -199,15 +189,37 @@ export async function duplicateRoutes(app: FastifyInstance) {
     const hierarchy = await loadHierarchyCandidates(organizationId);
     let hierarchyChecked = 0;
     let hierarchyDuplicatesFound = 0;
-    for (const level of ["objective", "initiative", "project"] as const) {
-      const items = hierarchy[level].filter((item) => !alreadyProposed.has(item.id));
-      if (items.length < 2) continue;
-      hierarchyChecked += items.length;
-      for (const pair of await findDuplicateHierarchy(level, items, claudeClient)) {
-        if (alreadyProposed.has(pair.supersedeId)) continue;
-        await proposeMerge(level, pair.supersedeId, pair.keepId, pair.reasoning, pair.confidence);
-        hierarchyDuplicatesFound++;
+    const hierarchyLists = (["objective", "initiative", "project"] as const)
+      .map((level) => ({ level, items: hierarchy[level].filter((item) => !alreadyProposed.has(item.id)) }))
+      .filter(({ items }) => items.length >= 2);
+    for (const { items } of hierarchyLists) hierarchyChecked += items.length;
+    if (decisionRows.length >= 2) decisionsChecked = decisionRows.length;
+
+    type Job =
+      | { kind: "task"; items: DuplicateCandidateTask[] }
+      | { kind: "decision" }
+      | { kind: "hierarchy"; level: "objective" | "initiative" | "project"; items: DuplicateCandidateHierarchy[] };
+    const jobs: Job[] = [
+      ...projectTaskLists.map((items) => ({ kind: "task" as const, items })),
+      ...(decisionRows.length >= 2 ? [{ kind: "decision" as const }] : []),
+      ...hierarchyLists.map(({ level, items }) => ({ kind: "hierarchy" as const, level, items })),
+    ];
+    const results = await mapLimited(jobs, AI_CONCURRENCY, async (job) => {
+      if (job.kind === "task") {
+        return (await findDuplicateTasks(job.items, claudeClient)).map((p) => ({ type: "task" as const, dup: p.supersedeTaskId, keep: p.keepTaskId, reasoning: p.reasoning, confidence: p.confidence }));
       }
+      if (job.kind === "decision") {
+        return (await findDuplicateDecisions(decisionRows, claudeClient)).map((p) => ({ type: "decision" as const, dup: p.supersedeDecisionId, keep: p.keepDecisionId, reasoning: p.reasoning, confidence: p.confidence }));
+      }
+      return (await findDuplicateHierarchy(job.level, job.items, claudeClient)).map((p) => ({ type: job.level, dup: p.supersedeId, keep: p.keepId, reasoning: p.reasoning, confidence: p.confidence }));
+    });
+
+    for (const pair of results.flat()) {
+      if (alreadyProposed.has(pair.dup)) continue;
+      await proposeMerge(pair.type, pair.dup, pair.keep, pair.reasoning, pair.confidence);
+      if (pair.type === "task") duplicatesFound++;
+      else if (pair.type === "decision") decisionDuplicatesFound++;
+      else hierarchyDuplicatesFound++;
     }
 
     reply.send({ projectsChecked, tasksChecked, duplicatesFound, decisionsChecked, decisionDuplicatesFound, hierarchyChecked, hierarchyDuplicatesFound });

@@ -16,6 +16,7 @@ import {
   tasks,
 } from "../db/schema.js";
 import { getClaudeClient, type ClaudeClient } from "../interpretation/claudeClient.js";
+import { withRateLimitRetry } from "../interpretation/concurrency.js";
 
 // Long enough for a real profile, short enough that it stays cheap to send
 // with every AI call.
@@ -84,7 +85,7 @@ export function withCompanyContext(client: ClaudeClient, content: string | null 
 // that turns out to have nothing to check never needs an API key.
 export async function getContextualClaudeClient(db: DbOrTx, organizationId: string, base?: ClaudeClient) {
   const row = await loadCompanyContext(db, organizationId);
-  const lazy: ClaudeClient = { createMessage: (params) => (base ?? getClaudeClient()).createMessage(params) };
+  const lazy: ClaudeClient = withRateLimitRetry({ createMessage: (params) => (base ?? getClaudeClient()).createMessage(params) });
   return withCompanyContext(lazy, row?.content);
 }
 

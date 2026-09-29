@@ -13,6 +13,7 @@ import {
   type CleanupProposal,
 } from "../interpretation/cleanupDetection.js";
 import { buildExecutiveReviewData, type ReviewTask } from "../reports/executiveReview.js";
+import { AI_CONCURRENCY, mapLimited } from "../interpretation/concurrency.js";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const UPDATE_WINDOW_DAYS = 120;
@@ -130,7 +131,9 @@ export async function cleanupRoutes(app: FastifyInstance) {
     }
 
     const claudeClient = await getContextualClaudeClient(db, organizationId);
-    const proposals: CleanupProposal[] = [];
+    // Each batch is one AI call; batches run several at a time and the
+    // proposals come back in the original order.
+    const batches: Array<{ candidates: CleanupCandidate[]; context: CleanupContext }> = [];
     let recordsChecked = 0;
 
     for (const group of data.inventory) {
@@ -147,7 +150,7 @@ export async function cleanupRoutes(app: FastifyInstance) {
         openDecisions: data.decisionsNeeded.map((d) => ({ id: d.id, title: d.title })),
       };
       recordsChecked += candidates.length;
-      proposals.push(...(await proposeCleanup(candidates, context, claudeClient)));
+      batches.push({ candidates, context });
     }
 
     const staleDecisions = [...data.decisionsNeeded, ...data.deadlinePassed].filter((d) => d.nextStepStale && !waiting.has(d.id));
@@ -171,8 +174,9 @@ export async function cleanupRoutes(app: FastifyInstance) {
         openDecisions: all.map((d) => ({ id: d.id, title: d.title })),
       };
       recordsChecked += candidates.length;
-      proposals.push(...(await proposeCleanup(candidates, context, claudeClient)));
+      batches.push({ candidates, context });
     }
+    const proposals: CleanupProposal[] = (await mapLimited(batches, AI_CONCURRENCY, (b) => proposeCleanup(b.candidates, b.context, claudeClient))).flat();
 
     if (proposals.length > 0) {
       const [source] = await db

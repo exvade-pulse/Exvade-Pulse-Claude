@@ -5,6 +5,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { entityRelationships, decisions, LIVE_DECISION_STATUSES, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
 import { findRelationships, type RelationshipCandidate } from "../interpretation/relationshipDetection.js";
+import { AI_CONCURRENCY, mapLimited } from "../interpretation/concurrency.js";
 import { getContextualClaudeClient } from "../context/companyContext.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
@@ -92,6 +93,7 @@ export async function relationshipSuggestionRoutes(app: FastifyInstance) {
     const receivedAt = new Date();
     let sourceId: string | null = null;
 
+    const candidateLists: RelationshipCandidate[][] = [];
     for (const project of projectRows) {
       const taskRows = await db
         .select({
@@ -122,7 +124,15 @@ export async function relationshipSuggestionRoutes(app: FastifyInstance) {
       }));
       const candidates = [...taskCandidates, ...decisionCandidates];
 
-      const proposals = await findRelationships(candidates, existingKeys, claudeClient);
+      candidateLists.push(candidates);
+    }
+
+    // The AI comparisons run several at a time; results are applied in the
+    // original order, re-checking each pair so one found for an earlier
+    // project isn't proposed again for a later one.
+    const snapshot = new Set(existingKeys);
+    const results = await mapLimited(candidateLists, AI_CONCURRENCY, (candidates) => findRelationships(candidates, snapshot, claudeClient));
+    for (const proposals of results) {
       if (proposals.length === 0) continue;
 
       // Created lazily, on the first real finding -- see duplicates.ts for
@@ -144,6 +154,7 @@ export async function relationshipSuggestionRoutes(app: FastifyInstance) {
       }
 
       for (const proposal of proposals) {
+        if (existingKeys.has(relationshipKey(proposal.fromType, proposal.fromId, proposal.toType, proposal.toId))) continue;
         await mergeOrInsertSuggestion(db, {
           organizationId,
           sourceId,

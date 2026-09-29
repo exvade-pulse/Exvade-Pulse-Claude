@@ -19,6 +19,7 @@ import {
   type CheckedRecordType,
   type Contradiction,
 } from "../interpretation/contradictionDetection.js";
+import { AI_CONCURRENCY, mapLimited } from "../interpretation/concurrency.js";
 
 const HISTORY_PER_RECORD = 5;
 
@@ -103,7 +104,9 @@ export async function contradictionRoutes(app: FastifyInstance) {
     );
 
     let recordsChecked = 0;
-    const found: Contradiction[] = [];
+    // Each group is one AI call; groups run several at a time and results
+    // are combined in the original order.
+    const groups: Array<{ records: CheckedRecord[]; scope: string }> = [];
 
     for (const project of projectRows) {
       const taskRows = await db
@@ -122,7 +125,7 @@ export async function contradictionRoutes(app: FastifyInstance) {
         return { type: "task", id: t.id, title: t.title, statements, history: history.get(t.id) ?? [] };
       });
       recordsChecked += records.length;
-      found.push(...(await findContradictions(records, `under the project "${project.title}"`, claudeClient)));
+      groups.push({ records, scope: `under the project "${project.title}"` });
     }
 
     if (decisionRows.length > 0) {
@@ -137,8 +140,9 @@ export async function contradictionRoutes(app: FastifyInstance) {
         history: history.get(d.id) ?? [],
       }));
       recordsChecked += records.length;
-      found.push(...(await findContradictions(records, "as open company decisions", claudeClient)));
+      groups.push({ records, scope: "as open company decisions" });
     }
+    const found: Contradiction[] = (await mapLimited(groups, AI_CONCURRENCY, (g) => findContradictions(g.records, g.scope, claudeClient))).flat();
 
     const fresh = found.filter((c) => !alreadyFlagged.has(`${c.recordType}:${c.recordId}:${c.field}`));
     if (fresh.length > 0) {

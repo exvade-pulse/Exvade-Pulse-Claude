@@ -5,6 +5,10 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
 import { suggestReclassification } from "../interpretation/retriage.js";
+import { mapLimited } from "../interpretation/concurrency.js";
+
+// Each call here is small (one task), so more can run at once.
+const RETRIAGE_CONCURRENCY = 6;
 import { getContextualClaudeClient } from "../context/companyContext.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
@@ -158,9 +162,13 @@ export async function unsortedRoutes(app: FastifyInstance) {
       })
       .returning();
 
+    // One AI call per task, several at a time (a large Unsorted pile would
+    // otherwise take far longer than the page can wait); suggestions are
+    // then recorded in the original order.
+    const results = await mapLimited(taskRows, RETRIAGE_CONCURRENCY, (task) => suggestReclassification(task, candidateRows, claudeClient));
     let suggested = 0;
-    for (const task of taskRows) {
-      const result = await suggestReclassification(task, candidateRows, claudeClient);
+    for (const [i, task] of taskRows.entries()) {
+      const result = results[i];
       if (!result) continue;
 
       await mergeOrInsertSuggestion(db, {
