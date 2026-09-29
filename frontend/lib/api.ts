@@ -627,7 +627,30 @@ export async function fetchProject(id: string): Promise<ProjectDetailResponse | 
 // approval touches it.
 export type FieldEvidence = Partial<Record<"status" | "latestUpdate" | "nextAction" | "owner", { asOf: string; sourceId: string }>>;
 
-export interface TaskDetail {
+// How firm a date is.
+export type DateType = "confirmed" | "planned" | "estimated";
+
+export interface TaskSchedule {
+  dueDate: string | null;
+  dueDateType: DateType | null;
+  dueLabel: string | null;
+  waitingFor: string | null;
+  followUpOn: string | null;
+}
+
+export async function setTaskSchedule(id: string, fields: Partial<TaskSchedule>): Promise<TaskSchedule> {
+  const res = await fetch(`${API_URL}/api/tasks/${id}/schedule`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((body as { error?: string }).error ?? "Couldn't save");
+  return (body as { task: TaskSchedule }).task;
+}
+
+export interface TaskDetail extends TaskSchedule {
   id: string;
   title: string;
   description: string | null;
@@ -845,6 +868,12 @@ export interface ReviewTask {
   waitingOn: string[];
   nextActionAgeDays: number | null;
   nextActionStale: boolean;
+  dueDate: string | null;
+  dueDateType: DateType | null;
+  dueLabel: string | null;
+  daysUntilDue: number | null;
+  waitingFor: string | null;
+  followUpOn: string | null;
   attentionScore: number;
   attentionReasons: string[];
   questions: string[];
@@ -1053,6 +1082,8 @@ export interface ExecutiveReviewData {
   risks: ReviewTask[];
   operatingActions: ReviewTask[];
   needsDisposition: ReviewTask[];
+  // Open tasks whose own date has passed with no outcome recorded.
+  pastDue: ReviewTask[];
   recentDevelopments: Array<{ id: string; date: string; about: string; source: string; summary: string }>;
   awaitingReview: Array<{ id: string; about: string; changeType: string; confidence: number; reasoning: string }>;
   awaitingReviewTotal: number;
@@ -1084,7 +1115,7 @@ export interface DashboardPriority {
   nextActionOwner: string | null;
   nextActionIsMine: boolean;
   owner: string | null;
-  keyDate: { label: string; date: string } | null;
+  keyDate: { label: string; date: string; dateType: DateType | null } | null;
   keyDependency: string | null;
   details: {
     hypothesis: string | null;
@@ -1111,7 +1142,16 @@ export interface Dashboard {
   unsortedTasks: number;
   whatChanged: DashboardChange[];
   needsMe: DashboardItem[];
-  upcomingDeadlines: Array<{ kind: "decision"; id: string; title: string; date: string; daysAway: number; owner: string }>;
+  upcomingDeadlines: Array<{
+    kind: "decision" | "task";
+    id: string;
+    title: string;
+    label: string | null;
+    date: string;
+    dateType: DateType | null;
+    daysAway: number;
+    owner: string | null;
+  }>;
   waiting: DashboardItem[];
 }
 

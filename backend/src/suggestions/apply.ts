@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { auditLog, initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, type EntityNodeType, type RelationType } from "../db/schema.js";
+import { auditLog, dateTypeEnum, initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, type EntityNodeType, type RelationType } from "../db/schema.js";
 import { createDecision, DecisionError, supersedeDecision, updateDecision } from "../decisions/manage.js";
 import { createRelationship, RelationshipError } from "../relationships/manage.js";
 import { supersedeHierarchy } from "../entities/supersedeHierarchy.js";
@@ -21,7 +21,28 @@ const TABLE_BY_TARGET_TYPE = {
 // by what source" for -- see schema.ts's tasks.fieldEvidence comment. title
 // is structural and left out; description is tracked because an older source
 // approved late must not replace a newer summary either.
-const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner", "description"] as const;
+const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner", "description", "dueDate", "waitingFor"] as const;
+
+// A task date arrives as "2026-10-14" (or a full ISO string); it is stored
+// as that calendar date at midnight UTC. Anything unparseable is dropped
+// rather than failing the whole approval, as is an unknown date type.
+export function normalizeTaskDates(fields: Record<string, unknown>): void {
+  for (const key of ["dueDate", "followUpOn"]) {
+    if (!(key in fields)) continue;
+    const value = fields[key];
+    if (value === null || value === "") {
+      fields[key] = null;
+      continue;
+    }
+    const day = typeof value === "string" ? value.slice(0, 10) : value instanceof Date ? value.toISOString().slice(0, 10) : "";
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T00:00:00.000Z`) : null;
+    if (date && !Number.isNaN(date.getTime())) fields[key] = date;
+    else delete fields[key];
+  }
+  if ("dueDateType" in fields && fields.dueDateType !== null && !dateTypeEnum.enumValues.includes(fields.dueDateType as never)) {
+    delete fields.dueDateType;
+  }
+}
 
 // Fields a brand-new row of each type cannot be created without -- a real
 // parent id (except objective, which has none) plus a title. interpret.ts's
@@ -67,7 +88,7 @@ export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
   objective: ["title", "description", "status", "priority", "owner"],
   initiative: ["objectiveId", "title", "description", "status", "priority", "owner"],
   project: ["initiativeId", "title", "description", "status", "owner"],
-  task: ["projectId", "title", "description", "status", "latestUpdate", "nextAction", "owner"],
+  task: ["projectId", "title", "description", "status", "latestUpdate", "nextAction", "owner", "dueDate", "dueDateType", "dueLabel", "waitingFor", "followUpOn"],
   decision: [
     "title",
     "whyItMatters",
@@ -385,6 +406,7 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
       // operational_update that only sets status doesn't disturb the
       // latestUpdate/nextAction/owner evidence already on record.
       let evidencePatch: Record<string, { asOf: string; sourceId: string }> | null = null;
+      if (targetType === "task") normalizeTaskDates(fields as Record<string, unknown>);
       if (targetType === "task" && suggestion.targetId && suggestion.changeType !== "cleanup") {
         // Chronology at approval time, not just at ingestion: an older
         // source approved after a newer one (e.g. an August note approved

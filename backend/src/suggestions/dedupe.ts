@@ -33,7 +33,7 @@ interface FieldEvidenceEntry {
 // separate constant (not imported) since apply.ts and dedupe.ts each have
 // their own reason to know it and importing across suggestions/ modules for
 // one array isn't worth the coupling.
-const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner", "description"] as const;
+const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner", "description", "dueDate", "waitingFor"] as const;
 
 // Strips any field from draft.proposedDiff whose evidence is genuinely older
 // than what's already confirmed on the live task (tasks.fieldEvidence), and

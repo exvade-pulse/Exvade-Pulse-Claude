@@ -54,7 +54,7 @@ export interface DashboardPriority {
   nextActionOwner: string | null;
   nextActionIsMine: boolean;
   owner: string | null;
-  keyDate: { label: string; date: string } | null;
+  keyDate: { label: string; date: string; dateType: "confirmed" | "planned" | "estimated" | null } | null;
   keyDependency: string | null;
   details: {
     hypothesis: string | null;
@@ -74,12 +74,16 @@ export interface DashboardItem {
 }
 
 export interface DashboardDeadline {
-  kind: "decision";
+  kind: "decision" | "task";
   id: string;
   title: string;
+  // What happens on the date (a task's milestone label), if recorded.
+  label: string | null;
   date: string;
+  // How firm the date is; decisions' due dates count as confirmed.
+  dateType: "confirmed" | "planned" | "estimated" | null;
   daysAway: number;
-  owner: string;
+  owner: string | null;
 }
 
 export interface Dashboard {
@@ -248,6 +252,9 @@ export async function buildDashboard(
   const allDecisions: ReviewDecision[] = [...data.decisionsNeeded, ...data.deadlinePassed, ...data.decisionsInProgress];
   const decisionsById = new Map(allDecisions.map((d) => [d.id, d]));
   const dueSoon = now.getTime() + DEADLINE_SOON_DAYS * MS_PER_DAY;
+  const upcomingTaskDate = (t: ReviewTask) => (t.dueDate && t.daysUntilDue !== null && t.daysUntilDue >= 0 ? t.dueDate : null);
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const daysFromToday = (iso: string) => Math.floor((new Date(iso).getTime() - todayUtc) / MS_PER_DAY);
   const upcomingDate = (d: ReviewDecision) =>
     d.dueDate && new Date(d.dueDate).getTime() >= now.getTime() && d.status !== "action_in_progress" ? d.dueDate : null;
 
@@ -269,11 +276,14 @@ export async function buildDashboard(
           ? [taskStep.nextAction, taskStep.owner]
           : [null, null];
     const owner = q.owner ?? open[0]?.decider ?? mostCommon(work.map((t) => t.owner));
-    const dated = open
-      .map((d) => ({ d, date: upcomingDate(d) }))
-      .filter((x): x is { d: ReviewDecision; date: string } => !!x.date)
-      .sort((a, b) => a.date.localeCompare(b.date));
-    const keyDate = dated[0] ? { label: dated[0].d.title, date: dated[0].date } : null;
+    // The nearest real upcoming date among its decisions and its work.
+    const keyDate =
+      [
+        ...open.map((d) => ({ date: upcomingDate(d), label: d.title, dateType: "confirmed" as const })),
+        ...work.map((t) => ({ date: upcomingTaskDate(t), label: t.dueLabel ? `${t.dueLabel} (${t.title})` : t.title, dateType: t.dueDateType })),
+      ]
+        .filter((x): x is { date: string; label: string; dateType: "confirmed" | "planned" | "estimated" | null } => !!x.date)
+        .sort((a, b) => a.date.localeCompare(b.date))[0] ?? null;
     const changed = [...q.taskIds.map((id) => `task:${id}`), ...q.decisionIds.map((id) => `decision:${id}`)].some((k) => changedKeys.has(k));
     const state: DashState =
       q.state === "resolved"
@@ -340,7 +350,11 @@ export async function buildDashboard(
       nextActionOwner: step?.owner ?? null,
       nextActionIsMine: isMine(step?.owner, tokens),
       owner,
-      keyDate: null,
+      keyDate:
+        w.tasks
+          .filter((t) => upcomingTaskDate(t))
+          .sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? ""))
+          .map((t) => ({ date: t.dueDate!, label: t.dueLabel ? `${t.dueLabel} (${t.title})` : t.title, dateType: t.dueDateType }))[0] ?? null,
       keyDependency: w.tasks.flatMap((t) => t.waitingOn)[0] ?? null,
       details: {
         hypothesis: null,
@@ -393,43 +407,58 @@ export async function buildDashboard(
   }
   for (const t of [...data.risks, ...data.operatingActions]) {
     if (!isMine(t.owner, tokens)) continue;
-    if (t.status === "active" && !t.nextAction) continue;
+    const dateSoon = t.daysUntilDue !== null && t.daysUntilDue >= 0 && t.daysUntilDue <= DEADLINE_SOON_DAYS;
+    if (t.status === "active" && !t.nextAction && !dateSoon) continue;
     needsMe.push({
       kind: "task",
       id: t.id,
       title: t.title,
-      detail: t.nextAction ? `Next: ${t.nextAction}` : t.status.replace("_", " "),
-      date: null,
+      detail: t.nextAction ? `Next: ${t.nextAction}` : dateSoon ? `${t.dueLabel ?? "Date"} coming up` : t.status.replace("_", " "),
+      date: dateSoon ? t.dueDate : null,
       mine: true,
     });
   }
 
-  const upcomingDeadlines: DashboardDeadline[] = allDecisions
-    .map((d) => ({ d, date: upcomingDate(d) }))
-    .filter((x): x is { d: ReviewDecision; date: string } => !!x.date && new Date(x.date).getTime() <= now.getTime() + DEADLINE_HORIZON_DAYS * MS_PER_DAY)
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .map(({ d, date }) => ({
-      kind: "decision" as const,
-      id: d.id,
-      title: d.title,
-      date,
-      daysAway: Math.max(0, Math.ceil((new Date(date).getTime() - now.getTime()) / MS_PER_DAY)),
-      owner: d.decider,
-    }));
+  // Real future dates from decisions and from work, soonest first. A date
+  // that has passed is never listed here (it becomes an outcome check).
+  const allTasks = [...data.risks, ...data.operatingActions];
+  const upcomingDeadlines: DashboardDeadline[] = [
+    ...allDecisions
+      .map((d) => ({ d, date: upcomingDate(d) }))
+      .filter((x): x is { d: ReviewDecision; date: string } => !!x.date)
+      .map(({ d, date }) => ({ kind: "decision" as const, id: d.id, title: d.title, label: null, date, dateType: "confirmed" as const, daysAway: daysFromToday(date), owner: d.decider })),
+    ...allTasks
+      .filter((t) => upcomingTaskDate(t))
+      .map((t) => ({ kind: "task" as const, id: t.id, title: t.title, label: t.dueLabel, date: t.dueDate!, dateType: t.dueDateType, daysAway: daysFromToday(t.dueDate!), owner: t.owner })),
+  ]
+    .filter((u) => u.daysAway >= 0 && u.daysAway <= DEADLINE_HORIZON_DAYS)
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   const waiting: DashboardItem[] = [
-    ...data.risks
-      .filter((t) => t.status === "blocked" || t.status === "waiting")
-      .map((t) => ({
-        kind: "task" as const,
-        id: t.id,
-        title: t.title,
-        detail: [t.status === "blocked" ? "Blocked" : "Waiting", t.waitingOn.length ? `on ${t.waitingOn.join(", ")}` : null, t.owner ? `· ${t.owner}` : null]
-          .filter(Boolean)
-          .join(" "),
-        date: null,
-        mine: isMine(t.owner, tokens),
-      })),
+    // Anything marked blocked/waiting, and anything recording who owes it
+    // something, whatever its status.
+    ...allTasks
+      .filter((t) => t.status === "blocked" || t.status === "waiting" || t.waitingFor)
+      .map((t) => {
+        const followUpDue = t.followUpOn && daysFromToday(t.followUpOn) <= 0;
+        return {
+          kind: "task" as const,
+          id: t.id,
+          title: t.title,
+          detail: [
+            t.status === "blocked" ? "Blocked" : "Waiting",
+            t.waitingOn.length ? `on ${t.waitingOn.join(", ")}` : null,
+            t.followUpOn ? (followUpDue
+                  ? "· follow-up is due"
+                  : `· follow up ${new Date(t.followUpOn).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`) : null,
+            t.owner ? `· ${t.owner}` : null,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          date: null,
+          mine: isMine(t.owner, tokens),
+        };
+      }),
     ...allDecisions
       .filter((d) => d.status === "pending_info")
       .map((d) => ({

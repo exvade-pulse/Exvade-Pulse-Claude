@@ -70,6 +70,15 @@ export interface ReviewTask {
   // gone stale. Null when there's no next action.
   nextActionAgeDays: number | null;
   nextActionStale: boolean;
+  // The task's own milestone/deadline (a calendar date) and how firm it is.
+  dueDate: string | null;
+  dueDateType: "confirmed" | "planned" | "estimated" | null;
+  dueLabel: string | null;
+  // Whole days from today (UTC) to the date; negative once it has passed.
+  daysUntilDue: number | null;
+  // Who owes what, and when to chase it.
+  waitingFor: string | null;
+  followUpOn: string | null;
   attentionScore: number;
   attentionReasons: string[];
   // Open strategic questions this work is part of.
@@ -212,6 +221,8 @@ export interface ExecutiveReviewData {
   risks: ReviewTask[];
   operatingActions: ReviewTask[];
   needsDisposition: ReviewTask[];
+  // Open tasks whose own date has passed with no outcome recorded.
+  pastDue: ReviewTask[];
   recentDevelopments: ReviewDevelopment[];
   awaitingReview: ReviewPending[];
   awaitingReviewTotal: number;
@@ -282,6 +293,8 @@ export function scoreAttention(input: {
   status: string;
   waitingOnDecision: boolean;
   decisionDueSoonOrOverdue: boolean;
+  // The task's own date is within two weeks or has passed.
+  ownDateSoonOrPast?: boolean;
   hasNextAction: boolean;
   daysSinceEvidence: number;
 }): { score: number; reasons: string[] } {
@@ -294,6 +307,10 @@ export function scoreAttention(input: {
   if (input.decisionDueSoonOrOverdue) {
     urgency = Math.min(1, urgency + 0.2);
     reasons.push("blocking decision is due soon or overdue");
+  }
+  if (input.ownDateSoonOrPast) {
+    urgency = Math.min(1, urgency + 0.2);
+    reasons.push("its own date is within two weeks or has passed");
   }
 
   const consequence = input.waitingOnDecision ? 1 : 0.7;
@@ -380,6 +397,7 @@ export async function buildExecutiveReviewData(
 
   const decisionDue = new Map(openDecisionRows.map((d) => [d.id, d.dueDate]));
   const soon = now.getTime() + 14 * MS_PER_DAY;
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 
   // Every open task, placed in the hierarchy and scored.
   const inventory: ReviewInventoryProject[] = [];
@@ -400,6 +418,7 @@ export async function buildExecutiveReviewData(
             status: task.status,
             waitingOnDecision: task.blockingDecision !== null,
             decisionDueSoonOrOverdue: !!due && new Date(due).getTime() <= soon,
+            ownDateSoonOrPast: !!task.dueDate && new Date(task.dueDate).getTime() <= soon,
             hasNextAction: !!task.nextAction,
             daysSinceEvidence: days,
           });
@@ -415,7 +434,13 @@ export async function buildExecutiveReviewData(
             lastEvidenceAt: new Date(task.updatedAt).toISOString(),
             daysSinceEvidence: days,
             waitingOnDecision: task.blockingDecision?.title ?? null,
-            waitingOn: task.blockingDecision ? [task.blockingDecision.title] : [],
+            waitingOn: [...(task.blockingDecision ? [task.blockingDecision.title] : []), ...(task.waitingFor ? [task.waitingFor] : [])],
+            dueDate: task.dueDate ? new Date(task.dueDate).toISOString() : null,
+            dueDateType: task.dueDateType ?? null,
+            dueLabel: task.dueLabel ?? null,
+            daysUntilDue: task.dueDate ? Math.floor((new Date(task.dueDate).getTime() - todayUtc) / MS_PER_DAY) : null,
+            waitingFor: task.waitingFor ?? null,
+            followUpOn: task.followUpOn ? new Date(task.followUpOn).toISOString() : null,
             ...nextActionFreshness(task.nextAction, nextActionAsOf.get(task.id) ?? task.updatedAt, now),
             attentionScore: score,
             attentionReasons: reasons,
@@ -440,6 +465,9 @@ export async function buildExecutiveReviewData(
   }
 
   const byScore = (a: ReviewTask, b: ReviewTask) => b.attentionScore - a.attentionScore || a.title.localeCompare(b.title);
+  // Open work whose own date has passed: the outcome needs confirming, it
+  // isn't an upcoming date anymore.
+  const pastDue = openTasks.filter((t) => t.daysUntilDue !== null && t.daysUntilDue < 0).sort((a, b) => (a.daysUntilDue ?? 0) - (b.daysUntilDue ?? 0));
   const needsDisposition = openTasks
     .filter((t) => t.daysSinceEvidence > DISPOSITION_DAYS)
     .sort((a, b) => b.daysSinceEvidence - a.daysSinceEvidence);
@@ -672,6 +700,9 @@ export async function buildExecutiveReviewData(
   if (staleNextCount > 0) {
     headline.push(`${plural(staleNextCount, "next action may be", "next actions may be")} stale (no new evidence in ${NEXT_ACTION_STALE_DAYS}+ days)`);
   }
+  if (pastDue.length > 0) {
+    headline.push(`${plural(pastDue.length, "task date has", "task dates have")} passed with no outcome recorded — confirm what happened`);
+  }
   if (needsDisposition.length > 0) {
     headline.push(`${plural(needsDisposition.length, "old record needs", "old records need")} disposition (no evidence in ${DISPOSITION_DAYS}+ days) — close, update or confirm; not urgent`);
   }
@@ -769,6 +800,7 @@ export async function buildExecutiveReviewData(
     risks,
     operatingActions,
     needsDisposition,
+    pastDue,
     recentDevelopments: recent.map((row) => ({
       id: row.id,
       date: new Date(row.receivedAt).toISOString(),
@@ -803,8 +835,12 @@ function taskLines(t: ReviewTask, withPath: boolean): string[] {
   const head = `- [${statusLabel(t.status)}] ${t.title}${withPath ? ` (${t.objective} › ${t.project})` : ""}`;
   const details = [`Owner: ${t.owner ?? "not recorded"}`, `Last evidence: ${formatDate(t.lastEvidenceAt)}`];
   if (t.waitingOnDecision) details.push(`Waiting on decision: ${t.waitingOnDecision}`);
-  const otherWaits = t.waitingOn.filter((w) => w !== t.waitingOnDecision);
+  const otherWaits = t.waitingOn.filter((w) => w !== t.waitingOnDecision && w !== t.waitingFor);
   if (otherWaits.length > 0) details.push(`Waiting on: ${otherWaits.join(", ")}`);
+  if (t.dueDate) {
+    details.push(`${t.daysUntilDue !== null && t.daysUntilDue < 0 ? "Was due" : "Date"}: ${formatDate(t.dueDate)}${t.dueDateType ? ` (${t.dueDateType})` : ""}${t.dueLabel ? ` — ${t.dueLabel}` : ""}`);
+  }
+  if (t.waitingFor) details.push(`Waiting for: ${t.waitingFor}${t.followUpOn ? ` (follow up ${formatDate(t.followUpOn)})` : ""}`);
   if (t.nextAction) {
     details.push(`Next: ${clip(t.nextAction, 200)}${t.nextActionStale ? ` (may be stale: ${t.nextActionAgeDays} days old)` : ""}`);
   }
@@ -848,7 +884,10 @@ function dashboardLines(d: Dashboard): string[] {
   for (const c of d.whatChanged) lines.push(`- ${c.about}: ${c.text}`);
   if (d.upcomingDeadlines.length > 0) {
     lines.push("", "UPCOMING DEADLINES");
-    for (const u of d.upcomingDeadlines) lines.push(`- ${formatDate(u.date)} (${u.daysAway} days): ${u.title} — ${u.owner}`);
+    for (const u of d.upcomingDeadlines) {
+      const what = u.label ? `${u.label} (${u.title})` : u.title;
+      lines.push(`- ${formatDate(u.date)} (${u.daysAway} days, ${u.dateType ?? "type not set"}): ${what}${u.owner ? ` — ${u.owner}` : ""}`);
+    }
   }
   lines.push("");
   return lines;

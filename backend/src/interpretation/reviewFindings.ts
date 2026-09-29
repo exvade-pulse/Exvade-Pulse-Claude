@@ -3,6 +3,7 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import type { DbOrTx } from "../db/client.js";
 import {
+  dateTypeEnum,
   decisions,
   initiatives,
   LIVE_DECISION_STATUSES,
@@ -93,7 +94,14 @@ export async function loadFindingsContext(db: DbOrTx, organizationId: string): P
       title: t.title,
       status: t.status,
       parent: title.get(t.projectId) ?? null,
-      details: { owner: t.owner, description: t.description, latestUpdate: t.latestUpdate, nextAction: t.nextAction },
+      details: {
+        owner: t.owner,
+        description: t.description,
+        latestUpdate: t.latestUpdate,
+        nextAction: t.nextAction,
+        dueDate: t.dueDate ? `${t.dueDate.toISOString().slice(0, 10)} (${t.dueDateType ?? "type not set"}${t.dueLabel ? `: ${t.dueLabel}` : ""})` : null,
+        waitingFor: t.waitingFor,
+      },
     })),
     ...decisionRows.map((d) => ({
       type: "decision" as const,
@@ -308,6 +316,7 @@ export interface AppFeedbackItem {
 
 const ENUMS: Record<string, readonly string[]> = {
   "task.status": taskStatusEnum.enumValues,
+  "task.dueDateType": dateTypeEnum.enumValues,
   "objective.status": strategyStatusEnum.enumValues,
   "initiative.status": strategyStatusEnum.enumValues,
   "project.status": strategyStatusEnum.enumValues,
@@ -330,7 +339,7 @@ function cleanFields(type: RecordType, raw: Record<string, unknown>, ctx: Findin
       const parent = typeof value === "string" ? ctx.byId.get(value) : undefined;
       if (!parent || parent.type !== PARENT_FIELD[key]) continue;
     }
-    if (key === "dueDate" && value !== null && (typeof value !== "string" || Number.isNaN(Date.parse(value)))) continue;
+    if ((key === "dueDate" || key === "followUpOn") && value !== null && (typeof value !== "string" || Number.isNaN(Date.parse(value)))) continue;
     if (key === "stakeholders" && !Array.isArray(value)) continue;
     out[key] = value;
   }

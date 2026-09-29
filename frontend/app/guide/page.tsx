@@ -120,8 +120,8 @@ export default function GuidePage() {
             ],
             ["What changed", "The few meaningful updates since you last clicked Mark as reviewed (or the last two weeks)."],
             ["Needs my action", "Decisions you decide and your own work that's stuck or has a next step."],
-            ["Upcoming deadlines", "Real dates in the next 90 days. A date that has passed never shows here; it moves to Data quality."],
-            ["Waiting / blocked", "What's stuck, and on whom."],
+            ["Upcoming deadlines", "Real dates in the next 90 days from tasks and decisions, each marked confirmed, planned or estimate. A date that has passed never shows here; it moves to Data quality as \"what actually happened?\"."],
+            ["Waiting / blocked", "What's stuck, who it's waiting for, and whether a follow-up is due."],
             ["Decisions", "Open calls only, with why it matters, the decider and the recommended next step."],
             ["Program details", "Collapsed: every strategic question, workstream and flagged task in full."],
             ["Older / resolved", "Collapsed: decided-and-in-progress, resolved questions to close out, and records with no evidence in 90+ days (with Clean up stale records)."],
@@ -224,6 +224,8 @@ export default function GuidePage() {
             ["Cancelled", "Not relevant anymore. Kept for history and hidden from active lists; still findable in search and on the Company Map."],
             ["Superseded", "Merged into, or replaced by, another task."],
             ["Needs disposition", "No new evidence in 90+ days: probably stale, not urgent. Close it or confirm it."],
+            ["Date: confirmed / planned / estimate", "A real deadline or fixed meeting / a scheduled or intended checkpoint / someone's guess. Set on the task page, or proposed by the AI when a source states a date."],
+            ["Waiting for", "Who owes this work something, and when to follow up. Set on the task page."],
           ]}
         />
         <p className="guide-subhead">Decisions</p>

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { DashboardChange, DashboardItem, DashboardPriority, DashState } from "../../lib/api";
+import type { DashboardChange, DashboardItem, DashboardPriority, DashState, DateType } from "../../lib/api";
 import { chipClass, STATUS_LABEL } from "./TaskStatusChips";
 import { formatDueDate } from "../../lib/dates";
 
@@ -12,6 +12,12 @@ const STATE: Record<DashState, { icon: string; label: string; className: string 
   "on track": { icon: "✓", label: "On track", className: "state-ok" },
   resolved: { icon: "✔", label: "Resolved", className: "state-resolved" },
 };
+
+// How firm a date is, in words.
+export function DateTypeTag({ type }: { type: DateType | null }) {
+  if (!type) return null;
+  return <span className={`date-type date-type-${type}`}>{type === "estimated" ? "estimate" : type}</span>;
+}
 
 export function StateBadge({ state }: { state: DashState }) {
   const s = STATE[state];
@@ -78,7 +84,7 @@ export function PriorityCard({ priority: p }: { priority: DashboardPriority }) {
           <div>
             <dt>Key date</dt>
             <dd title={p.keyDate.label}>
-              <strong>{formatDueDate(p.keyDate.date, "short")}</strong> · {p.keyDate.label}
+              <strong>{formatDueDate(p.keyDate.date, "short")}</strong> <DateTypeTag type={p.keyDate.dateType} /> · {p.keyDate.label}
             </dd>
           </div>
         )}

@@ -261,9 +261,18 @@ export function TaskRow({
       <p className="task-row-meta">
         {task.project} · Owner: {task.owner ?? "not recorded"} · Last evidence {ago(task.daysSinceEvidence)}
       </p>
+      {task.dueDate && (
+        <p className="rc-line">
+          <span className="rc-label">{task.daysUntilDue !== null && task.daysUntilDue < 0 ? "Was due" : "Date"}</span>{" "}
+          {formatDueDate(task.dueDate)}
+          {task.dueDateType && <span className="muted"> ({task.dueDateType === "estimated" ? "estimate" : task.dueDateType})</span>}
+          {task.dueLabel && ` · ${task.dueLabel}`}
+        </p>
+      )}
       {task.waitingOn.length > 0 && (
         <p className="rc-line">
           <span className="rc-label">Waiting on</span> {task.waitingOn.join(" · ")}
+          {task.followUpOn && <span className="muted"> · follow up {formatDueDate(task.followUpOn)}</span>}
         </p>
       )}
       {task.nextAction && (

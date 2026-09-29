@@ -239,6 +239,8 @@ ${describeAllowedFields()}
 (a "context" changeType is further restricted per the operational_update vs. context rule above.)
 When creating a new project/initiative/task, proposedDiff must include the appropriate parent id field (initiativeId for a project, objectiveId for an initiative, projectId for a task) pointing at an existing parent from the context, plus a title. When updating an existing entity, only include the fields that are actually changing.
 
+Task dates and dependencies (task only): set dueDate (YYYY-MM-DD) only when the source states a specific calendar date for this work -- a deadline, a scheduled meeting or checkpoint, or when something is expected (e.g. "aged domes available October 14"). Always pair it with dueLabel (what happens on that date, in a few words) and dueDateType: "confirmed" for a real obligation or fixed meeting, "planned" for a scheduled or intended checkpoint, "estimated" for someone's guess ("probably mid-October"). A vague time ("soon", "next quarter") is not a date. Like owner/status, these need a verbatim evidenceQuotes entry. Set waitingFor when this work is waiting on someone else to deliver something, as "who: what" (e.g. "Duke pathology: scanned slides"), and followUpOn (YYYY-MM-DD) only if the source states when to chase it.
+
 owner (objective/initiative/project/task only) is who's responsible for that work -- include it only when the source clearly names a specific person as doing or owning it, e.g. "Sean is handling the vendor switch." Never guess: don't default to the email's sender or any other weak proxy, and leave owner out of proposedDiff entirely when the source doesn't support it.
 
 When proposing a brand-new decision (targetId null), proposedDiff must include title (phrased as a question or a clear decision statement -- e.g. "Which vendor should we choose for sensor boards?" or "Approve budget increase for Q4 hiring") and decider (your best guess at who should make this call -- a named person mentioned in the source, or a role like "Leadership" if no specific person is named). Include stakeholders (an array of other people who should weigh in or be informed) whenever the source names or implies any. Include whyItMatters, relevantContext, and suggestedNextStep whenever the source actually supports them -- leave a field out of proposedDiff entirely rather than inventing content the source doesn't support. dueDate and relatedTaskId are optional bonus fields: include them only when the source clearly implies one, don't force them.
@@ -292,7 +294,7 @@ function isKnownRelationshipEndpoint(
 // uses dueDate instead (a decision has no owner/status field of its own;
 // decider/stakeholders are a deliberate human call, not something an
 // inferred update should touch).
-const PROTECTED_HIERARCHY_FIELDS = ["owner", "status"] as const;
+const PROTECTED_HIERARCHY_FIELDS = ["owner", "status", "dueDate", "dueDateType", "dueLabel", "followUpOn"] as const;
 const PROTECTED_DECISION_FIELDS = ["dueDate"] as const;
 
 function normalizeForMatch(text: string): string {

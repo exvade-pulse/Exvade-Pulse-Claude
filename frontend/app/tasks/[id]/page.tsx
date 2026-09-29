@@ -17,6 +17,7 @@ import { formatDiff } from "../../../lib/formatDiff";
 import { Nav } from "../../components/Nav";
 import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 import { TaskDisposition } from "../../components/TaskDisposition";
+import { TaskScheduleCard } from "../../components/TaskSchedule";
 import { STATUS_LABEL } from "../../components/TaskStatusChips";
 import { VisibilityControl } from "../../components/VisibilityControl";
 
@@ -184,6 +185,14 @@ export default function TaskDetailPage() {
                 </div>
               </div>
             )}
+
+            <TaskScheduleCard
+              taskId={data.task.id}
+              schedule={data.task}
+              onSaved={(next) =>
+                setData((prev) => (prev === "loading" || prev === "not_found" ? prev : { ...prev, task: { ...prev.task, ...next } }))
+              }
+            />
 
             <TaskDisposition
               taskId={data.task.id}

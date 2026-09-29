@@ -17,7 +17,7 @@ import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
 import { ContradictionCard, DecisionCard, QuestionCard, TaskRow, WorkstreamCard } from "../components/ReviewCards";
 import { TaskDisposition } from "../components/TaskDisposition";
-import { ChangeList, decisionHref, ItemList, PriorityCard, shortDate } from "../components/Dashboard";
+import { ChangeList, DateTypeTag, decisionHref, ItemList, PriorityCard, shortDate } from "../components/Dashboard";
 import { formatDueDate } from "../../lib/dates";
 
 // An operating dashboard first, a database review second: priorities, what
@@ -120,7 +120,7 @@ export default function ExecutivePage() {
   }
 
   const closeOuts = data ? data.questions.filter((q) => q.needsCloseOut) : [];
-  const qualityCount = data ? data.contradictions.length + data.deadlinePassed.length : 0;
+  const qualityCount = data ? data.contradictions.length + data.deadlinePassed.length + data.pastDue.length : 0;
   const olderCount = data ? data.needsDisposition.length + data.decisionsInProgress.length + closeOuts.length : 0;
 
   return (
@@ -196,16 +196,20 @@ export default function ExecutivePage() {
             <section className="card dash-panel" aria-label="Upcoming deadlines">
               <h2 className="dash-panel-title">Upcoming deadlines</h2>
               {dash.upcomingDeadlines.length === 0 ? (
-                <p className="empty-inline">No decision due dates in the next 90 days. Dates on tasks and meetings aren&rsquo;t tracked yet, so this may be incomplete.</p>
+                <p className="empty-inline">Nothing dated in the next 90 days. Only dates recorded on tasks and decisions show here.</p>
               ) : (
                 <ul className="dash-list">
                   {dash.upcomingDeadlines.map((u) => (
-                    <li key={u.id}>
+                    <li key={`${u.kind}:${u.id}`} title={u.label ? `${u.label} (${u.title})` : u.title}>
                       <span className={`dash-due${u.daysAway <= 14 ? " dash-due-soon" : ""}`}>
                         {formatDueDate(u.date, "short")} <span className="muted">({u.daysAway === 0 ? "today" : `${u.daysAway}d`})</span>
                       </span>{" "}
-                      <Link href={decisionHref(u.id)}>{u.title}</Link>
-                      <span className="dash-detail"> · {u.owner}</span>
+                      <DateTypeTag type={u.dateType} />{" "}
+                      <Link href={u.kind === "task" ? `/tasks/${u.id}` : decisionHref(u.id)}>{u.label ?? u.title}</Link>
+                      <span className="dash-detail">
+                        {u.label && ` · ${u.title}`}
+                        {u.owner && ` · ${u.owner}`}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -213,7 +217,7 @@ export default function ExecutivePage() {
             </section>
             <section className="card dash-panel" aria-label="Waiting or blocked">
               <h2 className="dash-panel-title">Waiting / blocked</h2>
-              <ItemList items={dash.waiting} empty="Nothing is marked waiting or blocked. Dependencies mentioned only in text aren't tracked yet, so this may be incomplete." />
+              <ItemList items={dash.waiting} empty="Nothing is marked waiting or blocked, and no task records who it's waiting for." />
             </section>
           </div>
 
@@ -318,7 +322,9 @@ export default function ExecutivePage() {
               <span className="muted">
                 {" "}
                 · {data.contradictions.length} conflict{data.contradictions.length === 1 ? "" : "s"} · {data.deadlinePassed.length} past-deadline
-                decision{data.deadlinePassed.length === 1 ? "" : "s"} · {data.awaitingReviewTotal} in Review
+                decision{data.deadlinePassed.length === 1 ? "" : "s"}
+                {data.pastDue.length > 0 && ` · ${data.pastDue.length} passed task date${data.pastDue.length === 1 ? "" : "s"}`} ·{" "}
+                {data.awaitingReviewTotal} in Review
                 {dash.unsortedTasks > 0 && ` · ${dash.unsortedTasks} tasks still in Unsorted`}
               </span>
             </summary>
@@ -337,6 +343,22 @@ export default function ExecutivePage() {
                 {data.deadlinePassed.map((d) => (
                   <DecisionCard key={d.id} decision={d} deadlinePassed />
                 ))}
+              </>
+            )}
+            {data.pastDue.length > 0 && (
+              <>
+                <h3 className="dash-sub">Task dates that have passed: what actually happened?</h3>
+                <ul className="dash-list">
+                  {data.pastDue.map((t) => (
+                    <li key={t.id}>
+                      <span className="dash-due dash-due-soon">was {formatDueDate(t.dueDate!, "short")}</span> <DateTypeTag type={t.dueDateType} />{" "}
+                      <Link href={`/tasks/${t.id}`}>{t.dueLabel ?? t.title}</Link>
+                      <span className="dash-detail">
+                        {t.dueLabel && ` · ${t.title}`} · record the outcome, or set a new date
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </>
             )}
             <p className="rc-line">

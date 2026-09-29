@@ -27,6 +27,7 @@ import {
 } from "../entities/realUpdatedAt.js";
 import { UUID_RE } from "./uuid.js";
 import { setTaskDisposition, TaskDispositionError } from "../tasks/disposition.js";
+import { setTaskSchedule, type TaskScheduleFields } from "../tasks/schedule.js";
 
 const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
 
@@ -83,6 +84,11 @@ export async function loadCompanyMapTree(organizationId: string, role: UserRole)
         latestUpdate: tasks.latestUpdate,
         nextAction: tasks.nextAction,
         owner: tasks.owner,
+        dueDate: tasks.dueDate,
+        dueDateType: tasks.dueDateType,
+        dueLabel: tasks.dueLabel,
+        waitingFor: tasks.waitingFor,
+        followUpOn: tasks.followUpOn,
         updatedAt: tasks.updatedAt,
       })
       .from(tasks)
@@ -458,6 +464,32 @@ export async function companyMapRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  // A person setting the task's date or what it's waiting on (see
+  // tasks/schedule.ts). Same visibility rule as reading the task.
+  app.patch<{ Params: { id: string }; Body: TaskScheduleFields }>("/api/tasks/:id/schedule", async (request, reply) => {
+    const organizationId = request.user!.organizationId;
+    const { id } = request.params;
+    if (!UUID_RE.test(id) || !(await loadTaskDetail(organizationId, id, request.user!.role))) {
+      reply.code(404).send({ error: "Task not found" });
+      return;
+    }
+    const task = await setTaskSchedule(db, { organizationId, taskId: id, actorId: request.user!.userId, fields: request.body ?? {} });
+    if (!task) {
+      reply.code(400).send({ error: "Nothing to change" });
+      return;
+    }
+    reply.send({
+      task: {
+        id: task.id,
+        dueDate: task.dueDate,
+        dueDateType: task.dueDateType,
+        dueLabel: task.dueLabel,
+        waitingFor: task.waitingFor,
+        followUpOn: task.followUpOn,
+      },
+    });
+  });
 
   // Admin-only: raising or lowering who can see a task is a deliberate human
   // call, and specifically not something the AI interpretation pipeline can

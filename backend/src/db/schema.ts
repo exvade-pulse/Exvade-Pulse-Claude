@@ -282,6 +282,11 @@ export const projects = pgTable("projects", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// How firm a date is: a real obligation, a scheduled/planned checkpoint, or
+// someone's estimate.
+export const dateTypeEnum = pgEnum("date_type", ["confirmed", "planned", "estimated"]);
+export type DateType = (typeof dateTypeEnum.enumValues)[number];
+
 export const tasks = pgTable("tasks", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
@@ -310,6 +315,14 @@ export const tasks = pgTable("tasks", {
   // Set when this task was marked superseded by another (e.g. an approved
   // duplicate merge). The row itself is kept, so its history survives.
   supersededById: uuid("superseded_by_id").references((): AnyPgColumn => tasks.id, { onDelete: "set null" }),
+  // A dated milestone or deadline for this work: a calendar date (stored as
+  // midnight UTC), what it is ("Aged domes available"), and how firm it is.
+  dueDate: timestamp("due_date", { withTimezone: true }),
+  dueDateType: dateTypeEnum("due_date_type"),
+  dueLabel: text("due_label"),
+  // Who owes what ("Duke pathology: scanned slides") and when to chase it.
+  waitingFor: text("waiting_for"),
+  followUpOn: timestamp("follow_up_on", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
