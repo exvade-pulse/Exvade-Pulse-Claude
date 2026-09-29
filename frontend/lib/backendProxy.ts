@@ -33,8 +33,13 @@ export async function proxyToBackend(request: Request): Promise<Response> {
       redirect: "manual",
       cache: "no-store",
     });
-  } catch {
-    return Response.json({ error: "Pulse's server couldn't be reached. Try again in a minute." }, { status: 502 });
+  } catch (err) {
+    const cause = (err as { cause?: { code?: string; message?: string } })?.cause;
+    console.error("Backend proxy fetch failed", backendOrigin(), err, cause);
+    return Response.json(
+      { error: "Pulse's server couldn't be reached. Try again in a minute.", detail: `${(err as Error)?.message ?? err} ${cause?.code ?? ""} ${cause?.message ?? ""}`.trim(), target: JSON.stringify(backendOrigin()) },
+      { status: 502 },
+    );
   }
 
   const out = new Headers();
