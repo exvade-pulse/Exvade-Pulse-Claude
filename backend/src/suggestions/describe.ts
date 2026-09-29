@@ -7,6 +7,7 @@ interface DescribableSuggestion {
   targetType: string;
   targetId: string | null;
   proposedDiff: unknown;
+  changeType?: string;
 }
 
 // A plain-language name for what each suggestion is about ("Order sensor
@@ -27,6 +28,9 @@ export async function describeSuggestions(
       if (typeof diff.toId === "string") refs.push({ type: diff.toType as EntityNodeType, id: diff.toId });
     } else if (row.targetId) {
       refs.push({ type: row.targetType as EntityNodeType, id: row.targetId });
+      if (row.changeType === "merge" && typeof diff.supersededById === "string") {
+        refs.push({ type: row.targetType as EntityNodeType, id: diff.supersededById });
+      }
     }
   }
   const names = await resolveNames(db, organizationId, refs);
@@ -38,7 +42,9 @@ export async function describeSuggestions(
     const about =
       row.targetType === "relationship"
         ? `${nameOf(diff.fromType, diff.fromId)} ${String(diff.relationType)} ${nameOf(diff.toType, diff.toId)}`
-        : row.targetId
+        : row.changeType === "merge" && row.targetId
+          ? `Merge duplicate ${row.targetType} "${nameOf(row.targetType, row.targetId)}" into "${nameOf(row.targetType, diff.supersededById)}"`
+          : row.targetId
           ? nameOf(row.targetType, row.targetId)
           : `New ${row.targetType}: ${String(diff.title ?? "(untitled)")}`;
     result.set(row.id, about);

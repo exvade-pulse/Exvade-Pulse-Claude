@@ -1,6 +1,14 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Database, DbOrTx } from "../db/client.js";
-import { auditLog, decisions, sources, tasks } from "../db/schema.js";
+import {
+  auditLog,
+  decisions,
+  LIVE_DECISION_STATUSES,
+  sources,
+  tasks,
+  UNDECIDED_DECISION_STATUSES,
+  type DecisionStatus,
+} from "../db/schema.js";
 
 export class DecisionError extends Error {
   code: "not_found" | "conflict";
@@ -110,13 +118,12 @@ export async function updateDecision(db: DbOrTx, params: UpdateParams) {
     if (!existing) {
       throw new DecisionError("Decision not found", "not_found");
     }
-    // A decided decision is closed; an interpretation match is only ever
-    // offered `open` decisions to begin with (see pipeline.ts), so reaching
-    // this with an already-decided target means the decision resolved after
-    // the suggestion was drafted -- reopening it via an inferred update would
-    // undo a deliberate human resolution.
-    if (existing.status !== "open") {
-      throw new DecisionError("Decision is already decided", "conflict");
+    // Interpretation is only offered live decisions (see pipeline.ts), so a
+    // closed/superseded target means it was finished after the suggestion
+    // was drafted -- updating it via an inferred change would undo a
+    // deliberate human call.
+    if (!LIVE_DECISION_STATUSES.includes(existing.status)) {
+      throw new DecisionError(`Decision is already ${existing.status}`, "conflict");
     }
 
     if (params.fields.relatedTaskId) {
@@ -174,8 +181,8 @@ export async function addDecisionInfo(db: Database, params: AddInfoParams) {
     if (!decision) {
       throw new DecisionError("Decision not found", "not_found");
     }
-    if (decision.status !== "open") {
-      throw new DecisionError("Decision is already decided", "conflict");
+    if (!LIVE_DECISION_STATUSES.includes(decision.status)) {
+      throw new DecisionError(`Decision is already ${decision.status}`, "conflict");
     }
 
     const entry = `[${new Date().toISOString().slice(0, 10)} — ${params.actorLabel}] ${params.note}`;
@@ -219,8 +226,8 @@ export async function assignDecision(db: Database, params: AssignParams) {
     if (!decision) {
       throw new DecisionError("Decision not found", "not_found");
     }
-    if (decision.status !== "open") {
-      throw new DecisionError("Decision is already decided", "conflict");
+    if (!UNDECIDED_DECISION_STATUSES.includes(decision.status)) {
+      throw new DecisionError(`Decision is already ${decision.status}`, "conflict");
     }
 
     const previousDecider = decision.decider;
@@ -264,8 +271,8 @@ export async function resolveDecision(db: Database, params: ResolveParams) {
     if (!decision) {
       throw new DecisionError("Decision not found", "not_found");
     }
-    if (decision.status !== "open") {
-      throw new DecisionError("Decision is already decided", "conflict");
+    if (!UNDECIDED_DECISION_STATUSES.includes(decision.status)) {
+      throw new DecisionError(`Decision is already ${decision.status}`, "conflict");
     }
 
     const [updated] = await tx
@@ -321,5 +328,147 @@ export async function resolveDecision(db: Database, params: ResolveParams) {
     }
 
     return { decision: updated, unblockedTask };
+  });
+}
+
+// Which lifecycle moves a person can make directly. "decided" is reached
+// only via resolveDecision (it records the resolution); "superseded" only
+// via supersedeDecision (it records what replaced it).
+const ALLOWED_TRANSITIONS: Partial<Record<DecisionStatus, DecisionStatus[]>> = {
+  open: ["pending_info", "closed"],
+  pending_info: ["open", "closed"],
+  decided: ["action_in_progress", "closed"],
+  action_in_progress: ["closed"],
+};
+
+export const SETTABLE_DECISION_STATUSES: DecisionStatus[] = ["open", "pending_info", "action_in_progress", "closed"];
+
+interface SetStatusParams {
+  organizationId: string;
+  decisionId: string;
+  actorId: string;
+  status: DecisionStatus;
+  // Required when closing a decision that was never made (why it was
+  // closed is the only record of what happened); optional otherwise.
+  note?: string | null;
+}
+
+export async function setDecisionStatus(db: Database, params: SetStatusParams) {
+  return db.transaction(async (tx) => {
+    const [decision] = await tx
+      .select()
+      .from(decisions)
+      .where(and(eq(decisions.id, params.decisionId), eq(decisions.organizationId, params.organizationId)));
+
+    if (!decision) {
+      throw new DecisionError("Decision not found", "not_found");
+    }
+    const allowed = ALLOWED_TRANSITIONS[decision.status] ?? [];
+    if (!allowed.includes(params.status)) {
+      throw new DecisionError(`Can't move a decision from ${decision.status} to ${params.status}`, "conflict");
+    }
+    const note = params.note?.trim() || null;
+    if (params.status === "closed" && UNDECIDED_DECISION_STATUSES.includes(decision.status) && !note) {
+      throw new DecisionError("Closing a decision that was never made needs a note saying what happened", "conflict");
+    }
+
+    const set: Partial<typeof decisions.$inferInsert> = { status: params.status, updatedAt: new Date() };
+    if (note && params.status === "closed") {
+      const entry = `[${new Date().toISOString().slice(0, 10)} — closed] ${note}`;
+      set.resolution = decision.resolution ? `${decision.resolution}\n\n${entry}` : entry;
+    }
+
+    const [updated] = await tx.update(decisions).set(set).where(eq(decisions.id, decision.id)).returning();
+
+    await tx.insert(auditLog).values({
+      organizationId: params.organizationId,
+      actorId: params.actorId,
+      action: "decision.status_changed",
+      entityType: "decision",
+      entityId: decision.id,
+      details: { from: decision.status, to: params.status, note },
+    });
+
+    return updated;
+  });
+}
+
+interface SupersedeParams {
+  organizationId: string;
+  // The duplicate: kept as a record, marked superseded.
+  decisionId: string;
+  // The canonical decision it's merged into.
+  supersededById: string;
+  actorId: string;
+}
+
+// Merges a duplicate into its canonical decision without deleting anything:
+// the duplicate is marked superseded and points at the canonical one, and
+// whatever the duplicate knew that the canonical didn't (its reasoning and
+// context, a due date, stakeholders, a related task) is copied over. The
+// duplicate's own row, history and audit trail stay intact.
+export async function supersedeDecision(db: DbOrTx, params: SupersedeParams) {
+  return db.transaction(async (tx) => {
+    if (params.decisionId === params.supersededById) {
+      throw new DecisionError("A decision can't supersede itself", "conflict");
+    }
+    const rows = await tx
+      .select()
+      .from(decisions)
+      .where(
+        and(eq(decisions.organizationId, params.organizationId), inArray(decisions.id, [params.decisionId, params.supersededById])),
+      );
+    const duplicate = rows.find((d) => d.id === params.decisionId);
+    const keep = rows.find((d) => d.id === params.supersededById);
+    if (!duplicate || !keep) {
+      throw new DecisionError("Decision not found", "not_found");
+    }
+    if (duplicate.status === "superseded" || duplicate.status === "closed") {
+      throw new DecisionError(`The duplicate is already ${duplicate.status}`, "conflict");
+    }
+    if (keep.status === "superseded") {
+      throw new DecisionError("The decision to keep has itself been superseded", "conflict");
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const carried = [duplicate.whyItMatters, duplicate.relevantContext, duplicate.suggestedNextStep]
+      .filter((text): text is string => !!text && !(keep.relevantContext ?? "").includes(text) && text !== keep.whyItMatters)
+      .join("\n");
+    const mergeEntry = `[${today} — merged from duplicate "${duplicate.title}"]${carried ? ` ${carried}` : ""}`;
+    const keepPatch: Partial<typeof decisions.$inferInsert> = {
+      relevantContext: keep.relevantContext ? `${keep.relevantContext}\n\n${mergeEntry}` : mergeEntry,
+      stakeholders: [...new Set([...keep.stakeholders, ...duplicate.stakeholders])],
+      updatedAt: new Date(),
+    };
+    if (!keep.dueDate && duplicate.dueDate) keepPatch.dueDate = duplicate.dueDate;
+    if (!keep.relatedTaskId && duplicate.relatedTaskId) keepPatch.relatedTaskId = duplicate.relatedTaskId;
+
+    const [kept] = await tx.update(decisions).set(keepPatch).where(eq(decisions.id, keep.id)).returning();
+    const [superseded] = await tx
+      .update(decisions)
+      .set({ status: "superseded", supersededById: keep.id, updatedAt: new Date() })
+      .where(eq(decisions.id, duplicate.id))
+      .returning();
+
+    await tx.insert(auditLog).values([
+      {
+        organizationId: params.organizationId,
+        actorId: params.actorId,
+        action: "decision.superseded",
+        entityType: "decision",
+        entityId: duplicate.id,
+        details: { supersededById: keep.id, previousStatus: duplicate.status },
+      },
+      {
+        organizationId: params.organizationId,
+        actorId: params.actorId,
+        action: "decision.merged_into",
+        entityType: "decision",
+        entityId: keep.id,
+        details: { duplicateId: duplicate.id, duplicateTitle: duplicate.title },
+      },
+    ]);
+
+    return { kept, superseded };
   });
 }

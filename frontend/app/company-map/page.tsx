@@ -27,7 +27,7 @@ function Toggle({ open, hasChildren, onClick }: { open: boolean; hasChildren: bo
 }
 
 function formatUpdated(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function UpdatedLine({ updatedAt }: { updatedAt: string }) {
@@ -293,7 +293,7 @@ export default function CompanyMapPage() {
 
       <div className="card-actions" style={{ marginBottom: 16 }}>
         <button className="decision-btn" onClick={handleCheckDuplicates} disabled={checkingDuplicates}>
-          {checkingDuplicates ? "Checking…" : "Check for duplicate tasks"}
+          {checkingDuplicates ? "Checking…" : "Check for duplicates"}
         </button>
         <button className="decision-btn" onClick={handleSuggestRelationships} disabled={checkingRelationships}>
           {checkingRelationships ? "Checking…" : "Suggest relationships"}
@@ -303,9 +303,12 @@ export default function CompanyMapPage() {
       {duplicateResult && (
         <p className="card activity-summary">
           Checked {duplicateResult.tasksChecked} task{duplicateResult.tasksChecked === 1 ? "" : "s"} across{" "}
-          {duplicateResult.projectsChecked} project{duplicateResult.projectsChecked === 1 ? "" : "s"} -- found{" "}
-          {duplicateResult.duplicatesFound} likely duplicate{duplicateResult.duplicatesFound === 1 ? "" : "s"}.
-          {duplicateResult.duplicatesFound > 0 && (
+          {duplicateResult.projectsChecked} project{duplicateResult.projectsChecked === 1 ? "" : "s"} and{" "}
+          {duplicateResult.decisionsChecked} open decision{duplicateResult.decisionsChecked === 1 ? "" : "s"} -- found{" "}
+          {duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound} likely duplicate
+          {duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound === 1 ? "" : "s"}. Each is a merge
+          suggestion; nothing changes until you approve it.
+          {duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound > 0 && (
             <>
               {" "}
               <Link href="/review">Review them</Link>.

@@ -187,6 +187,7 @@ function reviewerLabel(s: Suggestion): string {
 // below, since an objective-type suggestion groups under its own name.
 function cardTitle(s: Suggestion): string {
   if (s.targetType === "relationship") return "New relationship";
+  if (s.changeType === "merge") return `Possible duplicate: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
   return s.targetId
     ? String(s.currentState?.title ?? `${TARGET_LABEL[s.targetType]} update`)
     : String(s.proposedDiff.title ?? `${TARGET_LABEL[s.targetType]} update`);
@@ -396,7 +397,9 @@ export default function ReviewPage() {
             <span className="muted">
               {s.targetType === "relationship"
                 ? "Proposes new relationship"
-                : s.targetId
+                : s.changeType === "merge"
+                  ? `Proposes merging two ${TARGET_LABEL[s.targetType].toLowerCase()}s`
+                  : s.targetId
                   ? `Updates existing ${TARGET_LABEL[s.targetType]}`
                   : `Proposes new ${TARGET_LABEL[s.targetType]}`}
             </span>
@@ -436,6 +439,17 @@ export default function ReviewPage() {
             relationType={s.proposedDiff.relationType as RelationType | undefined}
             note={s.proposedDiff.note as string | undefined}
           />
+        ) : s.changeType === "merge" ? (
+          <div className="merge-explainer">
+            <p className="card-diff">
+              &ldquo;{String(s.currentState?.title ?? "This record")}&rdquo; looks like a duplicate of &ldquo;
+              {s.mergeInto?.title ?? "another record"}&rdquo;.
+            </p>
+            <p className="rc-meta">
+              Approving keeps &ldquo;{s.mergeInto?.title ?? "the other record"}&rdquo;, marks this one superseded and copies its
+              notes over. Nothing is deleted.
+            </p>
+          </div>
         ) : (
           <p className="card-diff">
             {isHistory ? formatDiff(s.proposedDiff) : formatDiffWithCurrentState(s.proposedDiff, s.currentState)}
@@ -443,6 +457,16 @@ export default function ReviewPage() {
         )}
 
         <ConflictCallout conflicts={s.conflicts} />
+
+        {s.likelyDuplicateOf && !isHistory && (
+          <p className="duplicate-hint">
+            Looks like a copy of {s.likelyDuplicateOf.kind === "existing" ? "existing" : "another pending suggestion,"}{" "}
+            &ldquo;{s.likelyDuplicateOf.title}&rdquo; ({Math.round(s.likelyDuplicateOf.similarity * 100)}% similar wording).
+            {s.likelyDuplicateOf.kind === "existing"
+              ? " Consider rejecting this and adding anything new to the existing one."
+              : " Consider approving only one."}
+          </p>
+        )}
 
         <p className="card-reasoning">{s.reasoning}</p>
 
@@ -486,13 +510,16 @@ export default function ReviewPage() {
                 >
                   Reject
                 </button>
-                <button
-                  className="decision-btn edit"
-                  disabled={pendingActionId === s.id}
-                  onClick={() => startEdit(s)}
-                >
-                  Edit
-                </button>
+                {/* A merge is a yes/no question; its only field is an internal id. */}
+                {s.changeType !== "merge" && (
+                  <button
+                    className="decision-btn edit"
+                    disabled={pendingActionId === s.id}
+                    onClick={() => startEdit(s)}
+                  >
+                    Edit
+                  </button>
+                )}
               </>
             )}
           </div>

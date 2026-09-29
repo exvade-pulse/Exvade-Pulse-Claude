@@ -1,8 +1,9 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { auditLog, initiatives, objectives, projects, sources, suggestions, tasks, type EntityNodeType, type RelationType } from "../db/schema.js";
-import { createDecision, updateDecision } from "../decisions/manage.js";
+import { createDecision, DecisionError, supersedeDecision, updateDecision } from "../decisions/manage.js";
 import { createRelationship, RelationshipError } from "../relationships/manage.js";
+import { supersedeTask, SupersedeError } from "../tasks/supersede.js";
 
 export class SuggestionApplyError extends Error {}
 
@@ -99,6 +100,10 @@ export function pickAllowedFields(
   changeType: string,
   diff: Record<string, unknown>,
 ) {
+  // A merge only ever says which record to keep; nothing else rides along.
+  if (changeType === "merge") {
+    return "supersededById" in diff ? { supersededById: diff.supersededById } : {};
+  }
   const contextFields = changeType === "context" ? CONTEXT_ONLY_FIELDS[targetType] : undefined;
   const allowed = contextFields ?? ALLOWED_FIELDS[targetType];
   const result: Record<string, unknown> = {};
@@ -139,7 +144,32 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
 
     let resultTargetId: string;
 
-    if (targetType === "relationship") {
+    if (suggestion.changeType === "merge") {
+      // A duplicate merge: the target is the duplicate, supersededById the
+      // record to keep. Neither row is deleted -- see supersedeDecision /
+      // supersedeTask. Their own errors (a record since superseded, a self-
+      // merge) fail this one suggestion gracefully.
+      const keepId = fields.supersededById;
+      if (typeof keepId !== "string" || !suggestion.targetId) {
+        throw new SuggestionApplyError("Merge suggestion is missing the record to keep");
+      }
+      const merge = { organizationId: params.organizationId, supersededById: keepId, actorId: params.reviewerId };
+      try {
+        if (targetType === "decision") {
+          await supersedeDecision(tx, { ...merge, decisionId: suggestion.targetId });
+        } else if (targetType === "task") {
+          await supersedeTask(tx, { ...merge, taskId: suggestion.targetId });
+        } else {
+          throw new SuggestionApplyError(`Merging isn't supported for ${targetType}`);
+        }
+      } catch (err) {
+        if (err instanceof DecisionError || err instanceof SupersedeError) {
+          throw new SuggestionApplyError(err.message);
+        }
+        throw err;
+      }
+      resultTargetId = suggestion.targetId;
+    } else if (targetType === "relationship") {
       // Always a create (targetId is never set for a relationship draft --
       // see interpret.ts/relationshipDetection.ts, there's no single existing
       // row to "update", both endpoints live in the diff itself).

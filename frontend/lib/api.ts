@@ -69,6 +69,12 @@ export interface Suggestion {
     from: { type: EntityNodeType; id: string; title: string };
     to: { type: EntityNodeType; id: string; title: string };
   } | null;
+  // Set only for a changeType "merge" suggestion: the record the duplicate
+  // (targetId) would be merged into.
+  mergeInto: { id: string; title: string } | null;
+  // A free wording-similarity hint on pending "create new task/decision"
+  // suggestions that read like an existing record or an earlier pending one.
+  likelyDuplicateOf: { kind: "existing" | "pending"; id: string; title: string; similarity: number } | null;
   // Null in the overwhelming common case -- see ConflictEntry.
   conflicts: ConflictEntry[] | null;
 }
@@ -165,7 +171,8 @@ export type TaskStatus =
   | "completed"
   | "superseded"
   | "resolved"
-  | "blocked";
+  | "blocked"
+  | "cancelled";
 
 export type TaskCounts = Record<TaskStatus, number>;
 
@@ -273,6 +280,8 @@ export async function editSuggestion(id: string, proposedDiff: Record<string, un
 // between them yet (see backend/src/access/visibility.ts).
 export type Visibility = "team" | "leadership" | "restricted";
 
+export type DecisionStatus = "open" | "pending_info" | "decided" | "action_in_progress" | "closed" | "superseded";
+
 export interface Decision {
   id: string;
   title: string;
@@ -281,7 +290,8 @@ export interface Decision {
   suggestedNextStep: string | null;
   decider: string;
   stakeholders: string[];
-  status: "open" | "decided";
+  status: DecisionStatus;
+  supersededById: string | null;
   dueDate: string | null;
   resolution: string | null;
   decidedAt: string | null;
@@ -309,15 +319,57 @@ export async function setDecisionVisibility(id: string, visibility: Visibility):
   }
 }
 
-// No status query param: the backend defaults to "open" -- decisions still
-// awaiting a call, same default-to-active-work pattern as suggestions.
-export async function fetchOpenDecisions(): Promise<Decision[]> {
-  const res = await fetch(`${API_URL}/api/decisions`, { credentials: "include" });
+// A person closing out a task directly: done, not relevant anymore
+// (cancelled), or reopening a done/cancelled one. Nothing is deleted.
+export async function setTaskStatus(
+  id: string,
+  status: "completed" | "cancelled" | "active",
+  note?: string,
+): Promise<{ id: string; status: TaskStatus; latestUpdate: string | null }> {
+  const res = await fetch(`${API_URL}/api/tasks/${id}/status`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status, note }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to update task");
+  }
+  const body = (await res.json()) as { task: { id: string; status: TaskStatus; latestUpdate: string | null } };
+  return body.task;
+}
+
+// "live" (the default) = still needs the call, or decided and being carried
+// out; "undecided" = still needs the call. Finished ones are left out.
+export async function fetchOpenDecisions(scope: "live" | "undecided" = "live"): Promise<Decision[]> {
+  const res = await fetch(`${API_URL}/api/decisions?status=${scope}`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to load decisions (${res.status})`);
   }
   const body = (await res.json()) as { decisions: Decision[] };
   return body.decisions;
+}
+
+// Lifecycle moves: pending info, back to open, action in progress, closed.
+// Closing a decision that was never made needs a note saying what happened.
+export async function setDecisionStatus(
+  id: string,
+  status: "open" | "pending_info" | "action_in_progress" | "closed",
+  note?: string,
+): Promise<Decision> {
+  const res = await fetch(`${API_URL}/api/decisions/${id}/status`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status, note }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? "Failed to update decision");
+  }
+  const body = (await res.json()) as { decision: Decision };
+  return body.decision;
 }
 
 export interface CreateDecisionInput {
@@ -744,6 +796,7 @@ export interface ReviewTask {
 export interface ReviewDecision {
   id: string;
   title: string;
+  status: DecisionStatus;
   decider: string;
   stakeholders: string[];
   dueDate: string | null;
@@ -754,11 +807,20 @@ export interface ReviewDecision {
   relatedTask: string | null;
 }
 
+export interface ReviewChange {
+  kind: string;
+  title: string;
+  detail: string;
+}
+
 export interface ExecutiveReviewData {
   generatedAt: string;
+  // Null until the viewer first marks the review as reviewed.
+  sinceLastReview: { lastReviewedAt: string; changes: ReviewChange[] } | null;
   headline: string[];
   decisionsNeeded: ReviewDecision[];
   deadlinePassed: ReviewDecision[];
+  decisionsInProgress: ReviewDecision[];
   risks: ReviewTask[];
   operatingActions: ReviewTask[];
   needsDisposition: ReviewTask[];
@@ -775,6 +837,16 @@ export async function fetchExecutiveReview(): Promise<{ text: string; data: Exec
   const res = await fetch(`${API_URL}/api/reports/executive-review`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to build the review (${res.status})`);
+  }
+  return res.json();
+}
+
+// Saves the current review as the baseline "Since last review" compares
+// against next time.
+export async function markExecutiveReviewReviewed(): Promise<{ lastReviewedAt: string }> {
+  const res = await fetch(`${API_URL}/api/reports/executive-review/mark-reviewed`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Failed to mark as reviewed (${res.status})`);
   }
   return res.json();
 }
@@ -957,6 +1029,8 @@ export interface DuplicateCheckResult {
   projectsChecked: number;
   tasksChecked: number;
   duplicatesFound: number;
+  decisionsChecked: number;
+  decisionDuplicatesFound: number;
 }
 
 // Triggers an on-demand Claude pass (one call per project with 2+ open
@@ -1123,7 +1197,7 @@ export interface SearchTaskResult {
 export interface SearchDecisionResult {
   id: string;
   title: string;
-  status: "open" | "decided";
+  status: DecisionStatus;
   decider: string;
 }
 

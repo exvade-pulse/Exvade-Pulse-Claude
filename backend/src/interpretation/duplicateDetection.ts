@@ -13,6 +13,16 @@ export interface DuplicateCandidateTask {
   status: string;
 }
 
+export interface DuplicateCandidateDecision {
+  id: string;
+  title: string;
+  whyItMatters: string | null;
+  relevantContext: string | null;
+  decider: string;
+  dueDate: Date | null;
+  status: string;
+}
+
 export interface DuplicatePair {
   keepTaskId: string;
   supersedeTaskId: string;
@@ -20,89 +30,88 @@ export interface DuplicatePair {
   confidence: number;
 }
 
-const duplicatePairSchema = z.object({
-  keepTaskId: z.string().uuid(),
-  supersedeTaskId: z.string().uuid(),
-  reasoning: z.string().min(1),
-  confidence: z.number().min(0).max(1),
-});
-
-const duplicateToolInputSchema = z.object({
-  duplicates: z.array(duplicatePairSchema),
-});
-
-const FLAG_DUPLICATES_TOOL: Anthropic.Tool = {
-  name: "flag_duplicate_tasks",
-  description:
-    "Report every pair of tasks in this project that track the exact same underlying work item twice. Most projects have none -- call this with an empty duplicates array unless you find a genuine, specific duplicate.",
-  input_schema: {
-    type: "object",
-    properties: {
-      duplicates: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            keepTaskId: {
-              type: "string",
-              description: "The id of the task to keep -- prefer the more complete/detailed or more recently updated one.",
-            },
-            supersedeTaskId: {
-              type: "string",
-              description: "The id of the duplicate task to mark superseded. Must differ from keepTaskId.",
-            },
-            reasoning: {
-              type: "string",
-              description: "A short, specific explanation of why these two tasks are the same underlying work item, not just related.",
-            },
-            confidence: {
-              type: "number",
-              minimum: 0,
-              maximum: 1,
-              description: "Confidence that these two tasks are genuinely duplicates, from 0 to 1.",
-            },
-          },
-          required: ["keepTaskId", "supersedeTaskId", "reasoning", "confidence"],
-        },
-      },
-    },
-    required: ["duplicates"],
-  },
-};
-
-function buildPrompt(tasks: DuplicateCandidateTask[]): string {
-  const taskLines = tasks
-    .map((t) => {
-      const parts = [
-        `id=${t.id} status=${t.status} title="${t.title}"`,
-        t.description ? `  description: ${t.description}` : null,
-        t.latestUpdate ? `  latest update: ${t.latestUpdate}` : null,
-        t.nextAction ? `  next action: ${t.nextAction}` : null,
-      ].filter((line): line is string => line !== null);
-      return parts.join("\n");
-    })
-    .join("\n\n");
-
-  return `These are all the open tasks currently tracked under one project:
-
-${taskLines}
-
-Do any of these tasks describe the exact same underlying piece of work tracked twice -- not just related or similar-sounding work, but genuinely the same thing (e.g. two tasks both about the same specific vendor call, the same specific bug, the same specific deliverable)? For each real duplicate pair, decide which one to keep (prefer the more complete or more recently updated one) and call flag_duplicate_tasks. It is normal and expected to find none -- only report a pair when you're specifically confident they track the same thing, not merely the same general topic.`;
+export interface DuplicateDecisionPair {
+  keepDecisionId: string;
+  supersedeDecisionId: string;
+  reasoning: string;
+  confidence: number;
 }
 
-// Checks one project's task list for genuine duplicates in a single Claude
-// call (not one call per task pair) -- cheap enough to run across every
-// project in an org without the cost scaling with task count squared.
-// Defensively drops any pair referencing an id outside the given task list,
-// a self-referential pair, or a second pair naming a supersedeTaskId already
-// used by an earlier pair in the same response (a task can only be marked
-// superseded once per run) -- same "never trust a model-returned id blindly"
-// posture as the rest of the interpretation pipeline.
-export async function findDuplicateTasks(
-  tasks: DuplicateCandidateTask[],
-  claudeClient: ClaudeClient = getClaudeClient(),
-): Promise<DuplicatePair[]> {
-  if (tasks.length < 2) return [];
+interface GenericPair {
+  keepId: string;
+  supersedeId: string;
+  reasoning: string;
+  confidence: number;
+}
+
+interface DuplicateKind<T> {
+  toolName: string;
+  // Plural noun used in the prompt and tool description ("tasks", "decisions").
+  noun: string;
+  keepKey: string;
+  supersedeKey: string;
+  keepHint: string;
+  scope: string;
+  examples: string;
+  format: (item: T) => string[];
+}
+
+function buildTool<T>(kind: DuplicateKind<T>): Anthropic.Tool {
+  return {
+    name: kind.toolName,
+    description: `Report every pair of ${kind.noun} that track the exact same underlying item twice. Most lists have none -- call this with an empty duplicates array unless you find a genuine, specific duplicate.`,
+    input_schema: {
+      type: "object",
+      properties: {
+        duplicates: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              [kind.keepKey]: { type: "string", description: `The id to keep -- ${kind.keepHint}` },
+              [kind.supersedeKey]: {
+                type: "string",
+                description: `The id of the duplicate to mark superseded. Must differ from ${kind.keepKey}.`,
+              },
+              reasoning: {
+                type: "string",
+                description: "A short, specific explanation of why these two are the same underlying item, not just related.",
+              },
+              confidence: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+                description: "Confidence that these two are genuinely duplicates, from 0 to 1.",
+              },
+            },
+            required: [kind.keepKey, kind.supersedeKey, "reasoning", "confidence"],
+          },
+        },
+      },
+      required: ["duplicates"],
+    },
+  };
+}
+
+// One Claude call per list (not per pair), so cost scales with the number of
+// lists checked rather than items squared. Defensively drops any pair naming
+// an id outside the given list, a self-pair, or a second pair reusing an
+// already-superseded id (each item can only be marked superseded once per
+// run) -- the same "never trust a model-returned id blindly" posture as the
+// rest of the interpretation pipeline.
+async function findDuplicates<T extends { id: string }>(
+  items: T[],
+  kind: DuplicateKind<T>,
+  claudeClient: ClaudeClient,
+): Promise<GenericPair[]> {
+  if (items.length < 2) return [];
+
+  const lines = items.map((item) => kind.format(item).join("\n")).join("\n\n");
+  const prompt = `These are all the open ${kind.noun} currently tracked ${kind.scope}:
+
+${lines}
+
+Do any of these describe the exact same underlying item tracked twice -- not just related or similar-sounding, but genuinely the same thing, even if worded differently (${kind.examples})? For each real duplicate pair, decide which one to keep (${kind.keepHint}) and call ${kind.toolName}. It is normal and expected to find none -- only report a pair when you're specifically confident they track the same thing, not merely the same general topic.`;
 
   const response = await claudeClient.createMessage({
     model: DUPLICATE_DETECTION_MODEL,
@@ -110,27 +119,89 @@ export async function findDuplicateTasks(
     thinking: { type: "adaptive" },
     output_config: { effort: "high" },
     tool_choice: { type: "auto" },
-    tools: [FLAG_DUPLICATES_TOOL],
-    messages: [{ role: "user", content: buildPrompt(tasks) }],
+    tools: [buildTool(kind)],
+    messages: [{ role: "user", content: prompt }],
   });
 
   const toolUse = response.content.find((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   if (!toolUse) return [];
 
-  const parsed = duplicateToolInputSchema.safeParse(toolUse.input);
+  const pairSchema = z.object({
+    [kind.keepKey]: z.string().uuid(),
+    [kind.supersedeKey]: z.string().uuid(),
+    reasoning: z.string().min(1),
+    confidence: z.number().min(0).max(1),
+  });
+  const parsed = z.object({ duplicates: z.array(pairSchema) }).safeParse(toolUse.input);
   if (!parsed.success) return [];
 
-  const knownIds = new Set(tasks.map((t) => t.id));
+  const knownIds = new Set(items.map((item) => item.id));
   const usedSupersedeIds = new Set<string>();
-  const result: DuplicatePair[] = [];
-
-  for (const pair of parsed.data.duplicates) {
-    if (pair.keepTaskId === pair.supersedeTaskId) continue;
-    if (!knownIds.has(pair.keepTaskId) || !knownIds.has(pair.supersedeTaskId)) continue;
-    if (usedSupersedeIds.has(pair.supersedeTaskId)) continue;
-    usedSupersedeIds.add(pair.supersedeTaskId);
-    result.push(pair);
+  const result: GenericPair[] = [];
+  for (const raw of parsed.data.duplicates) {
+    const pair = raw as Record<string, unknown>;
+    const keepId = String(pair[kind.keepKey]);
+    const supersedeId = String(pair[kind.supersedeKey]);
+    if (keepId === supersedeId) continue;
+    if (!knownIds.has(keepId) || !knownIds.has(supersedeId)) continue;
+    if (usedSupersedeIds.has(supersedeId)) continue;
+    usedSupersedeIds.add(supersedeId);
+    result.push({ keepId, supersedeId, reasoning: String(pair.reasoning), confidence: Number(pair.confidence) });
   }
-
   return result;
+}
+
+const TASK_KIND: DuplicateKind<DuplicateCandidateTask> = {
+  toolName: "flag_duplicate_tasks",
+  noun: "tasks",
+  keepKey: "keepTaskId",
+  supersedeKey: "supersedeTaskId",
+  keepHint: "prefer the more complete/detailed or more recently updated one",
+  scope: "under one project",
+  examples: "e.g. two tasks both about the same specific vendor call, the same specific bug, the same specific deliverable",
+  format: (t) =>
+    [
+      `id=${t.id} status=${t.status} title="${t.title}"`,
+      t.description ? `  description: ${t.description}` : null,
+      t.latestUpdate ? `  latest update: ${t.latestUpdate}` : null,
+      t.nextAction ? `  next action: ${t.nextAction}` : null,
+    ].filter((line): line is string => line !== null),
+};
+
+const DECISION_KIND: DuplicateKind<DuplicateCandidateDecision> = {
+  toolName: "flag_duplicate_decisions",
+  noun: "decisions",
+  keepKey: "keepDecisionId",
+  supersedeKey: "supersedeDecisionId",
+  keepHint: "prefer the one with the clearer, more complete framing and context",
+  scope: "for the company",
+  examples:
+    'e.g. "Which path should be chosen for Fast Track Grant Aim 1..." and "What path should be chosen for Fast Track Grant Aim 1..." are the same open question',
+  format: (d) =>
+    [
+      `id=${d.id} status=${d.status} decider="${d.decider}"${d.dueDate ? ` due=${d.dueDate.toISOString().slice(0, 10)}` : ""} title="${d.title}"`,
+      d.whyItMatters ? `  why it matters: ${d.whyItMatters}` : null,
+      d.relevantContext ? `  context: ${d.relevantContext}` : null,
+    ].filter((line): line is string => line !== null),
+};
+
+export async function findDuplicateTasks(
+  tasks: DuplicateCandidateTask[],
+  claudeClient: ClaudeClient = getClaudeClient(),
+): Promise<DuplicatePair[]> {
+  const pairs = await findDuplicates(tasks, TASK_KIND, claudeClient);
+  return pairs.map((p) => ({ keepTaskId: p.keepId, supersedeTaskId: p.supersedeId, reasoning: p.reasoning, confidence: p.confidence }));
+}
+
+export async function findDuplicateDecisions(
+  decisions: DuplicateCandidateDecision[],
+  claudeClient: ClaudeClient = getClaudeClient(),
+): Promise<DuplicateDecisionPair[]> {
+  const pairs = await findDuplicates(decisions, DECISION_KIND, claudeClient);
+  return pairs.map((p) => ({
+    keepDecisionId: p.keepId,
+    supersedeDecisionId: p.supersedeId,
+    reasoning: p.reasoning,
+    confidence: p.confidence,
+  }));
 }

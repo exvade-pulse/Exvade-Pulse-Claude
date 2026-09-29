@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { entityRelationships, decisions, projects, sources, suggestions, tasks } from "../db/schema.js";
+import { entityRelationships, decisions, LIVE_DECISION_STATUSES, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
 import { findRelationships, type RelationshipCandidate } from "../interpretation/relationshipDetection.js";
 import { getClaudeClient } from "../interpretation/claudeClient.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
@@ -11,11 +11,7 @@ import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 // Same reasoning as duplicates.ts: a closed task carries nothing left to
 // depend on or be blocked by, so there's no point flagging it (or matching
 // other tasks against it) as one end of a new relationship.
-const RELATIONSHIP_CHECK_EXCLUDED_TASK_STATUSES: Array<"completed" | "resolved" | "superseded"> = [
-  "completed",
-  "resolved",
-  "superseded",
-];
+const RELATIONSHIP_CHECK_EXCLUDED_TASK_STATUSES = TERMINAL_TASK_STATUSES;
 
 function relationshipKey(fromType: string, fromId: string, toType: string, toId: string): string {
   return `${fromType}:${fromId}:${toType}:${toId}`;
@@ -43,7 +39,7 @@ export async function relationshipSuggestionRoutes(app: FastifyInstance) {
     const decisionRows = await db
       .select({ id: decisions.id, title: decisions.title, whyItMatters: decisions.whyItMatters, status: decisions.status })
       .from(decisions)
-      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open")));
+      .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES)));
 
     const decisionCandidates: RelationshipCandidate[] = decisionRows.map((d) => ({
       type: "decision",

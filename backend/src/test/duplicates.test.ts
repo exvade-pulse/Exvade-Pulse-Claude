@@ -45,7 +45,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     await app.close();
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
   });
 
   it("skips a project with fewer than two eligible tasks without calling Claude", async () => {
@@ -66,7 +66,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
   });
 
   it("excludes completed/resolved/superseded tasks from both the count and the comparison set", async () => {
@@ -91,7 +91,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
   });
 
   it("proposes superseding the duplicate task Claude flags, citing a synthetic manual source", async () => {
@@ -122,15 +122,16 @@ describe("POST /api/tasks/check-duplicates", () => {
     await app.close();
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 1 });
+    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 1, decisionsChecked: 0, decisionDuplicatesFound: 0 });
 
     const suggestionRows = await db
       .select()
       .from(suggestions)
       .where(and(eq(suggestions.organizationId, fixture.org.id), eq(suggestions.targetId, taskA.id)));
     expect(suggestionRows).toHaveLength(1);
-    expect(suggestionRows[0].proposedDiff).toMatchObject({ status: "superseded" });
-    expect((suggestionRows[0].proposedDiff as { latestUpdate: string }).latestUpdate).toContain(taskB.title);
+    // A merge proposal: nothing changes until it's approved.
+    expect(suggestionRows[0].changeType).toBe("merge");
+    expect(suggestionRows[0].proposedDiff).toEqual({ supersededById: taskB.id });
     expect(suggestionRows[0].confidence).toBe(0.85);
 
     const [sourceRow] = await db.select().from(sources).where(eq(sources.id, suggestionRows[0].sourceId));
@@ -157,7 +158,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
 
     // createFixtureOrg already inserts one default (type "gmail") source as
     // part of org setup -- the assertion is that the route creates no
@@ -199,7 +200,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 2, tasksChecked: 4, duplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 2, tasksChecked: 4, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
     expect(callCount).toBe(2);
   });
 
@@ -225,7 +226,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
   });
 
   it("returns 401 for an unauthenticated request", async () => {

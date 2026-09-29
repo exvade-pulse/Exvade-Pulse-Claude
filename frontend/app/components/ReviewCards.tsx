@@ -23,6 +23,8 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
         <p className="card-title rc-title">{decision.title}</p>
         {deadlinePassed ? (
           <span className="chip chip-attention">Deadline passed</span>
+        ) : decision.status === "pending_info" ? (
+          <span className="chip">Waiting on info</span>
         ) : decision.dueDate ? (
           <span className="chip">Due {formatDate(decision.dueDate)}</span>
         ) : (
@@ -65,7 +67,16 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
 // One task per row: status and title first, then the next action, owner and
 // how fresh its evidence is. Why it was ranked where it is lives behind
 // "Why this is here" -- the score is supporting detail, not the headline.
-export function TaskRow({ task, showWhy = true }: { task: ReviewTask; showWhy?: boolean }) {
+export function TaskRow({
+  task,
+  showWhy = true,
+  children,
+}: {
+  task: ReviewTask;
+  showWhy?: boolean;
+  // Optional actions rendered under the row (e.g. disposition buttons).
+  children?: React.ReactNode;
+}) {
   return (
     <div className="task-row rc-task">
       <div className="task-row-top">
@@ -97,6 +108,7 @@ export function TaskRow({ task, showWhy = true }: { task: ReviewTask; showWhy?: 
           {task.latestUpdate && <p className="rc-line">{task.latestUpdate}</p>}
         </details>
       )}
+      {children}
     </div>
   );
 }

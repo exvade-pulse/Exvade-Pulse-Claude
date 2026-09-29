@@ -884,6 +884,20 @@ summary:focus-visible {
   text-decoration: underline;
 }
 
+/* Informational, not alarming: a nudge on a likely-duplicate suggestion. */
+.duplicate-hint {
+  font-size: var(--text-sm);
+  color: var(--caution);
+  background: var(--caution-soft);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+}
+
+.merge-explainer {
+  margin: var(--space-2) 0;
+}
+
 .chip-quiet {
   background: transparent;
   color: var(--text-muted);
@@ -938,6 +952,24 @@ summary:focus-visible {
 .exec-developments li {
   font-size: var(--text-md);
   margin: var(--space-1) 0;
+}
+
+.exec-header-actions {
+  margin-top: 0;
+}
+
+.exec-changes ul {
+  margin: var(--space-1) 0 0;
+  padding-left: 20px;
+}
+
+.exec-changes li {
+  font-size: var(--text-md);
+  margin: var(--space-1) 0;
+}
+
+.exec-in-progress {
+  margin-top: 0;
 }
 
 .exec-date {

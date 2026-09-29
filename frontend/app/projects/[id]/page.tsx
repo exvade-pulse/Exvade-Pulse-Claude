@@ -22,7 +22,7 @@ function snippet(text: string | null): string | null {
 }
 
 function formatUpdated(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export default function ProjectDetailPage() {

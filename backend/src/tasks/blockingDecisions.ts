@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { DbOrTx } from "../db/client.js";
-import { decisions } from "../db/schema.js";
+import { decisions, UNDECIDED_DECISION_STATUSES } from "../db/schema.js";
 
 export interface BlockingDecisionRef {
   id: string;
@@ -26,7 +26,7 @@ export async function blockingDecisionsForTasks(
     .where(
       and(
         eq(decisions.organizationId, organizationId),
-        eq(decisions.status, "open"),
+        inArray(decisions.status, UNDECIDED_DECISION_STATUSES),
         inArray(decisions.relatedTaskId, taskIds),
       ),
     );

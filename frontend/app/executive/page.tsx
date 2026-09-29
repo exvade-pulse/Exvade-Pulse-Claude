@@ -6,20 +6,23 @@ import {
   API_URL,
   fetchCurrentUser,
   fetchExecutiveReview,
+  markExecutiveReviewReviewed,
   type ExecutiveReviewData,
   type SessionUser,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
 import { DecisionCard, TaskRow } from "../components/ReviewCards";
+import { TaskDisposition } from "../components/TaskDisposition";
 
 // Long lists show their top items; the rest sit behind "Show all" so the
 // page stays scannable in under a minute.
 const OPERATING_PREVIEW = 8;
 const DEVELOPMENTS_PREVIEW = 6;
+const CHANGES_PREVIEW = 5;
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export default function ExecutivePage() {
@@ -27,6 +30,8 @@ export default function ExecutivePage() {
   const [data, setData] = useState<ExecutiveReviewData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showAllOperating, setShowAllOperating] = useState(false);
+  const [marking, setMarking] = useState(false);
+  const [markedAt, setMarkedAt] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -39,6 +44,18 @@ export default function ExecutivePage() {
         .catch((err) => setLoadError(err.message));
     }
   }, [user]);
+
+  async function handleMarkReviewed() {
+    setMarking(true);
+    try {
+      const { lastReviewedAt } = await markExecutiveReviewReviewed();
+      setMarkedAt(lastReviewedAt);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setMarking(false);
+    }
+  }
 
   if (user === "loading") {
     return (
@@ -71,7 +88,14 @@ export default function ExecutivePage() {
       <Nav user={user} />
       <div className="header">
         <h1>Executive review</h1>
-        {data && <span className="muted">As of {new Date(data.generatedAt).toLocaleString()}</span>}
+        {data && (
+          <div className="card-actions exec-header-actions">
+            <span className="muted">As of {new Date(data.generatedAt).toLocaleString()}</span>
+            <button className="decision-btn" disabled={marking || markedAt !== null} onClick={handleMarkReviewed}>
+              {markedAt ? "Marked as reviewed" : marking ? "Saving…" : "Mark as reviewed"}
+            </button>
+          </div>
+        )}
       </div>
 
       {loadError && <div className="error-banner">{loadError}</div>}
@@ -88,6 +112,43 @@ export default function ExecutivePage() {
             </ul>
           </section>
 
+          <h2 className="section-title">Since last review</h2>
+          {!data.sinceLastReview ? (
+            <p className="empty-inline">
+              Click <strong>Mark as reviewed</strong> when you&rsquo;ve read this. Next time, this section shows only what changed
+              since then.
+            </p>
+          ) : (
+            <section className="card exec-changes" aria-label="Since last review">
+              <p className="rc-meta">Since {new Date(data.sinceLastReview.lastReviewedAt).toLocaleDateString()}</p>
+              {data.sinceLastReview.changes.length === 0 ? (
+                <p className="rc-line">Nothing material has changed.</p>
+              ) : (
+                <>
+                  <ul>
+                    {data.sinceLastReview.changes.slice(0, CHANGES_PREVIEW).map((c) => (
+                      <li key={`${c.kind}-${c.title}`}>
+                        <strong>{c.title}</strong> <span className="muted">— {c.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {data.sinceLastReview.changes.length > CHANGES_PREVIEW && (
+                    <details className="rc-details">
+                      <summary>{data.sinceLastReview.changes.length - CHANGES_PREVIEW} smaller changes</summary>
+                      <ul>
+                        {data.sinceLastReview.changes.slice(CHANGES_PREVIEW).map((c) => (
+                          <li key={`${c.kind}-${c.title}`}>
+                            {c.title} <span className="muted">— {c.detail}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </>
+              )}
+            </section>
+          )}
+
           {data.deadlinePassed.length > 0 && (
             <>
               <h2 className="section-title">Deadline passed: what happened?</h2>
@@ -102,6 +163,11 @@ export default function ExecutivePage() {
             <p className="empty-inline">No open decisions.</p>
           ) : (
             data.decisionsNeeded.map((d) => <DecisionCard key={d.id} decision={d} />)
+          )}
+          {data.decisionsInProgress.length > 0 && (
+            <p className="rc-meta exec-in-progress">
+              Decided and being carried out: {data.decisionsInProgress.map((d) => d.title).join(" · ")}
+            </p>
           )}
 
           <h2 className="section-title">Risks &amp; blockers</h2>
@@ -144,7 +210,15 @@ export default function ExecutivePage() {
               </summary>
               <div className="task-list">
                 {data.needsDisposition.map((t) => (
-                  <TaskRow key={t.id} task={t} showWhy={false} />
+                  <TaskRow key={t.id} task={t} showWhy={false}>
+                    <TaskDisposition
+                      taskId={t.id}
+                      status={t.status}
+                      onChanged={() =>
+                        setData((prev) => (prev ? { ...prev, needsDisposition: prev.needsDisposition.filter((x) => x.id !== t.id) } : prev))
+                      }
+                    />
+                  </TaskRow>
                 ))}
               </div>
             </details>

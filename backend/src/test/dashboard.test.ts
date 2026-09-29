@@ -13,6 +13,7 @@ const ZERO_TASK_COUNTS = {
   needs_attention: 0,
   completed: 0,
   superseded: 0,
+  cancelled: 0,
   resolved: 0,
   blocked: 0,
 };

@@ -15,7 +15,7 @@ import { RelationshipsPanel } from "../../components/RelationshipsPanel";
 import { TaskStatusChips } from "../../components/TaskStatusChips";
 
 function formatUpdated(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export default function InitiativeDetailPage() {

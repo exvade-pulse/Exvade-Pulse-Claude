@@ -2,11 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { decisions, sources, suggestions, tasks } from "../db/schema.js";
+import { decisions, sources, suggestions, tasks, UNDECIDED_DECISION_STATUSES } from "../db/schema.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
 import { visibilityFilter } from "../access/visibility.js";
 import { buildExecutiveReviewData, renderExecutiveReviewText } from "../reports/executiveReview.js";
 import { createReviewLink } from "../reports/reviewLinks.js";
+import { markReviewed, sinceLastReview } from "../reports/reviewChanges.js";
 
 const WEEK_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -58,7 +59,7 @@ export async function reportRoutes(app: FastifyInstance) {
       .where(
         and(
           eq(decisions.organizationId, organizationId),
-          eq(decisions.status, "open"),
+          inArray(decisions.status, UNDECIDED_DECISION_STATUSES),
           visibilityFilter(request.user!.role, decisions.visibility),
         ),
       )
@@ -172,8 +173,19 @@ export async function reportRoutes(app: FastifyInstance) {
   // The executive review for the caller's own visibility: structured data
   // for the in-app page, plus the same content as text for "Copy for ChatGPT".
   app.get("/api/reports/executive-review", async (request, reply) => {
-    const data = await buildExecutiveReviewData(request.user!.organizationId, request.user!.role);
+    const { organizationId, userId, role } = request.user!;
+    const data = await buildExecutiveReviewData(organizationId, role);
+    data.sinceLastReview = await sinceLastReview(db, organizationId, userId, data);
     reply.send({ text: renderExecutiveReviewText(data), data, generatedAt: data.generatedAt });
+  });
+
+  // Saves what the caller's review looks like right now, as the baseline the
+  // next "Since last review" compares against.
+  app.post("/api/reports/executive-review/mark-reviewed", async (request, reply) => {
+    const { organizationId, userId, role } = request.user!;
+    const data = await buildExecutiveReviewData(organizationId, role);
+    const reviewedAt = await markReviewed(db, organizationId, userId, data);
+    reply.code(201).send({ lastReviewedAt: reviewedAt });
   });
 
   // Admin-only: a link shows the whole org (every visibility level) to

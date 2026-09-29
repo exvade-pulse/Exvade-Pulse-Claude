@@ -10,6 +10,7 @@ const STATUS_ORDER: TaskStatus[] = [
   "resolved",
   "completed",
   "superseded",
+  "cancelled",
 ];
 
 // Exported for reuse by anything rendering a single task's status outside the
@@ -23,6 +24,7 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
   superseded: "superseded",
   resolved: "resolved",
   blocked: "blocked",
+  cancelled: "cancelled",
 };
 
 export function chipClass(status: TaskStatus): string {

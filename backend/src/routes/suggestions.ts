@@ -1,23 +1,26 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import {
   decisions,
   initiatives,
+  LIVE_DECISION_STATUSES,
   objectives,
   projects,
   sources,
   suggestions,
   tasks,
+  TERMINAL_TASK_STATUSES,
   users,
+  type EntityNodeType,
   type UserRole,
   type Visibility,
 } from "../db/schema.js";
 import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 import { canViewVisibility } from "../access/visibility.js";
 import { resolveNames } from "../relationships/manage.js";
-import type { EntityNodeType } from "../db/schema.js";
+import { LIKELY_DUPLICATE_THRESHOLD, titleSimilarity, titleTokens } from "../suggestions/similarity.js";
 
 // Every targetType a suggestion can carry, including "decision" -- unlike
 // apply.ts's own TABLE_BY_TARGET_TYPE (which deliberately excludes decision
@@ -283,6 +286,93 @@ async function loadRelationshipEndpoints(
   return result;
 }
 
+// For a merge suggestion (target = the duplicate), the record it would be
+// merged into -- the review card needs both names to be a real question.
+async function loadMergeTargets(
+  organizationId: string,
+  rows: Array<{ id: string; targetType: string; changeType: string; proposedDiff: unknown }>,
+): Promise<Map<string, { id: string; title: string }>> {
+  const merges = rows.filter((row) => row.changeType === "merge");
+  if (merges.length === 0) return new Map();
+  const keepIdOf = (row: (typeof merges)[number]) => (row.proposedDiff as { supersededById?: unknown }).supersededById;
+  const refs = merges
+    .filter((row) => typeof keepIdOf(row) === "string")
+    .map((row) => ({ type: row.targetType as EntityNodeType, id: keepIdOf(row) as string }));
+  const names = await resolveNames(db, organizationId, refs);
+  const result = new Map<string, { id: string; title: string }>();
+  for (const row of merges) {
+    const keepId = keepIdOf(row);
+    if (typeof keepId !== "string") continue;
+    result.set(row.id, { id: keepId, title: names.get(`${row.targetType}:${keepId}`) ?? "(unknown)" });
+  }
+  return result;
+}
+
+export interface DuplicateHint {
+  kind: "existing" | "pending";
+  id: string;
+  title: string;
+  similarity: number;
+}
+
+// A free, no-model hint on pending "create a new task/decision" suggestions
+// whose title reads like one that already exists, or like an earlier
+// pending suggestion -- so the reviewer can reject the copy instead of
+// approving the same thing three times. Informational only.
+async function loadDuplicateHints(
+  organizationId: string,
+  rows: Array<{ id: string; targetType: string; targetId: string | null; changeType: string; proposedDiff: unknown; createdAt: Date }>,
+): Promise<Map<string, DuplicateHint>> {
+  const titleOf = (row: { proposedDiff: unknown }) => {
+    const title = (row.proposedDiff as { title?: unknown }).title;
+    return typeof title === "string" ? title : null;
+  };
+  const creates = rows
+    .filter((row) => row.targetId === null && row.changeType !== "merge" && (row.targetType === "task" || row.targetType === "decision"))
+    .filter((row) => titleOf(row) !== null)
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  if (creates.length === 0) return new Map();
+
+  const [existingTasks, existingDecisions] = await Promise.all([
+    db
+      .select({ id: tasks.id, title: tasks.title })
+      .from(tasks)
+      .where(and(eq(tasks.organizationId, organizationId), notInArray(tasks.status, TERMINAL_TASK_STATUSES))),
+    db
+      .select({ id: decisions.id, title: decisions.title })
+      .from(decisions)
+      .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES))),
+  ]);
+  const existing = {
+    task: existingTasks.map((t) => ({ ...t, tokens: titleTokens(t.title) })),
+    decision: existingDecisions.map((d) => ({ ...d, tokens: titleTokens(d.title) })),
+  };
+
+  const result = new Map<string, DuplicateHint>();
+  const earlier: Array<{ id: string; type: string; title: string; tokens: Set<string> }> = [];
+  for (const row of creates) {
+    const title = titleOf(row)!;
+    const tokens = titleTokens(title);
+    let best: DuplicateHint | null = null;
+    for (const candidate of existing[row.targetType as "task" | "decision"]) {
+      const similarity = titleSimilarity(tokens, candidate.tokens);
+      if (similarity >= LIKELY_DUPLICATE_THRESHOLD && (!best || similarity > best.similarity)) {
+        best = { kind: "existing", id: candidate.id, title: candidate.title, similarity };
+      }
+    }
+    for (const candidate of earlier) {
+      if (candidate.type !== row.targetType) continue;
+      const similarity = titleSimilarity(tokens, candidate.tokens);
+      if (similarity >= LIKELY_DUPLICATE_THRESHOLD && (!best || similarity > best.similarity)) {
+        best = { kind: "pending", id: candidate.id, title: candidate.title, similarity };
+      }
+    }
+    if (best) result.set(row.id, { ...best, similarity: Math.round(best.similarity * 100) / 100 });
+    earlier.push({ id: row.id, type: row.targetType, title, tokens });
+  }
+  return result;
+}
+
 // Only task/decision carry a visibility column (see schema.ts); an
 // objective/initiative/project target, or a targetId-null (brand-new
 // entity) suggestion, is always viewable -- there's nothing to restrict yet.
@@ -377,10 +467,14 @@ export async function suggestionRoutes(app: FastifyInstance) {
       .orderBy(desc(suggestions.createdAt));
 
     const currentStates = await loadCurrentStates(organizationId, rows);
-    const [breadcrumbs, movingToProjects, relationshipEndpoints] = await Promise.all([
+    // Duplicate hints only make sense while something is still awaiting a call.
+    const awaitingRows = rows.filter((row) => row.status === "pending" || row.status === "edited");
+    const [breadcrumbs, movingToProjects, relationshipEndpoints, mergeTargets, duplicateHints] = await Promise.all([
       loadBreadcrumbs(organizationId, rows, currentStates),
       loadMovingToProjects(organizationId, rows, currentStates),
       loadRelationshipEndpoints(organizationId, rows),
+      loadMergeTargets(organizationId, rows),
+      loadDuplicateHints(organizationId, awaitingRows),
     ]);
     const role = request.user!.role;
     const withCurrentState = rows
@@ -406,6 +500,8 @@ export async function suggestionRoutes(app: FastifyInstance) {
         breadcrumb: breadcrumbs.get(row.id) ?? null,
         movingToProject: movingToProjects.get(row.id) ?? null,
         relationshipEndpoints: relationshipEndpoints.get(row.id) ?? null,
+        mergeInto: mergeTargets.get(row.id) ?? null,
+        likelyDuplicateOf: duplicateHints.get(row.id) ?? null,
       }));
 
     reply.send({ suggestions: withCurrentState });

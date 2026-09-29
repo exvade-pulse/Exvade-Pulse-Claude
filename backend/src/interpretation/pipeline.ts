@@ -1,6 +1,6 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { decisions, initiatives, objectives, projects, sources, tasks } from "../db/schema.js";
+import { decisions, initiatives, LIVE_DECISION_STATUSES, objectives, projects, sources, tasks } from "../db/schema.js";
 import { isNoiseSource } from "./noiseFilter.js";
 import { interpretSource, InterpretationError, type CompanyContext } from "./interpret.js";
 import {
@@ -58,7 +58,7 @@ async function loadCompanyContext(db: Database, organizationId: string): Promise
         whyItMatters: decisions.whyItMatters,
       })
       .from(decisions)
-      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"))),
+      .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES))),
   ]);
 
   return {

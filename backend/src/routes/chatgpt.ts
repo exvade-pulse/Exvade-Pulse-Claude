@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, count, desc, eq, gte, inArray } from "drizzle-orm";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
-import { decisions, sources, suggestions } from "../db/schema.js";
+import { decisions, LIVE_DECISION_STATUSES, sources, suggestions } from "../db/schema.js";
 import { authenticateChatGptKey } from "../integrations/manage.js";
 import { runInterpretationPipeline } from "../interpretation/pipeline.js";
 import { listRelationshipsForEntity } from "../relationships/manage.js";
@@ -136,7 +136,7 @@ export async function chatGptRoutes(app: FastifyInstance) {
         db
           .select({ id: decisions.id, title: decisions.title, decider: decisions.decider, dueDate: decisions.dueDate })
           .from(decisions)
-          .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open")))
+          .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES)))
           .orderBy(decisions.dueDate),
         db
           .select({ count: count() })
@@ -177,7 +177,7 @@ export async function chatGptRoutes(app: FastifyInstance) {
           updatedAt: decisions.updatedAt,
         })
         .from(decisions)
-        .where(and(eq(decisions.organizationId, request.chatgpt!.organizationId), eq(decisions.status, "open")))
+        .where(and(eq(decisions.organizationId, request.chatgpt!.organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES)))
         .orderBy(decisions.dueDate);
       reply.send({ decisions: rows });
     });

@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { auditLog, decisions, users } from "../db/schema.js";
+import { auditLog, decisions, UNDECIDED_DECISION_STATUSES, users } from "../db/schema.js";
 
 // No pagination yet -- a flat "most recent N" is enough for a first pass at
 // making the audit log visible at all; revisit if 100 stops being enough.
@@ -74,7 +74,7 @@ export async function activityRoutes(app: FastifyInstance) {
     const openDecisions = await db
       .select({ id: decisions.id, title: decisions.title })
       .from(decisions)
-      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open")))
+      .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, UNDECIDED_DECISION_STATUSES)))
       .orderBy(sql`${decisions.dueDate} is null`, decisions.dueDate);
 
     reply.send({

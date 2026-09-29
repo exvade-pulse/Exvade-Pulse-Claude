@@ -1,9 +1,10 @@
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { decisions, sources, suggestions, tasks, type UserRole } from "../db/schema.js";
+import { decisions, LIVE_DECISION_STATUSES, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, type UserRole } from "../db/schema.js";
 import { visibilityFilter } from "../access/visibility.js";
 import { loadCompanyMapTree } from "../routes/companyMap.js";
 import { describeSuggestions } from "../suggestions/describe.js";
+import type { SinceLastReview } from "./reviewChanges.js";
 
 // The executive review: what needs a decision, what's at risk, what's
 // merely old. Deterministic -- no Claude call -- and it only reports what
@@ -19,7 +20,7 @@ const RECENT_DAYS = 14;
 export const DISPOSITION_DAYS = 90;
 const RECENT_LIMIT = 50;
 const REVIEW_LIMIT = 100;
-const TERMINAL_STATUSES = new Set(["completed", "resolved", "superseded"]);
+const TERMINAL_STATUSES = new Set<string>(TERMINAL_TASK_STATUSES);
 const RISK_STATUSES = new Set(["blocked", "needs_attention", "waiting"]);
 
 const IMPORTANCE: Record<string, number> = { critical: 1, high: 0.8, medium: 0.5, low: 0.3 };
@@ -52,6 +53,7 @@ export interface ReviewTask {
 export interface ReviewDecision {
   id: string;
   title: string;
+  status: string;
   decider: string;
   stakeholders: string[];
   dueDate: string | null;
@@ -88,9 +90,14 @@ export interface ReviewInventoryProject {
 
 export interface ExecutiveReviewData {
   generatedAt: string;
+  // Filled in per viewer by the route (it depends on who's looking and when
+  // they last marked it reviewed); null when they never have.
+  sinceLastReview?: SinceLastReview | null;
   headline: string[];
   decisionsNeeded: ReviewDecision[];
   deadlinePassed: ReviewDecision[];
+  // Decided and still being carried out -- no call needed, worth a glance.
+  decisionsInProgress: ReviewDecision[];
   risks: ReviewTask[];
   operatingActions: ReviewTask[];
   needsDisposition: ReviewTask[];
@@ -170,6 +177,7 @@ export async function buildExecutiveReviewData(
       .select({
         id: decisions.id,
         title: decisions.title,
+        status: decisions.status,
         decider: decisions.decider,
         stakeholders: decisions.stakeholders,
         dueDate: decisions.dueDate,
@@ -179,7 +187,7 @@ export async function buildExecutiveReviewData(
         relatedTaskId: decisions.relatedTaskId,
       })
       .from(decisions)
-      .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"), visibilityFilter(role, decisions.visibility)))
+      .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES), visibilityFilter(role, decisions.visibility)))
       .orderBy(sql`${decisions.dueDate} is null`, decisions.dueDate),
     // "Recent" by when the evidence is dated (the source's receivedAt), not
     // when it was imported -- a 2019 document approved yesterday isn't news.
@@ -188,6 +196,7 @@ export async function buildExecutiveReviewData(
         id: suggestions.id,
         targetType: suggestions.targetType,
         targetId: suggestions.targetId,
+        changeType: suggestions.changeType,
         proposedDiff: suggestions.proposedDiff,
         sourceType: sources.type,
         receivedAt: sources.receivedAt,
@@ -280,6 +289,7 @@ export async function buildExecutiveReviewData(
     return {
       id: d.id,
       title: d.title,
+      status: d.status,
       decider: d.decider,
       stakeholders: d.stakeholders,
       dueDate: d.dueDate ? new Date(d.dueDate).toISOString() : null,
@@ -291,8 +301,12 @@ export async function buildExecutiveReviewData(
     };
   };
   const allDecisions = openDecisionRows.map(toDecision);
-  const deadlinePassed = allDecisions.filter((d) => d.daysOverdue !== null);
-  const decisionsNeeded = allDecisions.filter((d) => d.daysOverdue === null);
+  const undecided = allDecisions.filter((d) => d.status !== "action_in_progress");
+  // A decision already being carried out isn't "overdue": its deadline was
+  // for the call, and the call was made.
+  const decisionsInProgress = allDecisions.filter((d) => d.status === "action_in_progress").map((d) => ({ ...d, daysOverdue: null }));
+  const deadlinePassed = undecided.filter((d) => d.daysOverdue !== null);
+  const decisionsNeeded = undecided.filter((d) => d.daysOverdue === null);
 
   // A member's review must not leak a restricted task or decision through
   // the review/recent sections either, only the ones they can see.
@@ -330,7 +344,7 @@ export async function buildExecutiveReviewData(
     blocked: openTasks.filter((t) => t.status === "blocked").length,
     needsAttention: openTasks.filter((t) => t.status === "needs_attention").length,
     waiting: openTasks.filter((t) => t.status === "waiting").length,
-    openDecisions: allDecisions.length,
+    openDecisions: undecided.length,
   };
 
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -351,6 +365,7 @@ export async function buildExecutiveReviewData(
     headline,
     decisionsNeeded,
     deadlinePassed,
+    decisionsInProgress,
     risks,
     operatingActions,
     needsDisposition,
@@ -394,7 +409,8 @@ function taskLines(t: ReviewTask, withPath: boolean): string[] {
 
 function decisionLines(d: ReviewDecision): string[] {
   const due = d.dueDate ? `due ${formatDate(d.dueDate)}` : "no due date recorded";
-  const lines = [`- ${d.title}`, `    Decider: ${d.decider} | ${due}`];
+  const state = d.status === "pending_info" ? " | waiting on more information" : "";
+  const lines = [`- ${d.title}`, `    Decider: ${d.decider} | ${due}${state}`];
   if (d.stakeholders.length > 0) lines.push(`    Stakeholders: ${d.stakeholders.join(", ")}`);
   if (d.whyItMatters) lines.push(`    Why it matters: ${clip(d.whyItMatters, 500)}`);
   if (d.relevantContext) lines.push(`    Context: ${clip(d.relevantContext, 500)}`);
@@ -415,6 +431,14 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
     ...data.headline.map((h) => `- ${h}`),
   ];
 
+  if (data.sinceLastReview) {
+    const { lastReviewedAt, changes } = data.sinceLastReview;
+    lines.push("", `SINCE MY LAST REVIEW (${formatDate(lastReviewedAt)})`);
+    if (changes.length === 0) lines.push("- Nothing material has changed.");
+    for (const c of changes.slice(0, 10)) lines.push(`- ${c.title}: ${c.detail}`);
+    if (changes.length > 10) lines.push(`- …and ${changes.length - 10} smaller changes.`);
+  }
+
   lines.push("", "1. DECISIONS NEEDED");
   if (data.decisionsNeeded.length === 0) lines.push("- None.");
   for (const d of data.decisionsNeeded) lines.push(...decisionLines(d));
@@ -424,6 +448,11 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
   for (const d of data.deadlinePassed) {
     lines.push(...decisionLines(d));
     lines.push(`    ${d.daysOverdue} days past due with no recorded outcome.`);
+  }
+
+  if (data.decisionsInProgress.length > 0) {
+    lines.push("", "Decided and being carried out:");
+    for (const d of data.decisionsInProgress) lines.push(`- ${d.title} (decider: ${d.decider})`);
   }
 
   lines.push("", "3. RISKS & BLOCKERS (blocked, waiting or flagged; ordered by attention)");

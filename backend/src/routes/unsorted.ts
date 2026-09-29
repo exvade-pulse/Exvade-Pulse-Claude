@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, ne, notInArray } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { initiatives, objectives, projects, sources, suggestions, tasks } from "../db/schema.js";
+import { initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
 import { suggestReclassification } from "../interpretation/retriage.js";
 import { getClaudeClient } from "../interpretation/claudeClient.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
@@ -18,7 +18,7 @@ const UNSORTED_PROJECT_TITLE = "Unsorted / Needs Triage";
 // Terminal task states aren't worth spending a Claude call re-triaging --
 // nothing changes about where completed/resolved/superseded work "belongs"
 // that would make moving it now useful to anyone.
-const RETRIAGE_EXCLUDED_STATUSES: Array<"completed" | "resolved" | "superseded"> = ["completed", "resolved", "superseded"];
+const RETRIAGE_EXCLUDED_STATUSES = TERMINAL_TASK_STATUSES;
 
 async function findUnsortedProject(organizationId: string) {
   const [project] = await db

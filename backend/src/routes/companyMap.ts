@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import {
@@ -10,6 +10,7 @@ import {
   suggestions,
   tasks,
   visibilityEnum,
+  UNDECIDED_DECISION_STATUSES,
   type UserRole,
   type Visibility,
 } from "../db/schema.js";
@@ -25,6 +26,7 @@ import {
   resolveRealUpdatedAt,
 } from "../entities/realUpdatedAt.js";
 import { UUID_RE } from "./uuid.js";
+import { setTaskDisposition, TaskDispositionError } from "../tasks/disposition.js";
 
 const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
 
@@ -199,7 +201,7 @@ export async function loadTaskDetail(organizationId: string, id: string, role: U
   const [blockingDecision] = await db
     .select({ id: decisions.id, title: decisions.title })
     .from(decisions)
-    .where(and(eq(decisions.organizationId, organizationId), eq(decisions.status, "open"), eq(decisions.relatedTaskId, id)));
+    .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, UNDECIDED_DECISION_STATUSES), eq(decisions.relatedTaskId, id)));
 
   const realUpdatedForTask = await loadRealUpdatedAt(db, organizationId, "task", [id]);
 
@@ -420,6 +422,42 @@ export async function companyMapRoutes(app: FastifyInstance) {
     }
     reply.send(detail);
   });
+
+  // A person marking a task done, not relevant anymore (cancelled), or
+  // reopening it -- see tasks/disposition.ts. Same visibility rule as reading
+  // the task: someone who can't see it gets the same 404 as "doesn't exist".
+  app.patch<{ Params: { id: string }; Body: { status?: string; note?: string | null } }>(
+    "/api/tasks/:id/status",
+    async (request, reply) => {
+      const organizationId = request.user!.organizationId;
+      const { id } = request.params;
+      const status = request.body?.status;
+      if (status !== "completed" && status !== "cancelled" && status !== "active") {
+        reply.code(400).send({ error: "status must be one of: completed, cancelled, active" });
+        return;
+      }
+      if (!UUID_RE.test(id) || !(await loadTaskDetail(organizationId, id, request.user!.role))) {
+        reply.code(404).send({ error: "Task not found" });
+        return;
+      }
+      try {
+        const task = await setTaskDisposition(db, {
+          organizationId,
+          taskId: id,
+          actorId: request.user!.userId,
+          status,
+          note: request.body?.note ?? null,
+        });
+        reply.send({ task: { id: task.id, status: task.status, latestUpdate: task.latestUpdate } });
+      } catch (err) {
+        if (err instanceof TaskDispositionError) {
+          reply.code(err.code === "not_found" ? 404 : 409).send({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
 
   // Admin-only: raising or lowering who can see a task is a deliberate human
   // call, and specifically not something the AI interpretation pipeline can

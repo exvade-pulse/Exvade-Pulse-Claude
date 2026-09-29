@@ -7,6 +7,7 @@ import {
   real,
   pgEnum,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -33,7 +34,13 @@ export const taskStatusEnum = pgEnum("task_status", [
   "superseded",
   "resolved",
   "blocked",
+  // Deliberately dropped -- distinct from completed (done) and superseded
+  // (replaced by another record).
+  "cancelled",
 ]);
+export type TaskStatus = (typeof taskStatusEnum.enumValues)[number];
+// Finished one way or another: no longer open work.
+export const TERMINAL_TASK_STATUSES: TaskStatus[] = ["completed", "resolved", "superseded", "cancelled"];
 
 export const sourceTypeEnum = pgEnum("source_type", ["gmail", "circleback", "document", "manual", "chatgpt"]);
 export type SourceType = (typeof sourceTypeEnum.enumValues)[number];
@@ -55,6 +62,14 @@ export const changeTypeEnum = pgEnum("change_type", [
   "deadline",
   "resolved",
   "relationship",
+  // A proposed duplicate merge: targetId is the duplicate, proposedDiff
+  // names the record to keep (supersededById). Only the duplicate checks
+  // produce these, never live interpretation.
+  "merge",
+  // Newer information contradicts a statement still recorded as current.
+  // proposedDiff is the proposed correction; the older/newer statements
+  // themselves live in suggestions.conflicts (kind: "contradiction").
+  "contradiction",
 ]);
 
 export const suggestionStatusEnum = pgEnum("suggestion_status", [
@@ -64,7 +79,23 @@ export const suggestionStatusEnum = pgEnum("suggestion_status", [
   "rejected",
 ]);
 
-export const decisionStatusEnum = pgEnum("decision_status", ["open", "decided"]);
+// Lifecycle: open -> (pending_info <-> open) -> decided -> action_in_progress
+// -> closed. superseded = replaced by another decision (supersededById).
+// "Deadline passed, status unknown" is not stored: it's an open/pending_info
+// decision whose dueDate is behind us, computed wherever it's shown.
+export const decisionStatusEnum = pgEnum("decision_status", [
+  "open",
+  "decided",
+  "pending_info",
+  "action_in_progress",
+  "closed",
+  "superseded",
+]);
+export type DecisionStatus = (typeof decisionStatusEnum.enumValues)[number];
+// Still waiting on the call itself.
+export const UNDECIDED_DECISION_STATUSES: DecisionStatus[] = ["open", "pending_info"];
+// Not finished: undecided, or decided and still being carried out.
+export const LIVE_DECISION_STATUSES: DecisionStatus[] = ["open", "pending_info", "action_in_progress"];
 
 export const userRoleEnum = pgEnum("user_role", ["member", "admin"]);
 export type UserRole = (typeof userRoleEnum.enumValues)[number];
@@ -247,6 +278,9 @@ export const tasks = pgTable("tasks", {
   // suggestions/dedupe.ts's conflict check and the task detail page's
   // staleness badge. Null until the first approval touches a tracked field.
   fieldEvidence: jsonb("field_evidence"),
+  // Set when this task was marked superseded by another (e.g. an approved
+  // duplicate merge). The row itself is kept, so its history survives.
+  supersededById: uuid("superseded_by_id").references((): AnyPgColumn => tasks.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -388,8 +422,27 @@ export const decisions = pgTable("decisions", {
   // Same visibilityEnum as tasks.visibility -- see its comment. Not in
   // ALLOWED_FIELDS.decision either, for the same reason.
   visibility: visibilityEnum("visibility").notNull().default("team"),
+  // Same as tasks.supersededById: the duplicate row is kept, pointing at
+  // the canonical decision it was merged into.
+  supersededById: uuid("superseded_by_id").references((): AnyPgColumn => decisions.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// What one person's executive review looked like when they last marked it
+// reviewed -- the baseline "Since last review" compares against. Stores a
+// compact summary (ids, titles, status, section, attention), not the full
+// review. Per user, since "last review" is personal.
+export const executiveReviewSnapshots = pgTable("executive_review_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  summary: jsonb("summary").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Append-only: rows are never updated or deleted by application code.

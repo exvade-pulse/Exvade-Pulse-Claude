@@ -16,6 +16,8 @@ import {
 import { formatDiff } from "../../../lib/formatDiff";
 import { Nav } from "../../components/Nav";
 import { RelationshipsPanel } from "../../components/RelationshipsPanel";
+import { TaskDisposition } from "../../components/TaskDisposition";
+import { STATUS_LABEL } from "../../components/TaskStatusChips";
 import { VisibilityControl } from "../../components/VisibilityControl";
 
 function formatDate(dateStr: string | null): string {
@@ -29,7 +31,7 @@ function formatDate(dateStr: string | null): string {
 // enough that "still true" is genuinely worth re-checking rather than
 // assuming. See backend/src/db/schema.ts's tasks.fieldEvidence.
 const STALE_THRESHOLD_DAYS = 30;
-const TERMINAL_STATUSES = new Set(["completed", "resolved", "superseded"]);
+const TERMINAL_STATUSES = new Set(["completed", "resolved", "superseded", "cancelled"]);
 
 function staleDaysAgo(task: TaskDetail): number | null {
   if (TERMINAL_STATUSES.has(task.status)) return null;
@@ -147,7 +149,7 @@ export default function TaskDetailPage() {
                   isAdmin={user.role === "admin"}
                   onChange={handleVisibilityChange}
                 />
-                <span className="badge">{data.task.status}</span>
+                <span className="badge">{STATUS_LABEL[data.task.status] ?? data.task.status}</span>
                 {staleDaysAgo(data.task) !== null && (
                   <span className="stale-badge" title="This status hasn't been reconfirmed by a new source in a while">
                     last confirmed {staleDaysAgo(data.task)} days ago
@@ -182,6 +184,18 @@ export default function TaskDetailPage() {
                 </div>
               </div>
             )}
+
+            <TaskDisposition
+              taskId={data.task.id}
+              status={data.task.status}
+              onChanged={(next) =>
+                setData((prev) =>
+                  prev === "loading" || prev === "not_found"
+                    ? prev
+                    : { ...prev, task: { ...prev.task, status: next.status, latestUpdate: next.latestUpdate ?? prev.task.latestUpdate } },
+                )
+              }
+            />
           </article>
 
           {data.approvedSuggestions.length > 0 && (

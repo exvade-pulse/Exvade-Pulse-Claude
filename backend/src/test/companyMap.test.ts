@@ -484,6 +484,7 @@ describe("company map detail endpoints", () => {
         needs_attention: 0,
         completed: 1,
         superseded: 0,
+        cancelled: 0,
         resolved: 0,
         blocked: 1,
       });
@@ -602,6 +603,7 @@ describe("company map detail endpoints", () => {
         needs_attention: 2,
         completed: 0,
         superseded: 0,
+        cancelled: 0,
         resolved: 1,
         blocked: 0,
       });

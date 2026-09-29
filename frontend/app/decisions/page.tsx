@@ -9,6 +9,7 @@ import {
   fetchCurrentUser,
   fetchOpenDecisions,
   resolveDecision,
+  setDecisionStatus,
   setDecisionVisibility,
   type Decision,
   type SessionUser,
@@ -37,8 +38,17 @@ function formatDueDate(dueDate: string): string {
   return new Date(dueDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+const STATUS_CHIP: Partial<Record<Decision["status"], string>> = {
+  pending_info: "Waiting on info",
+  action_in_progress: "In progress",
+};
+
+function isUndecided(d: Decision): boolean {
+  return d.status === "open" || d.status === "pending_info";
+}
+
 function formatUpdated(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 export default function DecisionsPage() {
@@ -54,7 +64,12 @@ export default function DecisionsPage() {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [resolutionDraft, setResolutionDraft] = useState("");
   const [alsoUnblockTask, setAlsoUnblockTask] = useState(false);
+  const [keepTracking, setKeepTracking] = useState(false);
   const [savingResolution, setSavingResolution] = useState(false);
+
+  const [closingId, setClosingId] = useState<string | null>(null);
+  const [closeDraft, setCloseDraft] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const [addingInfoId, setAddingInfoId] = useState<string | null>(null);
   const [infoDraft, setInfoDraft] = useState("");
@@ -111,7 +126,37 @@ export default function DecisionsPage() {
     setActionError(null);
     setResolutionDraft("");
     setAlsoUnblockTask(false);
+    setKeepTracking(false);
     setResolvingId(id);
+  }
+
+  async function changeStatus(id: string, status: "open" | "pending_info" | "action_in_progress" | "closed", note?: string) {
+    setBusyId(id);
+    setActionError(null);
+    try {
+      const updated = await setDecisionStatus(id, status, note);
+      setDecisions((prev) =>
+        status === "closed" ? prev.filter((d) => d.id !== id) : prev.map((d) => (d.id === id ? { ...d, status: updated.status } : d)),
+      );
+      return true;
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Something went wrong");
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function submitClose(d: Decision) {
+    // Closing a decision that was never made needs to say what happened.
+    if (isUndecided(d) && !closeDraft.trim()) {
+      setActionError("Say briefly what happened, so there's a record of why this closed without a decision.");
+      return;
+    }
+    if (await changeStatus(d.id, "closed", closeDraft.trim() || undefined)) {
+      setClosingId(null);
+      setCloseDraft("");
+    }
   }
 
   function startAddInfo(id: string) {
@@ -178,7 +223,13 @@ export default function DecisionsPage() {
     setActionError(null);
     try {
       await resolveDecision(id, resolutionDraft, alsoUnblockTask);
-      setDecisions((prev) => prev.filter((d) => d.id !== id));
+      if (keepTracking) {
+        // Decided, and still being carried out -- stays on this list.
+        const updated = await setDecisionStatus(id, "action_in_progress");
+        setDecisions((prev) => prev.map((d) => (d.id === id ? { ...d, status: updated.status } : d)));
+      } else {
+        setDecisions((prev) => prev.filter((d) => d.id !== id));
+      }
       setResolvingId(null);
       setResolutionDraft("");
       setAlsoUnblockTask(false);
@@ -300,7 +351,7 @@ export default function DecisionsPage() {
         </form>
       )}
 
-      {decisions.length === 0 && !loadError && <p className="empty-state">No open decisions.</p>}
+      {decisions.length === 0 && !loadError && <p className="empty-state">No open or in-progress decisions.</p>}
 
       {decisions.map((d) => {
         const overdue = isOverdue(d.dueDate);
@@ -324,11 +375,13 @@ export default function DecisionsPage() {
                   isAdmin={user.role === "admin"}
                   onChange={(next) => handleVisibilityChange(d.id, next)}
                 />
-                {d.dueDate && (
-                  <span className={overdue ? "due-overdue" : "muted"}>
-                    Due {formatDueDate(d.dueDate)}
-                    {overdue ? " (overdue)" : ""}
+                {STATUS_CHIP[d.status] && <span className="chip">{STATUS_CHIP[d.status]}</span>}
+                {d.dueDate && isUndecided(d) && overdue ? (
+                  <span className="chip chip-attention" title={`Was due ${formatDueDate(d.dueDate)}`}>
+                    Deadline passed
                   </span>
+                ) : (
+                  d.dueDate && <span className="muted">Due {formatDueDate(d.dueDate)}</span>
                 )}
               </div>
             </div>
@@ -381,6 +434,10 @@ export default function DecisionsPage() {
                     placeholder="What was decided?"
                   />
                 </label>
+                <label className="edit-field edit-field-checkbox">
+                  <input type="checkbox" checked={keepTracking} onChange={(e) => setKeepTracking(e.target.checked)} />
+                  <span>Keep tracking it here while it&rsquo;s carried out (marks it In progress)</span>
+                </label>
                 {d.relatedTaskId && d.relatedTaskStatus === "blocked" && (
                   <label className="edit-field edit-field-checkbox">
                     <input
@@ -431,6 +488,26 @@ export default function DecisionsPage() {
                   </button>
                 </div>
               </div>
+            ) : closingId === d.id ? (
+              <div className="edit-form">
+                <label className="edit-field">
+                  <span className="edit-field-label">{isUndecided(d) ? "What happened?" : "Closing note (optional)"}</span>
+                  <input
+                    className="edit-input"
+                    value={closeDraft}
+                    onChange={(e) => setCloseDraft(e.target.value)}
+                    placeholder={isUndecided(d) ? "e.g. Became moot when the vendor withdrew" : "e.g. Rollout finished"}
+                  />
+                </label>
+                <div className="card-actions">
+                  <button className="decision-btn save" disabled={busyId === d.id} onClick={() => submitClose(d)}>
+                    Close decision
+                  </button>
+                  <button className="decision-btn cancel" disabled={busyId === d.id} onClick={() => setClosingId(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
             ) : isAssigning ? (
               <div className="edit-form">
                 <label className="edit-field">
@@ -456,11 +533,32 @@ export default function DecisionsPage() {
                 <button className="decision-btn" onClick={() => startAddInfo(d.id)}>
                   Add information
                 </button>
-                <button className="decision-btn" onClick={() => startAssign(d.id, d.decider)}>
-                  Assign
-                </button>
-                <button className="decision-btn approve" onClick={() => startResolve(d.id)}>
-                  Mark decided
+                {isUndecided(d) && (
+                  <>
+                    <button className="decision-btn" onClick={() => startAssign(d.id, d.decider)}>
+                      Assign
+                    </button>
+                    <button
+                      className="decision-btn"
+                      disabled={busyId === d.id}
+                      onClick={() => changeStatus(d.id, d.status === "pending_info" ? "open" : "pending_info")}
+                    >
+                      {d.status === "pending_info" ? "Back to open" : "Waiting on info"}
+                    </button>
+                    <button className="decision-btn approve" onClick={() => startResolve(d.id)}>
+                      Mark decided
+                    </button>
+                  </>
+                )}
+                <button
+                  className="decision-btn"
+                  onClick={() => {
+                    setActionError(null);
+                    setCloseDraft("");
+                    setClosingId(d.id);
+                  }}
+                >
+                  Close&hellip;
                 </button>
               </div>
             )}

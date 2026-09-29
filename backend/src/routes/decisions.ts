@@ -1,14 +1,33 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { decisions, tasks, visibilityEnum, type UserRole, type Visibility } from "../db/schema.js";
-import { addDecisionInfo, assignDecision, createDecision, resolveDecision, DecisionError } from "../decisions/manage.js";
+import {
+  decisions,
+  decisionStatusEnum,
+  LIVE_DECISION_STATUSES,
+  tasks,
+  UNDECIDED_DECISION_STATUSES,
+  visibilityEnum,
+  type DecisionStatus,
+  type UserRole,
+  type Visibility,
+} from "../db/schema.js";
+import {
+  addDecisionInfo,
+  assignDecision,
+  createDecision,
+  resolveDecision,
+  setDecisionStatus,
+  SETTABLE_DECISION_STATUSES,
+  DecisionError,
+} from "../decisions/manage.js";
 import { canViewVisibility, visibilityFilter } from "../access/visibility.js";
 import { loadRealUpdatedAt, resolveRealUpdatedAt } from "../entities/realUpdatedAt.js";
 import { UUID_RE } from "./uuid.js";
 
 const VALID_VISIBILITIES = new Set<string>(visibilityEnum.enumValues);
+const VALID_STATUSES = new Set<string>(decisionStatusEnum.enumValues);
 
 // A lightweight pre-check for the three action routes below (add-info/
 // assign/resolve): each of them delegates to decisions/manage.ts, whose
@@ -31,10 +50,23 @@ export async function decisionRoutes(app: FastifyInstance) {
 
   app.get<{ Querystring: { status?: string } }>("/api/decisions", async (request, reply) => {
     const organizationId = request.user!.organizationId;
-    // No status query param means "still needs a decision" -- decided ones fall
-    // out of the working list by default, same default-to-active-work pattern
-    // as suggestions.ts.
-    const status = request.query.status ?? "open";
+    // status is a single lifecycle state, or a group: "undecided" (still
+    // needs the call) or "live" (undecided, or decided and being carried out
+    // -- the default working list). Finished ones fall out by default, same
+    // default-to-active-work pattern as suggestions.ts.
+    const requested = request.query.status ?? "live";
+    const statuses: DecisionStatus[] | null =
+      requested === "live"
+        ? LIVE_DECISION_STATUSES
+        : requested === "undecided"
+          ? UNDECIDED_DECISION_STATUSES
+          : VALID_STATUSES.has(requested)
+            ? [requested as DecisionStatus]
+            : null;
+    if (!statuses) {
+      reply.code(400).send({ error: `Unknown status "${requested}"` });
+      return;
+    }
 
     const rows = await db
       .select({
@@ -55,6 +87,7 @@ export async function decisionRoutes(app: FastifyInstance) {
         // Lets the resolve UI decide whether "also unblock this task" is even
         // a relevant option to show, without a second round trip per decision.
         relatedTaskStatus: tasks.status,
+        supersededById: decisions.supersededById,
         sourceId: decisions.sourceId,
         createdAt: decisions.createdAt,
         updatedAt: decisions.updatedAt,
@@ -64,7 +97,7 @@ export async function decisionRoutes(app: FastifyInstance) {
       .where(
         and(
           eq(decisions.organizationId, organizationId),
-          eq(decisions.status, status as never),
+          inArray(decisions.status, statuses),
           visibilityFilter(request.user!.role, decisions.visibility),
         ),
       )
@@ -210,6 +243,41 @@ export async function decisionRoutes(app: FastifyInstance) {
           alsoUnblockTask: request.body?.alsoUnblockTask ?? false,
         });
         reply.send({ decision, unblockedTask });
+      } catch (err) {
+        if (err instanceof DecisionError) {
+          reply.code(err.code === "not_found" ? 404 : 409).send({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // Lifecycle moves a person makes directly: pending info, back to open,
+  // action in progress, closed. Which moves are allowed from which state
+  // lives in manage.ts's setDecisionStatus.
+  app.patch<{ Params: { id: string }; Body: { status?: string; note?: string | null } }>(
+    "/api/decisions/:id/status",
+    async (request, reply) => {
+      const status = request.body?.status;
+      if (!status || !SETTABLE_DECISION_STATUSES.includes(status as DecisionStatus)) {
+        reply.code(400).send({ error: `status must be one of: ${SETTABLE_DECISION_STATUSES.join(", ")}` });
+        return;
+      }
+      if (!(await isDecisionViewable(request.user!.organizationId, request.params.id, request.user!.role))) {
+        reply.code(404).send({ error: "Decision not found" });
+        return;
+      }
+
+      try {
+        const decision = await setDecisionStatus(db, {
+          organizationId: request.user!.organizationId,
+          decisionId: request.params.id,
+          actorId: request.user!.userId,
+          status: status as DecisionStatus,
+          note: request.body?.note ?? null,
+        });
+        reply.send({ decision });
       } catch (err) {
         if (err instanceof DecisionError) {
           reply.code(err.code === "not_found" ? 404 : 409).send({ error: err.message });

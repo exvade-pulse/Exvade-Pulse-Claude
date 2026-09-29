@@ -78,7 +78,7 @@ export default function DashboardPage() {
     if (user && user !== "loading") {
       Promise.all([
         fetchDashboardObjectives(),
-        fetchOpenDecisions(),
+        fetchOpenDecisions("undecided"),
         fetchStatusSummary(),
         fetchNeedsAttention(),
         fetchRecentProgress(),

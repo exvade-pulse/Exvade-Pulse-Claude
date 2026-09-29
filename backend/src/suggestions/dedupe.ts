@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import type { DbOrTx } from "../db/client.js";
 import { auditLog, suggestions, tasks } from "../db/schema.js";
 import type { SuggestionDraft } from "../interpretation/fakeInterpret.js";
@@ -145,7 +145,10 @@ export async function mergeOrInsertSuggestion(
     sourceReceivedAt,
   );
 
-  if (draft.targetId !== null) {
+  // A merge proposal is its own kind of decision for the reviewer ("are
+  // these the same thing?"), so it never folds into -- or absorbs -- an
+  // ordinary pending update on the same record.
+  if (draft.targetId !== null && draft.changeType !== "merge") {
     const [existing] = await tx
       .select()
       .from(suggestions)
@@ -155,6 +158,7 @@ export async function mergeOrInsertSuggestion(
           eq(suggestions.targetType, draft.targetType),
           eq(suggestions.targetId, draft.targetId),
           inArray(suggestions.status, ["pending", "edited"]),
+          ne(suggestions.changeType, "merge"),
         ),
       )
       .orderBy(desc(suggestions.createdAt))
