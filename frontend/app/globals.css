@@ -968,6 +968,12 @@ summary:focus-visible {
   margin: var(--space-1) 0;
 }
 
+/* Action buttons inside a table cell sit on the row's own line. */
+.table-actions {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
 .exec-check-row {
   margin-top: 0;
   margin-bottom: var(--space-2);
