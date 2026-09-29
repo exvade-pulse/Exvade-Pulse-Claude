@@ -20,6 +20,7 @@ import { resolveNames } from "../relationships/manage.js";
 import { loadRealUpdatedAt, resolveRealUpdatedAt } from "../entities/realUpdatedAt.js";
 import type { SinceLastReview } from "./reviewChanges.js";
 import { loadCompanyContext } from "../context/companyContext.js";
+import type { Dashboard } from "./dashboard.js";
 
 // The executive review: what needs a decision, what's at risk, what's
 // merely old. Deterministic -- no Claude call -- and it only reports what
@@ -142,6 +143,14 @@ export interface ReviewQuestion {
   lastEvidenceAt: string | null;
   // Resolved, but decisions under it are still open: close or update them.
   needsCloseOut: boolean;
+  // Executive-view fields set on the question itself (may be null).
+  label: string | null;
+  nextAction: string | null;
+  keyDependency: string | null;
+  owner: string | null;
+  // The live linked records behind this roll-up, for the dashboard.
+  taskIds: string[];
+  decisionIds: string[];
 }
 
 export interface ReviewDevelopment {
@@ -619,6 +628,12 @@ export async function buildExecutiveReviewData(
       work: work.map((t) => ({ title: t.title, status: t.status, project: t.project })),
       lastEvidenceAt: work.map((t) => t.lastEvidenceAt).sort().at(-1) ?? null,
       needsCloseOut,
+      label: q.label,
+      nextAction: q.nextAction,
+      keyDependency: q.keyDependency,
+      owner: q.owner,
+      taskIds: work.map((t) => t.id),
+      decisionIds: linkedDecisions.map((d) => d.id),
     });
   }
   questions.sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || a.title.localeCompare(b.title));
@@ -814,7 +829,28 @@ function decisionLines(d: ReviewDecision): string[] {
   return lines;
 }
 
-export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
+// Priorities and recent changes, as they lead the executive page.
+function dashboardLines(d: Dashboard): string[] {
+  const lines = ["EXECUTIVE PRIORITIES"];
+  if (d.priorities.length === 0) lines.push("- None set yet.");
+  for (const p of d.priorities) {
+    lines.push(`- ${p.title} [${p.state}]${p.stateDetail ? ` (${p.stateDetail})` : ""}`, `    ${clip(p.objective, 250)}`);
+    if (p.nextAction) lines.push(`    Next: ${clip(p.nextAction, 250)}`);
+    const meta = [p.owner && `Owner: ${p.owner}`, p.keyDate && `Key date: ${formatDate(p.keyDate.date)} (${p.keyDate.label})`, p.keyDependency && `Depends on: ${p.keyDependency}`].filter(Boolean);
+    if (meta.length) lines.push(`    ${meta.join(" | ")}`);
+  }
+  lines.push("", `WHAT CHANGED (since ${formatDate(d.since)})`);
+  if (d.whatChanged.length === 0) lines.push("- Nothing material.");
+  for (const c of d.whatChanged) lines.push(`- ${c.about}: ${c.text}`);
+  if (d.upcomingDeadlines.length > 0) {
+    lines.push("", "UPCOMING DEADLINES");
+    for (const u of d.upcomingDeadlines) lines.push(`- ${formatDate(u.date)} (${u.daysAway} days): ${u.title} — ${u.owner}`);
+  }
+  lines.push("");
+  return lines;
+}
+
+export function renderExecutiveReviewText(data: ExecutiveReviewData, dashboard?: Dashboard): string {
   const lines: string[] = [
     "EXVADE PULSE — EXECUTIVE REVIEW",
     `Generated: ${data.generatedAt.slice(0, 16).replace("T", " ")} UTC`,
@@ -823,6 +859,7 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
     "Note: Pulse doesn't record due dates on tasks (only on decisions). Owners are shown where known. \"Last evidence\" is the date of the newest source backing a record, not when it was imported.",
     "",
     ...(data.companyContext ? ["COMPANY CONTEXT (written by the team)", data.companyContext, ""] : []),
+    ...(dashboard ? dashboardLines(dashboard) : []),
     "THIS WEEK",
     ...data.headline.map((h) => `- ${h}`),
   ];

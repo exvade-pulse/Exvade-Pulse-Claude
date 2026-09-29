@@ -486,7 +486,13 @@ export const strategicQuestions = pgTable("strategic_questions", {
     .notNull()
     .references(() => objectives.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
+  // Short name for the executive view ("Clinical Sampling / White Pellet");
+  // the title stays the full question.
+  label: text("label"),
   hypothesis: text("hypothesis"),
+  // The one next step for this priority, and what it's waiting on.
+  nextAction: text("next_action"),
+  keyDependency: text("key_dependency"),
   status: questionStatusEnum("status").notNull().default("open"),
   // The answer, recorded when resolved.
   resolution: text("resolution"),

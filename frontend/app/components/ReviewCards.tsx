@@ -185,8 +185,8 @@ export function QuestionCard({ question: q }: { question: ReviewQuestion }) {
             {q.decisionsInProgress.map((title) => (
               <li key={title}>Decided, in progress: {title}</li>
             ))}
-            {q.work.map((w) => (
-              <li key={`${w.project}:${w.title}`}>
+            {q.work.map((w, i) => (
+              <li key={`${i}:${w.title}`}>
                 <span className={chipClass(w.status as ReviewTask["status"])}>{STATUS_LABEL[w.status as ReviewTask["status"]] ?? w.status}</span>{" "}
                 {w.title} <span className="muted">({w.project})</span>
               </li>

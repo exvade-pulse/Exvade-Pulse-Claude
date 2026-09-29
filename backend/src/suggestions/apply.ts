@@ -78,7 +78,7 @@ export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
     "relatedTaskId",
   ],
   relationship: ["fromType", "fromId", "toType", "toId", "relationType", "note"],
-  question: ["objectiveId", "title", "hypothesis", "decisionIds", "taskIds", "projectIds", "convertDecisionId", "newDecisions"],
+  question: ["objectiveId", "title", "hypothesis", "decisionIds", "taskIds", "projectIds", "convertDecisionId", "newDecisions", "label", "nextAction", "keyDependency", "owner"],
 };
 
 // Fields a "context" (Info Share) suggestion may touch on the four hierarchy
@@ -247,6 +247,10 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
             objectiveId: diff.objectiveId,
             title: diff.title,
             hypothesis: typeof diff.hypothesis === "string" ? diff.hypothesis : null,
+            label: typeof diff.label === "string" ? diff.label : null,
+            nextAction: typeof diff.nextAction === "string" ? diff.nextAction : null,
+            keyDependency: typeof diff.keyDependency === "string" ? diff.keyDependency : null,
+            owner: typeof diff.owner === "string" ? diff.owner : null,
             decisionIds: ids(diff.decisionIds),
             taskIds: ids(diff.taskIds),
             projectIds: ids(diff.projectIds),

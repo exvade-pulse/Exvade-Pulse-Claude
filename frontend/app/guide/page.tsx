@@ -114,17 +114,19 @@ export default function GuidePage() {
       <div className="card">
         <Defs
           items={[
-            ["This week", "The headline: how many decisions, conflicts, blockers, stale items and review items need you."],
-            ["Focus", "The handful of things most worth your attention right now, most consequential first."],
-            ["Since last review", "What changed since you last clicked Mark as reviewed."],
-            ["Conflicts detected", "Newer information that contradicts what's recorded, with a proposed correction waiting in Review."],
-            ["Strategic questions", "Each question in one line with its status, hypothesis, open decisions and linked work."],
-            ["Deadline passed", "Open decisions past their due date: confirm what actually happened."],
-            ["Decisions needed", "Calls to make, soonest first. Decisions that should be considered together sit next to each other."],
-            ["Risks & blockers", "Blocked, waiting or flagged work, ranked by attention score."],
-            ["Workstreams", "Active work rolled up by project (needs attention / waiting / on track); tasks behind an expander."],
-            ["Needs disposition", "Records with no new evidence in 90+ days. Clean them up; not urgent."],
-            ["Review with ChatGPT", "Copy the whole review (starting with the company context) for your own ChatGPT, or create a private 7-day link."],
+            [
+              "Executive priorities",
+              "Your strategic questions, one card each: short title, the question, status, the next action (highlighted when it's yours), owner, key date and what it depends on. Related decisions, tasks and updates sit under Details. Until questions exist, the busiest workstreams stand in.",
+            ],
+            ["What changed", "The few meaningful updates since you last clicked Mark as reviewed (or the last two weeks)."],
+            ["Needs my action", "Decisions you decide and your own work that's stuck or has a next step."],
+            ["Upcoming deadlines", "Real dates in the next 90 days. A date that has passed never shows here; it moves to Data quality."],
+            ["Waiting / blocked", "What's stuck, and on whom."],
+            ["Decisions", "Open calls only, with why it matters, the decider and the recommended next step."],
+            ["Program details", "Collapsed: every strategic question, workstream and flagged task in full."],
+            ["Older / resolved", "Collapsed: decided-and-in-progress, resolved questions to close out, and records with no evidence in 90+ days (with Clean up stale records)."],
+            ["Data quality / conflicts", "Conflicts, decisions past their deadline, and the Review queue. Opens by itself when something's there."],
+            ["Review with ChatGPT", "Copy the whole review (company context and priorities first) for your own ChatGPT, or create a private 7-day link."],
           ]}
         />
       </div>
@@ -187,11 +189,11 @@ export default function GuidePage() {
       <h2 className="section-title">Your weekly routine</h2>
       <ol className="guide-steps">
         <li>
-          Open <Link href="/executive">Executive</Link>. Read <em>This week</em>, <em>Focus</em> and <em>Since last review</em>.
+          Open <Link href="/executive">Executive</Link>. Scan the <em>priorities</em>, <em>What changed</em> and <em>Needs my action</em>.
         </li>
         <li>
-          Look over <em>Strategic questions</em>. Resolve <em>Conflicts</em> and <em>Deadline passed</em> items, then work through{" "}
-          <em>Decisions needed</em>.
+          Check <em>Upcoming deadlines</em> and <em>Waiting / blocked</em>, resolve anything in <em>Data quality</em>, then work through{" "}
+          <em>Decisions</em>.
         </li>
         <li>
           Clear the <Link href="/review">Review</Link> queue. Start with <em>Ready to approve</em>; the high-confidence items can be

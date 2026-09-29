@@ -2,13 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
-import { decisions, sources, suggestions, tasks, UNDECIDED_DECISION_STATUSES } from "../db/schema.js";
+import { decisions, sources, suggestions, tasks, UNDECIDED_DECISION_STATUSES, users } from "../db/schema.js";
 import { taskParentChainQuery } from "../tasks/parentChain.js";
 import { visibilityFilter } from "../access/visibility.js";
 import { buildExecutiveReviewData, renderExecutiveReviewText } from "../reports/executiveReview.js";
 import { createReviewLink } from "../reports/reviewLinks.js";
 import { markReviewed, sinceLastReview } from "../reports/reviewChanges.js";
 import { syncDeadlineItems } from "../reports/deadlineItems.js";
+import { buildDashboard } from "../reports/dashboard.js";
 
 const WEEK_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -178,7 +179,15 @@ export async function reportRoutes(app: FastifyInstance) {
     await syncDeadlineItems(db, organizationId);
     const data = await buildExecutiveReviewData(organizationId, role);
     data.sinceLastReview = await sinceLastReview(db, organizationId, userId, data);
-    reply.send({ text: renderExecutiveReviewText(data), data, generatedAt: data.generatedAt });
+    const [me] = await db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, userId));
+    const lastReviewedAt = data.sinceLastReview ? new Date(data.sinceLastReview.lastReviewedAt) : null;
+    const dashboard = await buildDashboard(
+      organizationId,
+      data,
+      { userId, role, name: me?.name ?? "", email: me?.email ?? request.user!.email },
+      lastReviewedAt,
+    );
+    reply.send({ text: renderExecutiveReviewText(data, dashboard), data, dashboard, generatedAt: data.generatedAt });
   });
 
   // Saves what the caller's review looks like right now, as the baseline the

@@ -181,12 +181,18 @@ const createBody = z.object({
   title: z.string().min(1),
   hypothesis: z.string().nullable().optional(),
   owner: z.string().nullable().optional(),
+  label: z.string().nullable().optional(),
+  nextAction: z.string().nullable().optional(),
+  keyDependency: z.string().nullable().optional(),
 });
 const updateBody = z.object({
   objectiveId: z.string().uuid().optional(),
   title: z.string().min(1).optional(),
   hypothesis: z.string().nullable().optional(),
   owner: z.string().nullable().optional(),
+  label: z.string().nullable().optional(),
+  nextAction: z.string().nullable().optional(),
+  keyDependency: z.string().nullable().optional(),
 });
 const linkBody = z.object({ entityType: z.enum(LINK_TYPES), entityId: z.string().uuid() });
 

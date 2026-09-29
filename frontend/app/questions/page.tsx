@@ -40,6 +40,10 @@ function QuestionItem({
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(q.title);
   const [hypothesis, setHypothesis] = useState(q.hypothesis ?? "");
+  const [label, setLabel] = useState(q.label ?? "");
+  const [nextAction, setNextAction] = useState(q.nextAction ?? "");
+  const [owner, setOwner] = useState(q.owner ?? "");
+  const [keyDependency, setKeyDependency] = useState(q.keyDependency ?? "");
   const [linkType, setLinkType] = useState<QuestionLinkType>("decision");
   const [linkId, setLinkId] = useState("");
   const [resolving, setResolving] = useState(false);
@@ -84,6 +88,22 @@ function QuestionItem({
       {editing ? (
         <div className="edit-form">
           <label className="edit-field">
+            <span className="edit-field-label">Short title (shown on the Executive page)</span>
+            <input className="edit-input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Clinical Sampling / White Pellet" />
+          </label>
+          <label className="edit-field">
+            <span className="edit-field-label">Next action</span>
+            <input className="edit-input" value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="The one next step" />
+          </label>
+          <label className="edit-field">
+            <span className="edit-field-label">Owner</span>
+            <input className="edit-input" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="e.g. Sean / Duke" />
+          </label>
+          <label className="edit-field">
+            <span className="edit-field-label">Depends on</span>
+            <input className="edit-input" value={keyDependency} onChange={(e) => setKeyDependency(e.target.value)} placeholder="e.g. Sample availability and assay plan" />
+          </label>
+          <label className="edit-field">
             <span className="edit-field-label">Working hypothesis</span>
             <textarea className="edit-input" rows={2} value={hypothesis} onChange={(e) => setHypothesis(e.target.value)} />
           </label>
@@ -93,7 +113,14 @@ function QuestionItem({
               disabled={busy || !title.trim()}
               onClick={() =>
                 run(async () => {
-                  await updateQuestion(q.id, { title, hypothesis: hypothesis.trim() || null });
+                  await updateQuestion(q.id, {
+                    title,
+                    hypothesis: hypothesis.trim() || null,
+                    label: label.trim() || null,
+                    nextAction: nextAction.trim() || null,
+                    owner: owner.trim() || null,
+                    keyDependency: keyDependency.trim() || null,
+                  });
                   setEditing(false);
                 })
               }
@@ -107,6 +134,19 @@ function QuestionItem({
         </div>
       ) : (
         <>
+          {q.label && <p className="rc-meta">Shown as: {q.label}</p>}
+          {q.nextAction && (
+            <p className="rc-line">
+              <span className="rc-label">Next</span> {q.nextAction}
+            </p>
+          )}
+          {(q.owner || q.keyDependency) && (
+            <p className="rc-meta">
+              {q.owner && <>Owner: {q.owner}</>}
+              {q.owner && q.keyDependency && " · "}
+              {q.keyDependency && <>Depends on: {q.keyDependency}</>}
+            </p>
+          )}
           {q.hypothesis && (
             <p className="rc-line">
               <span className="rc-label">Hypothesis</span> {q.hypothesis}

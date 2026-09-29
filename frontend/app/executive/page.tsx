@@ -9,6 +9,7 @@ import {
   fetchExecutiveReview,
   markExecutiveReviewReviewed,
   runCleanup,
+  type Dashboard,
   type ExecutiveReviewData,
   type SessionUser,
 } from "../../lib/api";
@@ -16,28 +17,37 @@ import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
 import { ContradictionCard, DecisionCard, QuestionCard, TaskRow, WorkstreamCard } from "../components/ReviewCards";
 import { TaskDisposition } from "../components/TaskDisposition";
+import { ChangeList, ItemList, PriorityCard, shortDate } from "../components/Dashboard";
 
-// Long lists show their top items; the rest sit behind "Show all" so the
-// page stays scannable in under a minute.
-const WORKSTREAM_PREVIEW = 6;
-const DEVELOPMENTS_PREVIEW = 6;
-const CHANGES_PREVIEW = 5;
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
+// An operating dashboard first, a database review second: priorities, what
+// changed, what needs you, real dates and what's stuck up top; the detail
+// and the housekeeping collapsed below.
 
 export default function ExecutivePage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
   const [data, setData] = useState<ExecutiveReviewData | null>(null);
+  const [dash, setDash] = useState<Dashboard | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [showAllOperating, setShowAllOperating] = useState(false);
   const [marking, setMarking] = useState(false);
   const [markedAt, setMarkedAt] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+
+  async function load() {
+    const r = await fetchExecutiveReview();
+    setData(r.data);
+    setDash(r.dashboard);
+  }
+
+  useEffect(() => {
+    fetchCurrentUser().then(setUser);
+  }, []);
+
+  useEffect(() => {
+    if (user && user !== "loading") load().catch((err) => setLoadError(err.message));
+  }, [user]);
 
   async function handleCleanup() {
     setCleaning(true);
@@ -56,18 +66,6 @@ export default function ExecutivePage() {
     }
   }
 
-  useEffect(() => {
-    fetchCurrentUser().then(setUser);
-  }, []);
-
-  useEffect(() => {
-    if (user && user !== "loading") {
-      fetchExecutiveReview()
-        .then((r) => setData(r.data))
-        .catch((err) => setLoadError(err.message));
-    }
-  }, [user]);
-
   async function handleCheckContradictions() {
     setChecking(true);
     setCheckResult(null);
@@ -76,8 +74,7 @@ export default function ExecutivePage() {
       setCheckResult(
         `Checked ${recordsChecked} record${recordsChecked === 1 ? "" : "s"} — found ${contradictionsFound} new conflict${contradictionsFound === 1 ? "" : "s"}.`,
       );
-      const refreshed = await fetchExecutiveReview();
-      setData(refreshed.data);
+      await load();
     } catch (err) {
       setCheckResult(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -121,10 +118,12 @@ export default function ExecutivePage() {
     );
   }
 
-  const workstreams = data ? (showAllOperating ? data.workstreams : data.workstreams.slice(0, WORKSTREAM_PREVIEW)) : [];
+  const closeOuts = data ? data.questions.filter((q) => q.needsCloseOut) : [];
+  const qualityCount = data ? data.contradictions.length + data.deadlinePassed.length : 0;
+  const olderCount = data ? data.needsDisposition.length + data.decisionsInProgress.length + closeOuts.length : 0;
 
   return (
-    <main className="page">
+    <main className="page exec-page">
       <Nav user={user} />
       <div className="header">
         <h1>Executive review</h1>
@@ -139,157 +138,147 @@ export default function ExecutivePage() {
       </div>
 
       {loadError && <div className="error-banner">{loadError}</div>}
-      {!data && !loadError && <p className="muted">Building the review&hellip;</p>}
+      {(!data || !dash) && !loadError && <p className="muted">Building the review&hellip;</p>}
 
-      {data && (
+      {data && dash && (
         <>
-          <section className="card exec-headline" aria-label="This week">
-            <p className="exec-headline-title">This week</p>
-            <ul>
-              {data.headline.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          </section>
-
-          {data.focus.length > 0 && (
-            <section className="card exec-focus" aria-label="Focus">
-              <p className="exec-headline-title">Focus</p>
-              <ol>
-                {data.focus.map((f) => (
-                  <li key={`${f.kind}-${f.title}`}>
-                    <strong>{f.title}</strong> <span className="muted">— {f.detail}</span>
-                  </li>
-                ))}
-              </ol>
-            </section>
-          )}
-
-          <h2 className="section-title">Since last review</h2>
-          {!data.sinceLastReview ? (
+          <h2 className="section-title">Executive priorities</h2>
+          {dash.priorities.length === 0 ? (
             <p className="empty-inline">
-              Click <strong>Mark as reviewed</strong> when you&rsquo;ve read this. Next time, this section shows only what changed
-              since then.
+              No priorities yet. <Link href="/questions">Set up strategic questions</Link> (the AI can suggest a first set).
             </p>
           ) : (
-            <section className="card exec-changes" aria-label="Since last review">
-              <p className="rc-meta">Since {new Date(data.sinceLastReview.lastReviewedAt).toLocaleDateString()}</p>
-              {data.sinceLastReview.changes.length === 0 ? (
-                <p className="rc-line">Nothing material has changed.</p>
-              ) : (
-                <>
-                  <ul>
-                    {data.sinceLastReview.changes.slice(0, CHANGES_PREVIEW).map((c) => (
-                      <li key={`${c.kind}-${c.title}`}>
-                        <strong>{c.title}</strong> <span className="muted">— {c.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  {data.sinceLastReview.changes.length > CHANGES_PREVIEW && (
-                    <details className="rc-details">
-                      <summary>{data.sinceLastReview.changes.length - CHANGES_PREVIEW} smaller changes</summary>
-                      <ul>
-                        {data.sinceLastReview.changes.slice(CHANGES_PREVIEW).map((c) => (
-                          <li key={`${c.kind}-${c.title}`}>
-                            {c.title} <span className="muted">— {c.detail}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                </>
-              )}
-            </section>
+            <div className="priority-grid">
+              {dash.priorities.map((p) => (
+                <PriorityCard key={p.id} priority={p} />
+              ))}
+            </div>
+          )}
+          {dash.priorities.some((p) => p.kind === "workstream") && (
+            <p className="rc-meta">
+              Some priorities are workstreams because they aren&rsquo;t part of a strategic question yet.{" "}
+              <Link href="/questions">Group them into questions</Link>.
+            </p>
           )}
 
-          <h2 className="section-title">Conflicts detected</h2>
-          {data.contradictions.length === 0 ? (
-            <p className="empty-inline">No known conflicts between newer and older information.</p>
-          ) : (
-            data.contradictions.map((c) => <ContradictionCard key={c.suggestionId} contradiction={c} />)
-          )}
-          <div className="card-actions exec-check-row">
-            <button className="decision-btn" disabled={checking} onClick={handleCheckContradictions}>
-              {checking ? "Checking…" : "Check for contradictions"}
-            </button>
-            {checkResult && <span className="muted">{checkResult}</span>}
+          <div className="dash-columns">
+            <section className="card dash-panel" aria-label="What changed">
+              <h2 className="dash-panel-title">
+                What changed <span className="muted">since {shortDate(dash.since)}</span>
+              </h2>
+              {dash.whatChanged.length === 0 ? <p className="empty-inline">Nothing material.</p> : <ChangeList changes={dash.whatChanged} />}
+            </section>
+            <section className="card dash-panel dash-panel-mine" aria-label="Needs my action">
+              <h2 className="dash-panel-title">Needs my action</h2>
+              <ItemList items={dash.needsMe} empty="Nothing assigned to you right now." />
+            </section>
           </div>
 
-          <h2 className="section-title">Strategic questions</h2>
-          {data.questions.length === 0 ? (
-            <p className="empty-inline">
-              No strategic questions yet. <Link href="/questions">Set them up in Questions</Link> (the AI can suggest a first set).
-            </p>
-          ) : (
-            data.questions.map((q) => <QuestionCard key={q.id} question={q} />)
-          )}
+          <div className="dash-columns">
+            <section className="card dash-panel" aria-label="Upcoming deadlines">
+              <h2 className="dash-panel-title">Upcoming deadlines</h2>
+              {dash.upcomingDeadlines.length === 0 ? (
+                <p className="empty-inline">No dated decisions in the next 90 days.</p>
+              ) : (
+                <ul className="dash-list">
+                  {dash.upcomingDeadlines.map((u) => (
+                    <li key={u.id}>
+                      <span className={`dash-due${u.daysAway <= 14 ? " dash-due-soon" : ""}`}>
+                        {shortDate(u.date)} <span className="muted">({u.daysAway === 0 ? "today" : `${u.daysAway}d`})</span>
+                      </span>{" "}
+                      <Link href="/decisions">{u.title}</Link>
+                      <span className="dash-detail"> · {u.owner}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+            <section className="card dash-panel" aria-label="Waiting or blocked">
+              <h2 className="dash-panel-title">Waiting / blocked</h2>
+              <ItemList items={dash.waiting} empty="Nothing waiting or blocked." />
+            </section>
+          </div>
 
-          {data.deadlinePassed.length > 0 && (
-            <>
-              <h2 className="section-title">Deadline passed: what happened?</h2>
-              {data.deadlinePassed.map((d) => (
-                <DecisionCard key={d.id} decision={d} deadlinePassed />
-              ))}
-            </>
-          )}
-
-          <h2 className="section-title">Decisions needed</h2>
+          <h2 className="section-title">Decisions</h2>
           {data.decisionsNeeded.length === 0 ? (
             <p className="empty-inline">No open decisions.</p>
           ) : (
             data.decisionsNeeded.map((d) => <DecisionCard key={d.id} decision={d} />)
           )}
-          {data.decisionsInProgress.length > 0 && (
-            <p className="rc-meta exec-in-progress">
-              Decided and being carried out: {data.decisionsInProgress.map((d) => d.title).join(" · ")}
-            </p>
-          )}
 
-          <h2 className="section-title">Risks &amp; blockers</h2>
-          {data.risks.length === 0 ? (
-            <p className="empty-inline">Nothing blocked, waiting or flagged.</p>
-          ) : (
-            <div className="card task-list">
-              {data.risks.map((t) => (
-                <TaskRow key={t.id} task={t} />
-              ))}
+          <details className="dash-section">
+            <summary>
+              <span className="dash-section-title">Program details</span>
+              <span className="muted">
+                {" "}
+                · {data.questions.filter((q) => q.status === "open").length} strategic questions · {data.workstreams.length} workstreams ·{" "}
+                {data.risks.length} flagged tasks
+              </span>
+            </summary>
+            {data.questions.filter((q) => q.status === "open").length > 0 && (
+              <>
+                <h3 className="dash-sub">Strategic questions</h3>
+                {data.questions
+                  .filter((q) => q.status === "open")
+                  .map((q) => (
+                    <QuestionCard key={q.id} question={q} />
+                  ))}
+              </>
+            )}
+            <h3 className="dash-sub">Workstreams</h3>
+            {data.workstreams.length === 0 ? (
+              <p className="empty-inline">No active work with recent evidence.</p>
+            ) : (
+              data.workstreams.map((w) => <WorkstreamCard key={`${w.objective}-${w.project}`} workstream={w} />)
+            )}
+            {data.risks.length > 0 && (
+              <>
+                <h3 className="dash-sub">Blocked, waiting or flagged tasks</h3>
+                <div className="card task-list">
+                  {data.risks.map((t) => (
+                    <TaskRow key={t.id} task={t} />
+                  ))}
+                </div>
+              </>
+            )}
+          </details>
+
+          <details className="dash-section">
+            <summary>
+              <span className="dash-section-title">Older / resolved items</span>
+              <span className="muted"> · {olderCount} item{olderCount === 1 ? "" : "s"}</span>
+            </summary>
+            {closeOuts.length > 0 && (
+              <>
+                <h3 className="dash-sub">Resolved questions with decisions still open</h3>
+                {closeOuts.map((q) => (
+                  <QuestionCard key={q.id} question={q} />
+                ))}
+              </>
+            )}
+            {data.decisionsInProgress.length > 0 && (
+              <>
+                <h3 className="dash-sub">Decided, being carried out</h3>
+                <ul className="dash-list">
+                  {data.decisionsInProgress.map((d) => (
+                    <li key={d.id}>
+                      <Link href="/decisions">{d.title}</Link> <span className="dash-detail">· {d.decider}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <h3 className="dash-sub">No new evidence in 90+ days</h3>
+            <div className="card-actions exec-check-row">
+              <button className="decision-btn" disabled={cleaning} onClick={handleCleanup}>
+                {cleaning ? "Checking…" : "Clean up stale records"}
+              </button>
+              {cleanupResult && <span className="muted">{cleanupResult}</span>}
             </div>
-          )}
-
-          <h2 className="section-title">Workstreams</h2>
-          {data.workstreams.length === 0 ? (
-            <p className="empty-inline">No active work with recent evidence.</p>
-          ) : (
-            <>
-              {workstreams.map((w) => (
-                <WorkstreamCard key={`${w.objective}-${w.project}`} workstream={w} />
-              ))}
-              {data.workstreams.length > WORKSTREAM_PREVIEW && (
-                <button className="text-btn" onClick={() => setShowAllOperating((v) => !v)}>
-                  {showAllOperating ? "Show fewer" : `Show all ${data.workstreams.length} workstreams`}
-                </button>
-              )}
-            </>
-          )}
-
-          <h2 className="section-title">Needs disposition</h2>
-          <div className="card-actions exec-check-row">
-            <button className="decision-btn" disabled={cleaning} onClick={handleCleanup}>
-              {cleaning ? "Checking…" : "Clean up stale records"}
-            </button>
-            {cleanupResult && <span className="muted">{cleanupResult}</span>}
-          </div>
-          {data.needsDisposition.length === 0 ? (
-            <p className="empty-inline">
-              No old records. The cleanup check also reviews next actions that may be out of date.
-            </p>
-          ) : (
-            <details className="card exec-disposition">
-              <summary>
-                {data.needsDisposition.length} old record{data.needsDisposition.length === 1 ? "" : "s"} with no supporting
-                evidence in 90+ days. Not urgent: close, update or confirm each is still relevant.
-              </summary>
-              <div className="task-list">
+            {data.needsDisposition.length === 0 ? (
+              <p className="empty-inline">No old records.</p>
+            ) : (
+              <div className="card task-list">
                 {data.needsDisposition.map((t) => (
                   <TaskRow key={t.id} task={t} showWhy={false}>
                     <TaskDisposition
@@ -302,58 +291,46 @@ export default function ExecutivePage() {
                   </TaskRow>
                 ))}
               </div>
-            </details>
-          )}
-
-          <h2 className="section-title">Recent developments</h2>
-          {data.recentDevelopments.length === 0 ? (
-            <p className="empty-inline">Nothing new in the last two weeks.</p>
-          ) : (
-            <div className="card exec-developments">
-              <ul>
-                {data.recentDevelopments.slice(0, DEVELOPMENTS_PREVIEW).map((r) => (
-                  <li key={r.id}>
-                    <span className="exec-date">{formatDate(r.date)}</span> {r.about}{" "}
-                    <span className="muted">({r.source})</span>
-                  </li>
-                ))}
-              </ul>
-              {data.recentDevelopments.length > DEVELOPMENTS_PREVIEW && (
-                <details className="rc-details">
-                  <summary>{data.recentDevelopments.length - DEVELOPMENTS_PREVIEW} more</summary>
-                  <ul>
-                    {data.recentDevelopments.slice(DEVELOPMENTS_PREVIEW).map((r) => (
-                      <li key={r.id}>
-                        <span className="exec-date">{formatDate(r.date)}</span> {r.about}{" "}
-                        <span className="muted">({r.source})</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-
-          <h2 className="section-title">Awaiting review</h2>
-          <div className="card exec-review-summary">
-            <p>
-              {data.awaitingReviewTotal === 0
-                ? "Nothing waiting for approval."
-                : `${data.awaitingReviewTotal} suggested change${data.awaitingReviewTotal === 1 ? " is" : "s are"} waiting for your approval.`}
-            </p>
-            {data.awaitingReviewTotal > 0 && (
-              <div className="card-actions">
-                <Link className="decision-btn save" href="/review">
-                  Open Review
-                </Link>
-              </div>
             )}
-          </div>
+          </details>
 
-          <p className="exec-counts muted">
-            Reference: {data.counts.openTasks} open tasks ({data.counts.blocked} blocked, {data.counts.needsAttention} need
-            attention, {data.counts.waiting} waiting) · {data.counts.openDecisions} open decisions.
-          </p>
+          <details className="dash-section" open={qualityCount > 0}>
+            <summary>
+              <span className="dash-section-title">Data quality / conflicts</span>
+              <span className="muted">
+                {" "}
+                · {data.contradictions.length} conflict{data.contradictions.length === 1 ? "" : "s"} · {data.deadlinePassed.length} past-deadline
+                decision{data.deadlinePassed.length === 1 ? "" : "s"} · {data.awaitingReviewTotal} in Review
+              </span>
+            </summary>
+            {data.contradictions.map((c) => (
+              <ContradictionCard key={c.suggestionId} contradiction={c} />
+            ))}
+            <div className="card-actions exec-check-row">
+              <button className="decision-btn" disabled={checking} onClick={handleCheckContradictions}>
+                {checking ? "Checking…" : "Check for contradictions"}
+              </button>
+              {checkResult && <span className="muted">{checkResult}</span>}
+            </div>
+            {data.deadlinePassed.length > 0 && (
+              <>
+                <h3 className="dash-sub">Deadline passed: what actually happened?</h3>
+                {data.deadlinePassed.map((d) => (
+                  <DecisionCard key={d.id} decision={d} deadlinePassed />
+                ))}
+              </>
+            )}
+            <p className="rc-line">
+              {data.awaitingReviewTotal === 0 ? (
+                "Nothing waiting for approval."
+              ) : (
+                <>
+                  {data.awaitingReviewTotal} suggested change{data.awaitingReviewTotal === 1 ? " is" : "s are"} waiting.{" "}
+                  <Link href="/review">Open Review</Link>
+                </>
+              )}
+            </p>
+          </details>
 
           <ChatGptReviewPanel isAdmin={user.role === "admin"} />
         </>

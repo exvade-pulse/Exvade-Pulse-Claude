@@ -54,6 +54,9 @@ export async function createQuestion(
     objectiveId: string;
     title: string;
     hypothesis?: string | null;
+    label?: string | null;
+    nextAction?: string | null;
+    keyDependency?: string | null;
     owner?: string | null;
     convertedFromDecisionId?: string | null;
   },
@@ -69,6 +72,9 @@ export async function createQuestion(
       title,
       hypothesis: clean(params.hypothesis),
       owner: clean(params.owner),
+      label: clean(params.label),
+      nextAction: clean(params.nextAction),
+      keyDependency: clean(params.keyDependency),
       convertedFromDecisionId: params.convertedFromDecisionId ?? null,
     })
     .returning();
@@ -89,7 +95,15 @@ export async function updateQuestion(
     organizationId: string;
     actorId: string;
     questionId: string;
-    fields: { title?: string; hypothesis?: string | null; owner?: string | null; objectiveId?: string };
+    fields: {
+      title?: string;
+      hypothesis?: string | null;
+      owner?: string | null;
+      objectiveId?: string;
+      label?: string | null;
+      nextAction?: string | null;
+      keyDependency?: string | null;
+    };
   },
 ) {
   await requireQuestion(db, params.organizationId, params.questionId);
@@ -101,6 +115,9 @@ export async function updateQuestion(
   }
   if (params.fields.hypothesis !== undefined) set.hypothesis = clean(params.fields.hypothesis);
   if (params.fields.owner !== undefined) set.owner = clean(params.fields.owner);
+  if (params.fields.label !== undefined) set.label = clean(params.fields.label);
+  if (params.fields.nextAction !== undefined) set.nextAction = clean(params.fields.nextAction);
+  if (params.fields.keyDependency !== undefined) set.keyDependency = clean(params.fields.keyDependency);
   if (params.fields.objectiveId !== undefined) {
     await requireObjective(db, params.organizationId, params.fields.objectiveId);
     set.objectiveId = params.fields.objectiveId;
@@ -238,6 +255,11 @@ export interface QuestionProposal {
   objectiveId: string;
   title: string;
   hypothesis: string | null;
+  // Optional executive-view fields (older proposals won't have them).
+  label?: string | null;
+  nextAction?: string | null;
+  keyDependency?: string | null;
+  owner?: string | null;
   decisionIds: string[];
   taskIds: string[];
   projectIds: string[];
@@ -274,6 +296,10 @@ export async function applyQuestionProposal(
     objectiveId: proposal.objectiveId,
     title: proposal.title,
     hypothesis: proposal.hypothesis,
+    label: proposal.label ?? null,
+    nextAction: proposal.nextAction ?? null,
+    keyDependency: proposal.keyDependency ?? null,
+    owner: proposal.owner ?? null,
     convertedFromDecisionId: converted?.id ?? null,
   });
 

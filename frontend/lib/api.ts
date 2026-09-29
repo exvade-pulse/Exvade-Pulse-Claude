@@ -866,6 +866,9 @@ export interface StrategicQuestion {
   objective: string;
   title: string;
   hypothesis: string | null;
+  label: string | null;
+  nextAction: string | null;
+  keyDependency: string | null;
   status: "open" | "resolved";
   resolution: string | null;
   resolvedAt: string | null;
@@ -901,9 +904,10 @@ async function jsonRequest<T>(path: string, method: string, body?: unknown): Pro
 }
 
 export const fetchQuestions = () => jsonRequest<QuestionsResponse>("/api/questions", "GET");
-export const createQuestion = (body: { objectiveId: string; title: string; hypothesis?: string | null }) =>
+type QuestionFields = { label?: string | null; nextAction?: string | null; keyDependency?: string | null; owner?: string | null };
+export const createQuestion = (body: { objectiveId: string; title: string; hypothesis?: string | null } & QuestionFields) =>
   jsonRequest<{ question: StrategicQuestion }>("/api/questions", "POST", body);
-export const updateQuestion = (id: string, body: { title?: string; hypothesis?: string | null; objectiveId?: string }) =>
+export const updateQuestion = (id: string, body: { title?: string; hypothesis?: string | null; objectiveId?: string } & QuestionFields) =>
   jsonRequest<{ question: StrategicQuestion }>(`/api/questions/${id}`, "PATCH", body);
 export const resolveQuestion = (id: string, resolution: string) =>
   jsonRequest<{ question: StrategicQuestion; openDecisions: Array<{ id: string; title: string; status: string }> }>(
@@ -1013,7 +1017,55 @@ export interface ExecutiveReviewData {
 // The executive review for the signed-in user's visibility: structured data
 // for the Executive page, and the same content as text for pasting into
 // ChatGPT -- see backend/src/reports/executiveReview.ts.
-export async function fetchExecutiveReview(): Promise<{ text: string; data: ExecutiveReviewData; generatedAt: string }> {
+export type DashState = "needs action" | "upcoming deadline" | "waiting" | "recently changed" | "on track" | "resolved";
+
+export interface DashboardChange {
+  date: string;
+  about: string;
+  text: string;
+  recordType: string;
+  recordId: string;
+}
+
+export interface DashboardPriority {
+  id: string;
+  kind: "question" | "workstream";
+  title: string;
+  objective: string;
+  state: DashState;
+  stateDetail: string;
+  nextAction: string | null;
+  nextActionIsMine: boolean;
+  owner: string | null;
+  keyDate: { label: string; date: string } | null;
+  keyDependency: string | null;
+  details: {
+    hypothesis: string | null;
+    decisions: Array<{ id: string; title: string; dueDate: string | null; overdue: boolean; decider: string }>;
+    work: Array<{ id: string; title: string; status: string; project: string; nextAction: string | null; owner: string | null }>;
+    recent: DashboardChange[];
+  };
+}
+
+export interface DashboardItem {
+  kind: "decision" | "task";
+  id: string;
+  title: string;
+  detail: string;
+  date: string | null;
+  mine: boolean;
+}
+
+export interface Dashboard {
+  since: string;
+  priorities: DashboardPriority[];
+  whatChanged: DashboardChange[];
+  needsMe: DashboardItem[];
+  upcomingDeadlines: Array<{ kind: "decision"; id: string; title: string; date: string; daysAway: number; owner: string }>;
+  waiting: DashboardItem[];
+}
+
+export async function fetchExecutiveReview(): Promise<{ text: string; data: ExecutiveReviewData; dashboard: Dashboard; generatedAt: string }> {
   const res = await fetch(`${API_URL}/api/reports/executive-review`, { credentials: "include" });
   if (!res.ok) {
     throw new Error(`Failed to build the review (${res.status})`);
