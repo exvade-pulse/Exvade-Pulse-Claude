@@ -7,6 +7,8 @@ import {
   real,
   pgEnum,
   uniqueIndex,
+  boolean,
+  integer,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
@@ -467,6 +469,34 @@ export const companyContext = pgTable("company_context", {
   content: text("content").notNull(),
   updatedBy: uuid("updated_by").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// A password-protected, read-only way into the whole app for someone who
+// isn't a user (e.g. an admin's ChatGPT agent reviewing usability and
+// accuracy). Only hashes are stored: the link token and password are shown
+// once at creation. Every request made with it is re-checked against this
+// row (revoked? expired?) and refused if it would change anything.
+export const viewLinks = pgTable("view_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  label: text("label"),
+  tokenHash: text("token_hash").notNull().unique(),
+  // scrypt, "salt:hash" hex.
+  passwordHash: text("password_hash").notNull(),
+  // Sees Leadership/Restricted items too (an admin's view) when true;
+  // a member's view otherwise.
+  includeRestricted: boolean("include_restricted").notNull().default(false),
+  createdBy: uuid("created_by")
+    .notNull()
+    .references(() => users.id),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const questionStatusEnum = pgEnum("question_status", ["open", "resolved"]);

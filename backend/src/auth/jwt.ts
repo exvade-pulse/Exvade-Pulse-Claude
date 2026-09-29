@@ -12,6 +12,10 @@ export interface SessionClaims {
   // authorized_users on every request, since a 7-day-lived cookie must not
   // keep working with a role that's since been revoked or demoted.
   role: UserRole;
+  // Set only for a password-protected view-only link session (see
+  // viewLinks/manage.ts): the link it came from, re-checked on every request.
+  viewLinkId?: string;
+  readOnly?: boolean;
 }
 
 function secretKey() {
@@ -40,6 +44,7 @@ export async function verifySession(token: string): Promise<SessionClaims | null
         organizationId: payload.organizationId,
         email: payload.email,
         role: payload.role,
+        ...(typeof payload.viewLinkId === "string" ? { viewLinkId: payload.viewLinkId, readOnly: true } : {}),
       };
     }
     return null;

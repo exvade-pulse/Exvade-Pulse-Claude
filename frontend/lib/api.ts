@@ -10,6 +10,8 @@ export interface SessionUser {
   organizationId: string;
   email: string;
   role: UserRole;
+  // True for a password-protected view-only link session: browse, never change.
+  readOnly?: boolean;
 }
 
 // Recorded when a suggestion proposed a task field value older than what's
@@ -934,6 +936,26 @@ export const fetchCompanyContext = () => jsonRequest<CompanyContextResponse>("/a
 export const saveCompanyContext = (content: string) =>
   jsonRequest<{ content: string; updatedAt: string }>("/api/company-context", "PUT", { content });
 export const draftCompanyContext = () => jsonRequest<{ draft: string }>("/api/company-context/draft", "POST");
+
+export interface ViewLinkSummary {
+  id: string;
+  label: string | null;
+  includeRestricted: boolean;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  lockedUntil: string | null;
+  createdByName: string;
+  active: boolean;
+}
+
+export const listViewLinks = () => jsonRequest<{ links: ViewLinkSummary[] }>("/api/view-links", "GET");
+export const createViewLink = (body: { label: string | null; days: 1 | 7 | 30; includeRestricted: boolean }) =>
+  jsonRequest<{ id: string; url: string; password: string; expiresAt: string }>("/api/view-links", "POST", body);
+export const revokeViewLink = (id: string) => jsonRequest<{ ok: true }>(`/api/view-links/${id}/revoke`, "POST");
+export const unlockViewLink = (token: string, password: string) =>
+  jsonRequest<{ ok: true; expiresAt: string }>("/api/view/unlock", "POST", { token, password });
 
 export interface ReviewWorkstream {
   project: string;

@@ -26,6 +26,7 @@ import { contradictionRoutes } from "./routes/contradictions.js";
 import { cleanupRoutes } from "./routes/cleanup.js";
 import { questionRoutes } from "./routes/questions.js";
 import { companyContextRoutes } from "./routes/companyContext.js";
+import { viewLinkRoutes } from "./routes/viewLinks.js";
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -62,6 +63,7 @@ export async function buildApp() {
   await app.register(cleanupRoutes);
   await app.register(questionRoutes);
   await app.register(companyContextRoutes);
+  await app.register(viewLinkRoutes);
 
   return app;
 }

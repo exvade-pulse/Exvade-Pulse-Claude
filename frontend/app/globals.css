@@ -1743,3 +1743,30 @@ summary:focus-visible {
 .priority-details .dash-list li { -webkit-line-clamp: unset; display: block; }
 .dash-list a { text-decoration: none; font-weight: 600; }
 .dash-list a:hover { text-decoration: underline; }
+
+/* View-only link sessions */
+.readonly-banner {
+  background: var(--caution-soft);
+  color: var(--caution);
+  border: 1px solid var(--caution);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+.view-link-secret {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.view-link-secret code {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+}

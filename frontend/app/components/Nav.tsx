@@ -17,6 +17,12 @@ export function Nav({ user }: { user?: SessionUser | null }) {
   }
 
   return (
+    <>
+    {user?.readOnly && (
+      <div className="readonly-banner" role="status">
+        <strong>Read-only view.</strong> You can look around every page; changes are disabled.
+      </div>
+    )}
     <nav className="nav">
       <Link href="/">Dashboard</Link>
       <Link href="/executive">Executive</Link>
@@ -28,8 +34,8 @@ export function Nav({ user }: { user?: SessionUser | null }) {
       <Link href="/decisions">Decisions</Link>
       <Link href="/reports/weekly">Weekly Report</Link>
       <Link href="/activity">Activity</Link>
-      {user?.role === "admin" && <Link href="/users">Users</Link>}
-      {user?.role === "admin" && <Link href="/integrations">Integrations</Link>}
+      {user?.role === "admin" && !user.readOnly && <Link href="/users">Users</Link>}
+      {user?.role === "admin" && !user.readOnly && <Link href="/integrations">Integrations</Link>}
       <Link href="/context">Context</Link>
       <Link href="/guide">Guide</Link>
       {user && (
@@ -48,5 +54,6 @@ export function Nav({ user }: { user?: SessionUser | null }) {
         </form>
       )}
     </nav>
+    </>
   );
 }

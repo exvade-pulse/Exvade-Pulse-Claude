@@ -20,6 +20,7 @@ import {
   type SessionUser,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
+import { ViewLinksPanel } from "../components/ViewLinksPanel";
 
 const LABELS: Record<string, string> = {
   circleback: "Circleback",
@@ -464,6 +465,8 @@ function IntegrationsPageInner() {
           )}
         </>
       )}
+
+      <ViewLinksPanel />
     </main>
   );
 }
