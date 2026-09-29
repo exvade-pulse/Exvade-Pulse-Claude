@@ -20,7 +20,7 @@ import {
   type UserRole,
 } from "../db/schema.js";
 import { canViewVisibility, visibilityFilter } from "../access/visibility.js";
-import { getClaudeClient } from "../interpretation/claudeClient.js";
+import { getContextualClaudeClient } from "../context/companyContext.js";
 import { proposeQuestions, type QuestionContext } from "../interpretation/questionDetection.js";
 import {
   createQuestion,
@@ -301,7 +301,7 @@ export async function questionRoutes(app: FastifyInstance) {
   app.post("/api/questions/suggest", async (request, reply) => {
     const organizationId = request.user!.organizationId;
     const context = await loadQuestionContext(organizationId);
-    const proposals = await proposeQuestions(context, getClaudeClient());
+    const proposals = await proposeQuestions(context, await getContextualClaudeClient(db, organizationId));
     if (proposals.length > 0) {
       const [source] = await db
         .insert(sources)

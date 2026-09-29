@@ -4,7 +4,7 @@ import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { sources, STANDALONE_CHANGE_TYPES, suggestions } from "../db/schema.js";
-import { getClaudeClient } from "../interpretation/claudeClient.js";
+import { getContextualClaudeClient } from "../context/companyContext.js";
 import {
   proposeCleanup,
   type CleanupAction,
@@ -129,7 +129,7 @@ export async function cleanupRoutes(app: FastifyInstance) {
       if (t.nextActionStale && !waiting.has(t.id) && !flagged.has(t.id)) flagged.set(t.id, taskCandidate(t, "stale_next_action"));
     }
 
-    const claudeClient = getClaudeClient();
+    const claudeClient = await getContextualClaudeClient(db, organizationId);
     const proposals: CleanupProposal[] = [];
     let recordsChecked = 0;
 

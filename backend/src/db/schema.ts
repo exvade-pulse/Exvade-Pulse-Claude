@@ -456,6 +456,19 @@ export const decisions = pgTable("decisions", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// A short profile of the company -- programs, people, partners, current
+// priorities, terminology -- written by the team and given to the AI as
+// background on every interpretation and check. One per organization.
+// Previous versions are kept in audit_log (company_context.updated).
+export const companyContext = pgTable("company_context", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const questionStatusEnum = pgEnum("question_status", ["open", "resolved"]);
 
 // A strategic question under an objective ("Can we sample reliably

@@ -1533,3 +1533,19 @@ summary:focus-visible {
   font-size: var(--text-sm);
   margin: var(--space-2) 0 0;
 }
+
+/* Company context */
+.context-editor {
+  width: 100%;
+  min-height: 360px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.context-view {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  margin: 0;
+}

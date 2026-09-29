@@ -12,7 +12,7 @@ import {
   tasks,
   TERMINAL_TASK_STATUSES,
 } from "../db/schema.js";
-import { getClaudeClient } from "../interpretation/claudeClient.js";
+import { getContextualClaudeClient } from "../context/companyContext.js";
 import {
   findContradictions,
   type CheckedRecord,
@@ -79,7 +79,7 @@ export async function contradictionRoutes(app: FastifyInstance) {
   // contradiction isn't re-flagged.
   app.post("/api/reviews/check-contradictions", async (request, reply) => {
     const organizationId = request.user!.organizationId;
-    const claudeClient = getClaudeClient();
+    const claudeClient = await getContextualClaudeClient(db, organizationId);
 
     const [projectRows, decisionRows, pendingRows] = await Promise.all([
       db.select({ id: projects.id, title: projects.title }).from(projects).where(eq(projects.organizationId, organizationId)),

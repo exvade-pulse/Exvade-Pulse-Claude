@@ -883,7 +883,7 @@ export interface QuestionsResponse {
   };
 }
 
-async function questionRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
+async function jsonRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     method,
     credentials: "include",
@@ -897,24 +897,36 @@ async function questionRequest<T>(path: string, method: string, body?: unknown):
   return res.json();
 }
 
-export const fetchQuestions = () => questionRequest<QuestionsResponse>("/api/questions", "GET");
+export const fetchQuestions = () => jsonRequest<QuestionsResponse>("/api/questions", "GET");
 export const createQuestion = (body: { objectiveId: string; title: string; hypothesis?: string | null }) =>
-  questionRequest<{ question: StrategicQuestion }>("/api/questions", "POST", body);
+  jsonRequest<{ question: StrategicQuestion }>("/api/questions", "POST", body);
 export const updateQuestion = (id: string, body: { title?: string; hypothesis?: string | null; objectiveId?: string }) =>
-  questionRequest<{ question: StrategicQuestion }>(`/api/questions/${id}`, "PATCH", body);
+  jsonRequest<{ question: StrategicQuestion }>(`/api/questions/${id}`, "PATCH", body);
 export const resolveQuestion = (id: string, resolution: string) =>
-  questionRequest<{ question: StrategicQuestion; openDecisions: Array<{ id: string; title: string; status: string }> }>(
+  jsonRequest<{ question: StrategicQuestion; openDecisions: Array<{ id: string; title: string; status: string }> }>(
     `/api/questions/${id}/resolve`,
     "POST",
     { resolution },
   );
-export const reopenQuestion = (id: string) => questionRequest<{ question: StrategicQuestion }>(`/api/questions/${id}/reopen`, "POST");
+export const reopenQuestion = (id: string) => jsonRequest<{ question: StrategicQuestion }>(`/api/questions/${id}/reopen`, "POST");
 export const linkToQuestion = (id: string, entityType: QuestionLinkType, entityId: string) =>
-  questionRequest<{ ok: true }>(`/api/questions/${id}/links`, "POST", { entityType, entityId });
+  jsonRequest<{ ok: true }>(`/api/questions/${id}/links`, "POST", { entityType, entityId });
 export const unlinkFromQuestion = (id: string, entityType: QuestionLinkType, entityId: string) =>
-  questionRequest<{ ok: true }>(`/api/questions/${id}/links/${entityType}/${entityId}`, "DELETE");
+  jsonRequest<{ ok: true }>(`/api/questions/${id}/links/${entityType}/${entityId}`, "DELETE");
 export const suggestQuestions = () =>
-  questionRequest<{ objectivesChecked: number; questionsProposed: number; conversionsProposed: number }>("/api/questions/suggest", "POST");
+  jsonRequest<{ objectivesChecked: number; questionsProposed: number; conversionsProposed: number }>("/api/questions/suggest", "POST");
+
+export interface CompanyContextResponse {
+  content: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  maxChars: number;
+}
+
+export const fetchCompanyContext = () => jsonRequest<CompanyContextResponse>("/api/company-context", "GET");
+export const saveCompanyContext = (content: string) =>
+  jsonRequest<{ content: string; updatedAt: string }>("/api/company-context", "PUT", { content });
+export const draftCompanyContext = () => jsonRequest<{ draft: string }>("/api/company-context/draft", "POST");
 
 export interface ReviewWorkstream {
   project: string;
@@ -979,6 +991,7 @@ export interface ExecutiveReviewData {
   sinceLastReview: { lastReviewedAt: string; changes: ReviewChange[] } | null;
   headline: string[];
   focus: ReviewFocusItem[];
+  companyContext: string | null;
   questions: ReviewQuestion[];
   workstreams: ReviewWorkstream[];
   contradictions: ReviewContradiction[];

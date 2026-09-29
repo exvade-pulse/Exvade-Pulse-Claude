@@ -5,7 +5,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { decisions, initiatives, LIVE_DECISION_STATUSES, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
 import { findDuplicateDecisions, findDuplicateHierarchy, findDuplicateTasks, type DuplicateCandidateHierarchy } from "../interpretation/duplicateDetection.js";
-import { getClaudeClient } from "../interpretation/claudeClient.js";
+import { getContextualClaudeClient } from "../context/companyContext.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
 // A finished task is already a closed matter, so there's nothing useful in
@@ -114,7 +114,7 @@ export async function duplicateRoutes(app: FastifyInstance) {
     ]);
     const alreadyProposed = new Set(pendingMerges.map((m) => m.targetId));
 
-    const claudeClient = getClaudeClient();
+    const claudeClient = await getContextualClaudeClient(db, organizationId);
     const receivedAt = new Date();
     let sourceId: string | null = null;
 

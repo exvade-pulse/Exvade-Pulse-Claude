@@ -1,4 +1,5 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
+import { loadCompanyContext as loadTeamContext, withCompanyContext } from "../context/companyContext.js";
 import type { Database } from "../db/client.js";
 import { decisions, initiatives, LIVE_DECISION_STATUSES, objectives, projects, sources, tasks } from "../db/schema.js";
 import { isNoiseSource } from "./noiseFilter.js";
@@ -137,7 +138,9 @@ export async function runInterpretationPipeline(
     const drafts = await interpretSource(
       { subject: raw.subject, from: raw.from, body: redactedBody, receivedAt: raw.receivedAt },
       context,
-      claudeClient,
+      // Only interpretation gets the team's company context; redaction and the
+      // noise filter above stay context-free on purpose.
+      withCompanyContext(claudeClient, (await loadTeamContext(db, organizationId))?.content),
     );
 
     // One transaction for the whole batch of drafts from this source, so a

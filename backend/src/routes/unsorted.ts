@@ -5,7 +5,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
 import { suggestReclassification } from "../interpretation/retriage.js";
-import { getClaudeClient } from "../interpretation/claudeClient.js";
+import { getContextualClaudeClient } from "../context/companyContext.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
 // The exact title interpret.ts's SYSTEM_PROMPT tells the model to use when a
@@ -141,7 +141,7 @@ export async function unsortedRoutes(app: FastifyInstance) {
       return;
     }
 
-    const claudeClient = getClaudeClient();
+    const claudeClient = await getContextualClaudeClient(db, organizationId);
     const receivedAt = new Date();
     // One synthetic source shared by every suggestion this run produces --
     // there's no external communication behind a re-triage pass, but

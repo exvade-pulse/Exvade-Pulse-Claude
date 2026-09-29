@@ -5,7 +5,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { entityRelationships, decisions, LIVE_DECISION_STATUSES, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES } from "../db/schema.js";
 import { findRelationships, type RelationshipCandidate } from "../interpretation/relationshipDetection.js";
-import { getClaudeClient } from "../interpretation/claudeClient.js";
+import { getContextualClaudeClient } from "../context/companyContext.js";
 import { mergeOrInsertSuggestion } from "../suggestions/dedupe.js";
 
 // Same reasoning as duplicates.ts: a closed task carries nothing left to
@@ -88,7 +88,7 @@ export async function relationshipSuggestionRoutes(app: FastifyInstance) {
       }
     }
 
-    const claudeClient = getClaudeClient();
+    const claudeClient = await getContextualClaudeClient(db, organizationId);
     const receivedAt = new Date();
     let sourceId: string | null = null;
 

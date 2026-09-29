@@ -19,6 +19,7 @@ import { describeSuggestions } from "../suggestions/describe.js";
 import { resolveNames } from "../relationships/manage.js";
 import { loadRealUpdatedAt, resolveRealUpdatedAt } from "../entities/realUpdatedAt.js";
 import type { SinceLastReview } from "./reviewChanges.js";
+import { loadCompanyContext } from "../context/companyContext.js";
 
 // The executive review: what needs a decision, what's at risk, what's
 // merely old. Deterministic -- no Claude call -- and it only reports what
@@ -190,6 +191,8 @@ export interface ExecutiveReviewData {
   sinceLastReview?: SinceLastReview | null;
   headline: string[];
   focus: ReviewFocusItem[];
+  // The team's company context (see context/companyContext.ts), if written.
+  companyContext: string | null;
   questions: ReviewQuestion[];
   workstreams: ReviewWorkstream[];
   contradictions: ReviewContradiction[];
@@ -741,6 +744,7 @@ export async function buildExecutiveReviewData(
     generatedAt: now.toISOString(),
     headline,
     focus: focus.slice(0, FOCUS_LIMIT),
+    companyContext: (await loadCompanyContext(db, organizationId))?.content ?? null,
     questions,
     workstreams,
     contradictions,
@@ -818,6 +822,7 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
     "This is a snapshot of Exvade Bioscience's operations tracker (Pulse). Please review it using what you know about Exvade: what should I focus on, what am I missing, which decisions need attention, and what should happen next? Anything I paste back into Pulse goes to a review queue for approval before it changes anything.",
     "Note: Pulse doesn't record due dates on tasks (only on decisions). Owners are shown where known. \"Last evidence\" is the date of the newest source backing a record, not when it was imported.",
     "",
+    ...(data.companyContext ? ["COMPANY CONTEXT (written by the team)", data.companyContext, ""] : []),
     "THIS WEEK",
     ...data.headline.map((h) => `- ${h}`),
   ];

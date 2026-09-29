@@ -174,6 +174,7 @@ export default function GuidePage() {
             [<Link href="/">Dashboard</Link>, "Quick status: decisions needed, counts, what needs attention."],
             [<Link href="/executive">Executive</Link>, "The weekly review: what needs you, what changed, what's stale."],
             [<Link href="/questions">Questions</Link>, "Strategic questions: add, link records, record the answer when resolved."],
+            [<Link href="/context">Context</Link>, "The company profile the AI reads before every interpretation and check. Admins edit it; the AI can draft it."],
             [<Link href="/company-map">Company Map</Link>, "The whole tree; duplicate and relationship checks."],
             [<Link href="/review">Review</Link>, "Approve, edit or reject every AI suggestion; add your own updates."],
             [<Link href="/decisions">Decisions</Link>, "Work open decisions: add info, assign, decide, close."],

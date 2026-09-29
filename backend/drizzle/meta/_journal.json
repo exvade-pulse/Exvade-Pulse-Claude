@@ -169,6 +169,13 @@
       "when": 1790656447348,
       "tag": "0023_nappy_squirrel_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790658980720,
+      "tag": "0024_outgoing_natasha_romanoff",
+      "breakpoints": true
     }
   ]
 }
