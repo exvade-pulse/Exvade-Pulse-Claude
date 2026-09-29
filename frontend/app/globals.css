@@ -968,6 +968,93 @@ summary:focus-visible {
   margin: var(--space-1) 0;
 }
 
+/* ---- Guide page ---- */
+.guide-lead {
+  font-size: var(--text-lg);
+  color: #333;
+  margin: 0 0 var(--space-2);
+  max-width: 720px;
+}
+
+.guide-tree,
+.guide-tree ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.guide-tree ol {
+  margin-left: var(--space-5);
+  border-left: 1px solid var(--border);
+  padding-left: var(--space-3);
+}
+
+.guide-tree li {
+  font-size: var(--text-md);
+  margin: var(--space-2) 0;
+}
+
+.guide-steps {
+  margin: 0 0 var(--space-3);
+  padding-left: 22px;
+  max-width: 760px;
+}
+
+.guide-steps li {
+  font-size: var(--text-md);
+  line-height: 1.55;
+  margin: var(--space-2) 0;
+}
+
+.guide-subhead {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.guide-subhead:first-child {
+  margin-top: 0;
+}
+
+.guide-note {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: var(--space-2) 0 0;
+  max-width: 760px;
+}
+
+/* Term / meaning pairs: two columns on wide screens, stacked on narrow. */
+.guide-defs {
+  margin: var(--space-3) 0 0;
+}
+
+.guide-defs > div {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: var(--space-3);
+  padding: 6px 0;
+  border-top: 1px solid #f0f0ee;
+}
+
+.guide-defs dt {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.guide-defs dd {
+  margin: 0;
+  font-size: var(--text-md);
+  color: #333;
+}
+
+@media (max-width: 640px) {
+  .guide-defs > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
 /* Action buttons inside a table cell sit on the row's own line. */
 .table-actions {
   margin-top: 0;

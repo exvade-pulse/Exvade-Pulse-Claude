@@ -29,6 +29,7 @@ export function Nav({ user }: { user?: SessionUser | null }) {
       <Link href="/activity">Activity</Link>
       {user?.role === "admin" && <Link href="/users">Users</Link>}
       {user?.role === "admin" && <Link href="/integrations">Integrations</Link>}
+      <Link href="/guide">Guide</Link>
       {user && (
         <form className="nav-search" onSubmit={handleSearchSubmit}>
           <input
