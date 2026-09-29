@@ -1,7 +1,7 @@
 // Same-origin: every /api and /auth request goes through this site's own
 // proxy (app/api, app/auth -> lib/backendProxy.ts), so the session cookie is
 // first-party and works in Safari, Incognito and other strict browsers.
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+export const API_URL = "";
 
 export type UserRole = "member" | "admin";
 
