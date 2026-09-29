@@ -14,6 +14,7 @@ import {
   submitManualUpdate,
   TYPE_LABEL,
   type CleanupDetail,
+  type ReviewFindingDetail,
   type ConflictEntry,
   type ContradictionDetail,
   type RelationType,
@@ -23,6 +24,7 @@ import {
 import Link from "next/link";
 import { formatDiff, formatDiffWithCurrentState, HIDDEN_DIFF_KEYS } from "../../lib/formatDiff";
 import { Nav } from "../components/Nav";
+import { FindingsPanel } from "../components/FindingsPanel";
 import { SourceToggle } from "../components/SourceToggle";
 
 const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
@@ -200,6 +202,25 @@ const CLEANUP_LABEL: Record<CleanupDetail["classification"], string> = {
   needs_confirmation: "Needs your confirmation",
 };
 
+// Proposals from pasted review findings: which finding, and whether the
+// reviewer said a person must verify it first.
+function ReviewFindingCallout({ conflicts }: { conflicts: Suggestion["conflicts"] }) {
+  const detail = (conflicts ?? []).find((c): c is ReviewFindingDetail => c.kind === "review");
+  if (!detail) return null;
+  return (
+    <p className={detail.needsVerification ? "rc-callout" : "rc-meta"}>
+      From review findings{detail.finding ? ` (${detail.finding})` : ""}
+      {detail.needsVerification && (
+        <>
+          {" "}
+          · <strong>Verify first</strong>
+          {detail.verifyNote ? `: ${detail.verifyNote}` : ""}
+        </>
+      )}
+    </p>
+  );
+}
+
 function cleanupClassification(s: Suggestion): CleanupDetail["classification"] | null {
   const detail = (s.conflicts ?? []).find((c): c is CleanupDetail => c.kind === "cleanup");
   return detail?.classification ?? null;
@@ -291,6 +312,7 @@ export default function ReviewPage() {
   const [bulkApproving, setBulkApproving] = useState(false);
 
   const [showAddUpdate, setShowAddUpdate] = useState(false);
+  const [showFindings, setShowFindings] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [submittingNote, setSubmittingNote] = useState(false);
   const [noteResult, setNoteResult] = useState<string | null>(null);
@@ -562,6 +584,7 @@ export default function ReviewPage() {
           </p>
         )}
 
+        <ReviewFindingCallout conflicts={s.conflicts} />
         <ConflictCallout conflicts={s.conflicts} />
         <ContradictionCallout conflicts={s.conflicts} />
         {s.changeType === "deadline_passed" && !isHistory && (
@@ -690,7 +713,18 @@ export default function ReviewPage() {
         >
           {showAddUpdate ? "Cancel" : "Add update"}
         </button>
+        <button className="decision-btn" onClick={() => setShowFindings((v) => !v)}>
+          {showFindings ? "Close findings" : "Paste review findings"}
+        </button>
       </div>
+
+      {showFindings && (
+        <FindingsPanel
+          onFinished={() => {
+            if (tab === "pending") fetchPendingSuggestions().then(setSuggestions).catch((err) => setLoadError(err.message));
+          }}
+        />
+      )}
 
       {showAddUpdate && (
         <form className="card edit-form" onSubmit={handleSubmitNote}>

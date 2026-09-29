@@ -98,10 +98,18 @@ export interface Suggestion {
   questionDetails: { objective: string; decisions: string[]; tasks: string[]; projects: string[]; convertDecision: string | null } | null;
   // Null in the overwhelming common case -- see ConflictEntry,
   // ContradictionDetail and CleanupDetail.
-  conflicts: Array<ConflictEntry | ContradictionDetail | CleanupDetail> | null;
+  conflicts: Array<ConflictEntry | ContradictionDetail | CleanupDetail | ReviewFindingDetail> | null;
 }
 
 // On a suggestion from the "Clean up" check: how the record was classified.
+// A proposal that came from pasted review findings (see FindingsPanel).
+export interface ReviewFindingDetail {
+  kind: "review";
+  finding: string | null;
+  needsVerification: boolean;
+  verifyNote: string | null;
+}
+
 export interface CleanupDetail {
   kind: "cleanup";
   classification:
@@ -956,6 +964,21 @@ export const createViewLink = (body: { label: string | null; days: 1 | 7 | 30; i
 export const revokeViewLink = (id: string) => jsonRequest<{ ok: true }>(`/api/view-links/${id}/revoke`, "POST");
 export const unlockViewLink = (token: string, password: string) =>
   jsonRequest<{ ok: true; expiresAt: string }>("/api/view/unlock", "POST", { token, password });
+
+export interface FindingsJob {
+  id: string;
+  status: "running" | "done" | "failed";
+  partsTotal: number;
+  partsDone: number;
+  proposals: number;
+  byKind: Record<string, number>;
+  needsVerification: number;
+  appFeedback: Array<{ area: string; issue: string; suggestion: string | null; priority: "must" | "should" | "nice" }>;
+  errors: string[];
+}
+
+export const startFindings = (text: string) => jsonRequest<FindingsJob>("/api/reviews/findings", "POST", { text });
+export const fetchFindingsJob = (id: string) => jsonRequest<FindingsJob>(`/api/reviews/findings/${id}`, "GET");
 
 export interface ReviewWorkstream {
   project: string;
