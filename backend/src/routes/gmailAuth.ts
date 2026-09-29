@@ -5,6 +5,7 @@ import { db } from "../db/client.js";
 import { gmailConnections } from "../db/schema.js";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { config } from "../config.js";
+import { oauthCallbackUrl } from "../auth/callbackUrl.js";
 import { buildGmailAuthUrl, exchangeGmailCode, fetchGmailProfileEmail, GmailAuthError } from "../integrations/gmailOAuth.js";
 
 const STATE_COOKIE_NAME = "pulse_gmail_oauth_state";
@@ -25,7 +26,7 @@ export async function gmailAuthRoutes(app: FastifyInstance) {
       maxAge: 60 * 10,
       path: "/",
     });
-    reply.redirect(buildGmailAuthUrl(state));
+    reply.redirect(buildGmailAuthUrl(state, oauthCallbackUrl(request, "/auth/gmail/callback", config.google.gmailCallbackUrl)));
   });
 
   app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
@@ -44,7 +45,7 @@ export async function gmailAuthRoutes(app: FastifyInstance) {
       }
 
       try {
-        const tokens = await exchangeGmailCode(code);
+        const tokens = await exchangeGmailCode(code, oauthCallbackUrl(request, "/auth/gmail/callback", config.google.gmailCallbackUrl));
         const emailAddress = await fetchGmailProfileEmail(tokens.accessToken);
 
         await db

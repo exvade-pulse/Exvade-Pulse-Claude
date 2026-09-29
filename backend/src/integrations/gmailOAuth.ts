@@ -7,10 +7,10 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 // deletes, or modifies anything in the connected inbox.
 const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 
-export function buildGmailAuthUrl(state: string): string {
+export function buildGmailAuthUrl(state: string, redirectUri: string = config.google.gmailCallbackUrl): string {
   const url = new URL(AUTH_URL);
   url.searchParams.set("client_id", config.google.clientId);
-  url.searchParams.set("redirect_uri", config.google.gmailCallbackUrl);
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", GMAIL_SCOPE);
   url.searchParams.set("access_type", "offline");
@@ -42,7 +42,7 @@ export class GmailAuthError extends Error {}
 // a refresh_token -- silently proceeding without one would leave a
 // connection that works today and breaks the next time the access token
 // expires, with no way to renew it.
-export async function exchangeGmailCode(code: string): Promise<GmailTokenExchange> {
+export async function exchangeGmailCode(code: string, redirectUri: string = config.google.gmailCallbackUrl): Promise<GmailTokenExchange> {
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -50,7 +50,7 @@ export async function exchangeGmailCode(code: string): Promise<GmailTokenExchang
       code,
       client_id: config.google.clientId,
       client_secret: config.google.clientSecret,
-      redirect_uri: config.google.gmailCallbackUrl,
+      redirect_uri: redirectUri,
       grant_type: "authorization_code",
     }),
   });

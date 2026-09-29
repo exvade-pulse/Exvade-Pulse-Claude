@@ -4,6 +4,7 @@ import { buildGoogleAuthUrl, exchangeCodeForUserInfo } from "../auth/google.js";
 import { findOrCreateUserForGoogleIdentity, SignInRejectedError } from "../auth/identity.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 import { requireAuth } from "../auth/middleware.js";
+import { oauthCallbackUrl } from "../auth/callbackUrl.js";
 import { config } from "../config.js";
 import { db } from "../db/client.js";
 
@@ -19,7 +20,7 @@ export async function authRoutes(app: FastifyInstance) {
       maxAge: 60 * 10,
       path: "/",
     });
-    reply.redirect(buildGoogleAuthUrl(state));
+    reply.redirect(buildGoogleAuthUrl(state, oauthCallbackUrl(request, "/auth/google/callback", config.google.callbackUrl)));
   });
 
   app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
@@ -34,7 +35,7 @@ export async function authRoutes(app: FastifyInstance) {
         return;
       }
 
-      const userInfo = await exchangeCodeForUserInfo(code);
+      const userInfo = await exchangeCodeForUserInfo(code, oauthCallbackUrl(request, "/auth/google/callback", config.google.callbackUrl));
 
       // Never trust an unverified email, regardless of which domain admits
       // the sign-in below -- everything past this point (the home-domain

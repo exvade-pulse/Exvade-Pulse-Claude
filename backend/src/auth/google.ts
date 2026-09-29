@@ -4,10 +4,10 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 
-export function buildGoogleAuthUrl(state: string): string {
+export function buildGoogleAuthUrl(state: string, redirectUri: string = config.google.callbackUrl): string {
   const url = new URL(AUTH_URL);
   url.searchParams.set("client_id", config.google.clientId);
-  url.searchParams.set("redirect_uri", config.google.callbackUrl);
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "openid email profile");
   // No `hd` param: sign-in isn't restricted to one Workspace domain anymore
@@ -31,7 +31,7 @@ export interface GoogleUserInfo {
   hd?: string;
 }
 
-export async function exchangeCodeForUserInfo(code: string): Promise<GoogleUserInfo> {
+export async function exchangeCodeForUserInfo(code: string, redirectUri: string = config.google.callbackUrl): Promise<GoogleUserInfo> {
   const tokenResponse = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -39,7 +39,7 @@ export async function exchangeCodeForUserInfo(code: string): Promise<GoogleUserI
       code,
       client_id: config.google.clientId,
       client_secret: config.google.clientSecret,
-      redirect_uri: config.google.callbackUrl,
+      redirect_uri: redirectUri,
       grant_type: "authorization_code",
     }),
   });
