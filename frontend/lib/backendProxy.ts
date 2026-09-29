@@ -10,7 +10,9 @@ const SKIP_REQUEST = new Set(["host", "connection", "keep-alive", "content-lengt
 const SKIP_RESPONSE = new Set(["connection", "keep-alive", "content-length", "content-encoding", "transfer-encoding", "set-cookie"]);
 
 function backendOrigin(): string {
-  return (process.env.BACKEND_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001").replace(/\/$/, "");
+  // || not ??: on Vercel these can arrive as "" in a route handler.
+  const configured = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL;
+  return (configured || (process.env.VERCEL ? "https://exvade-pulse-claude.onrender.com" : "http://localhost:3001")).replace(/\/$/, "");
 }
 
 export async function proxyToBackend(request: Request): Promise<Response> {
