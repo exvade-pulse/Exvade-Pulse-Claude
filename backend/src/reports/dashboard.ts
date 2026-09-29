@@ -19,7 +19,7 @@ const CHANGES_SHOWN = 6;
 const DEADLINE_HORIZON_DAYS = 90;
 const DEADLINE_SOON_DAYS = 14;
 const MAX_PRIORITIES = 10;
-const MIN_PRIORITIES = 5;
+const UNLINKED_SHOWN = 6;
 
 export interface Viewer {
   userId: string;
@@ -31,7 +31,10 @@ export interface Viewer {
 export type DashState = "needs action" | "upcoming deadline" | "waiting" | "recently changed" | "on track" | "resolved";
 
 export interface DashboardChange {
+  // When the evidence is dated (the source), and when it was approved into
+  // Pulse -- older evidence approved recently is labelled as such.
   date: string;
+  approvedAt: string | null;
   about: string;
   text: string;
   recordType: string;
@@ -47,6 +50,8 @@ export interface DashboardPriority {
   state: DashState;
   stateDetail: string;
   nextAction: string | null;
+  // Who does the next action (may differ from the priority owner).
+  nextActionOwner: string | null;
   nextActionIsMine: boolean;
   owner: string | null;
   keyDate: { label: string; date: string } | null;
@@ -79,7 +84,14 @@ export interface DashboardDeadline {
 
 export interface Dashboard {
   since: string;
+  // No open strategic questions: priorities can't be ranked yet, and the
+  // page says so instead of substituting something else.
+  strategySetupIncomplete: boolean;
   priorities: DashboardPriority[];
+  // Active workstreams with work not under any strategic question.
+  unlinkedWorkstreams: DashboardPriority[];
+  // Live tasks still sitting in the Unsorted triage bucket.
+  unsortedTasks: number;
   whatChanged: DashboardChange[];
   needsMe: DashboardItem[];
   upcomingDeadlines: DashboardDeadline[];
@@ -195,6 +207,7 @@ async function loadChanges(organizationId: string, role: UserRole, since: Date):
     .sort((a, b) => b.row.receivedAt.getTime() - a.row.receivedAt.getTime())
     .map(({ row, text }) => ({
       date: row.receivedAt.toISOString(),
+      approvedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
       about: (about.get(row.id) ?? "").replace(/^(Cleanup|Strategic question): /, ""),
       text: clip(text, 220),
       recordType: row.targetType,
@@ -244,8 +257,17 @@ export async function buildDashboard(
     const linkedDecisions = q.decisionIds.map((id) => decisionsById.get(id)).filter((d): d is ReviewDecision => !!d);
     const open = linkedDecisions.filter((d) => d.status !== "action_in_progress");
     // The question's own next action, else the call still to make, else the most
-    // pressing linked task's next step.
-    const nextAction = q.nextAction ?? open.find((d) => d.suggestedNextStep)?.suggestedNextStep ?? work.find((t) => t.nextAction)?.nextAction ?? null;
+    // pressing linked task's next step -- each with whoever actually does it
+    // (not the priority's owner), which is what "your next action" means.
+    const decisionStep = open.find((d) => d.suggestedNextStep);
+    const taskStep = work.find((t) => t.nextAction);
+    const [nextAction, actionOwner] = q.nextAction
+      ? [q.nextAction, q.owner]
+      : decisionStep
+        ? [decisionStep.suggestedNextStep, decisionStep.decider]
+        : taskStep
+          ? [taskStep.nextAction, taskStep.owner]
+          : [null, null];
     const owner = q.owner ?? open[0]?.decider ?? mostCommon(work.map((t) => t.owner));
     const dated = open
       .map((d) => ({ d, date: upcomingDate(d) }))
@@ -284,7 +306,8 @@ export async function buildDashboard(
       state,
       stateDetail,
       nextAction,
-      nextActionIsMine: isMine(owner, tokens),
+      nextActionOwner: actionOwner,
+      nextActionIsMine: isMine(actionOwner, tokens),
       owner,
       keyDate,
       keyDependency: q.keyDependency ?? work.flatMap((t) => t.waitingOn)[0] ?? open.flatMap((d) => d.waitingOn)[0] ?? null,
@@ -301,6 +324,7 @@ export async function buildDashboard(
   const fromWorkstream = (w: ReviewWorkstream): DashboardPriority => {
 
     const owner = mostCommon(w.tasks.map((t) => t.owner));
+    const step = w.tasks.find((t) => t.nextAction);
     const changed = w.tasks.some((t) => changedKeys.has(`task:${t.id}`));
     const c = w.counts;
     return {
@@ -312,8 +336,9 @@ export async function buildDashboard(
       stateDetail: [c.blocked && `${c.blocked} blocked`, c.needsAttention && `${c.needsAttention} need attention`, c.waiting && `${c.waiting} waiting`, c.active && `${c.active} active`]
         .filter(Boolean)
         .join(" · "),
-      nextAction: w.tasks.find((t) => t.nextAction)?.nextAction ?? null,
-      nextActionIsMine: isMine(owner, tokens),
+      nextAction: step?.nextAction ?? null,
+      nextActionOwner: step?.owner ?? null,
+      nextActionIsMine: isMine(step?.owner, tokens),
       owner,
       keyDate: null,
       keyDependency: w.tasks.flatMap((t) => t.waitingOn)[0] ?? null,
@@ -326,18 +351,21 @@ export async function buildDashboard(
     };
   };
 
-  const questionPriorities = data.questions.filter((q) => q.status === "open").map(fromQuestion);
-  const covered = new Set(data.questions.flatMap((q) => q.taskIds));
-  const workstreamPriorities =
-    questionPriorities.length >= MIN_PRIORITIES
-      ? []
-      : data.workstreams
-          .filter((w) => w.tasks.some((t) => !covered.has(t.id)))
-          .slice(0, MIN_PRIORITIES - questionPriorities.length + 1)
-          .map(fromWorkstream);
-  const priorities = [...questionPriorities, ...workstreamPriorities]
+  // Priorities are the strategic questions only. Work not under any question
+  // is listed separately and never passed off as a priority; the triage
+  // bucket (Unsorted) is never promoted at all.
+  const priorities = data.questions
+    .filter((q) => q.status === "open")
+    .map(fromQuestion)
     .sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || Number(b.nextActionIsMine) - Number(a.nextActionIsMine))
     .slice(0, MAX_PRIORITIES);
+  const covered = new Set(data.questions.filter((q) => q.status === "open").flatMap((q) => q.taskIds));
+  const isTriage = (w: ReviewWorkstream) => /^unsorted\b/i.test(w.project);
+  const unlinkedWorkstreams = data.workstreams
+    .filter((w) => !isTriage(w) && w.tasks.some((t) => !covered.has(t.id)))
+    .slice(0, UNLINKED_SHOWN)
+    .map(fromWorkstream);
+  const unsortedTasks = data.inventory.filter((g) => /^unsorted\b/i.test(g.project)).reduce((n, g) => n + g.tasks.length, 0);
 
   // What changed: priority-linked and decision changes first, then the rest.
   const priorityKeys = new Set(
@@ -414,5 +442,11 @@ export async function buildDashboard(
       })),
   ];
 
-  return { since: since.toISOString(), priorities, whatChanged, needsMe: needsMe.slice(0, 8), upcomingDeadlines, waiting: waiting.slice(0, 10) };
+  return {
+    since: since.toISOString(),
+    strategySetupIncomplete: priorities.length === 0,
+    priorities,
+    unlinkedWorkstreams,
+    unsortedTasks,
+    whatChanged, needsMe: needsMe.slice(0, 8), upcomingDeadlines, waiting: waiting.slice(0, 10) };
 }

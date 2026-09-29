@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { SessionUser } from "../../lib/api";
 
 export function Nav({ user }: { user?: SessionUser | null }) {
   const router = useRouter();
+  // The Search page has its own search box; one is enough.
+  const onSearchPage = usePathname() === "/search";
   const [query, setQuery] = useState("");
 
   // Read-only review mode greys out and disables every action button
@@ -44,7 +46,7 @@ export function Nav({ user }: { user?: SessionUser | null }) {
       {user?.role === "admin" && !user.readOnly && <Link href="/integrations">Integrations</Link>}
       <Link href="/context">Context</Link>
       <Link href="/guide">Guide</Link>
-      {user && (
+      {user && !onSearchPage && (
         <form className="nav-search" onSubmit={handleSearchSubmit}>
           <input
             className="nav-search-input"

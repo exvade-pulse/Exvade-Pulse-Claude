@@ -34,7 +34,7 @@ function isOverdue(dueDate: string | null): boolean {
 }
 
 function formatDueDate(dueDate: string): string {
-  return new Date(dueDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return new Date(dueDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 function totalTasks(counts: DashboardObjective["taskCounts"]): number {
@@ -145,7 +145,7 @@ export default function DashboardPage() {
             return (
               <div className="task-row" key={d.id}>
                 <div className="task-row-top">
-                  <Link className="task-row-title" href="/decisions">
+                  <Link className="task-row-title" href={`/decisions#decision-${d.id}`}>
                     {d.title}
                   </Link>
                   {d.dueDate && (
@@ -207,7 +207,7 @@ export default function DashboardPage() {
               {t.blockingDecision && (
                 <p className="task-snippet blocking-decision">
                   Blocked &mdash; waiting on decision:{" "}
-                  <Link href="/decisions">{t.blockingDecision.title}</Link>
+                  <Link href={`/decisions#decision-${t.blockingDecision.id}`}>{t.blockingDecision.title}</Link>
                 </p>
               )}
               {snippet(t.latestUpdate) && (

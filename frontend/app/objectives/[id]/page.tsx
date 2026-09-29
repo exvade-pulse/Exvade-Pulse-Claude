@@ -73,7 +73,7 @@ export default function ObjectiveDetailPage() {
             <h1>Objective not found</h1>
           </div>
           <p className="empty-state">
-            This objective doesn&rsquo;t exist, or you don&rsquo;t have access to it. <Link href="/">Back to strategy map</Link>
+            This objective doesn&rsquo;t exist, or you don&rsquo;t have access to it. <Link href="/company-map">Back to the Company Map</Link>
           </p>
         </>
       )}

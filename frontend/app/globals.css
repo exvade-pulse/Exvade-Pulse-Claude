@@ -1576,7 +1576,8 @@ summary:focus-visible {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr));
   gap: var(--space-3);
-  align-items: stretch;
+  /* Each card is as tall as its own content; no stretching to a long neighbor. */
+  align-items: start;
 }
 .priority-card {
   display: flex;
@@ -1771,10 +1772,24 @@ summary:focus-visible {
   font-size: var(--text-sm);
 }
 
-/* Read-only review mode: actions visibly disabled, navigation untouched. */
+/* Read-only review mode: action buttons are removed (the banner says
+   editing is off) so records stay compact; navigation is untouched. */
 .read-only-mode button.decision-btn,
 .read-only-mode button.link-btn {
-  opacity: 0.4;
-  pointer-events: none;
-  cursor: not-allowed;
+  display: none;
 }
+
+/* A decision reached from a link elsewhere */
+.decision-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  scroll-margin-top: var(--space-4);
+}
+
+/* Executive: priorities not set up yet */
+.setup-gap {
+  border-left: 4px solid var(--caution);
+  background: var(--caution-soft);
+}
+.setup-gap p { margin: 0 0 var(--space-2); }
+.setup-gap p:last-child { margin-bottom: 0; }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReviewContradiction, ReviewDecision, ReviewQuestion, ReviewTask, ReviewWorkstream } from "../../lib/api";
 import { chipClass, STATUS_LABEL } from "./TaskStatusChips";
+import { formatDueDate } from "../../lib/dates";
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -27,7 +28,7 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
         ) : decision.status === "pending_info" ? (
           <span className="chip">Waiting on info</span>
         ) : decision.dueDate ? (
-          <span className="chip">Due {formatDate(decision.dueDate)}</span>
+          <span className="chip">Due {formatDueDate(decision.dueDate)}</span>
         ) : (
           <span className="chip chip-quiet">No due date</span>
         )}
@@ -35,7 +36,7 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
 
       {deadlinePassed && decision.dueDate && (
         <p className="rc-callout">
-          Was due {formatDate(decision.dueDate)} ({ago(decision.daysOverdue ?? 0)}) and is still marked open. What actually
+          Was due {formatDueDate(decision.dueDate)} ({ago(decision.daysOverdue ?? 0)}) and is still marked open. What actually
           happened?
         </p>
       )}
@@ -70,7 +71,7 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
       )}
 
       <div className="card-actions">
-        <Link className="decision-btn" href="/decisions">
+        <Link className="decision-btn" href={`/decisions#decision-${decision.id}`}>
           {deadlinePassed ? "Record what happened" : "Open in Decisions"}
         </Link>
       </div>

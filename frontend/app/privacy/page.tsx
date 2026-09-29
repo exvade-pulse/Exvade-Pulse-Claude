@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 // Public (no sign-in) privacy notice for Exvade Pulse, linked from the
 // Google sign-in consent screen.
 export const metadata = { title: "Privacy — Exvade Pulse" };
@@ -8,6 +10,9 @@ const CONTACT = "sean@exvadebio.com";
 export default function PrivacyPage() {
   return (
     <main className="page guide">
+      <p>
+        <Link href="/">&larr; Back to Pulse</Link>
+      </p>
       <div className="header">
         <h1>Exvade Pulse privacy notice</h1>
       </div>
@@ -53,7 +58,8 @@ export default function PrivacyPage() {
         <h2 className="section-title">Your choices</h2>
         <p>
           An administrator can remove your access at any time, and you can revoke Pulse&rsquo;s Google access from your Google
-          Account&rsquo;s security settings. To ask about or request deletion of your data, contact{" "}
+          Account&rsquo;s security settings. Admins can also give someone temporary, password-protected read-only access for a
+          review; those links expire on their own, can be switched off at any time, and can never change anything. To ask about or request deletion of your data, contact{" "}
           <a href={`mailto:${CONTACT}`}>{CONTACT}</a>.
         </p>
       </div>

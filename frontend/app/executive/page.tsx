@@ -17,7 +17,8 @@ import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
 import { ContradictionCard, DecisionCard, QuestionCard, TaskRow, WorkstreamCard } from "../components/ReviewCards";
 import { TaskDisposition } from "../components/TaskDisposition";
-import { ChangeList, ItemList, PriorityCard, shortDate } from "../components/Dashboard";
+import { ChangeList, decisionHref, ItemList, PriorityCard, shortDate } from "../components/Dashboard";
+import { formatDueDate } from "../../lib/dates";
 
 // An operating dashboard first, a database review second: priorities, what
 // changed, what needs you, real dates and what's stuck up top; the detail
@@ -143,10 +144,17 @@ export default function ExecutivePage() {
       {data && dash && (
         <>
           <h2 className="section-title">Executive priorities</h2>
-          {dash.priorities.length === 0 ? (
-            <p className="empty-inline">
-              No priorities yet. <Link href="/questions">Set up strategic questions</Link> (the AI can suggest a first set).
-            </p>
+          {dash.strategySetupIncomplete ? (
+            <section className="card setup-gap" aria-label="Strategic priorities not set up">
+              <p>
+                <strong>Strategic priorities aren&rsquo;t set up yet</strong>, so Pulse can&rsquo;t rank what matters most. Priorities
+                come from strategic questions, and there are none.
+              </p>
+              <p className="rc-meta">
+                <Link href="/questions">Set up strategic questions</Link> (the AI can suggest a first set), then set objective
+                priorities on the Company Map.
+              </p>
+            </section>
           ) : (
             <div className="priority-grid">
               {dash.priorities.map((p) => (
@@ -154,11 +162,21 @@ export default function ExecutivePage() {
               ))}
             </div>
           )}
-          {dash.priorities.some((p) => p.kind === "workstream") && (
-            <p className="rc-meta">
-              Some priorities are workstreams because they aren&rsquo;t part of a strategic question yet.{" "}
-              <Link href="/questions">Group them into questions</Link>.
-            </p>
+          {dash.unlinkedWorkstreams.length > 0 && (
+            <details className="dash-section" open={dash.strategySetupIncomplete}>
+              <summary>
+                <span className="dash-section-title">Active work not under any priority</span>
+                <span className="muted">
+                  {" "}
+                  · {dash.unlinkedWorkstreams.length} workstream{dash.unlinkedWorkstreams.length === 1 ? "" : "s"}, busiest first. Not ranked by importance.
+                </span>
+              </summary>
+              <div className="priority-grid">
+                {dash.unlinkedWorkstreams.map((p) => (
+                  <PriorityCard key={p.id} priority={p} />
+                ))}
+              </div>
+            </details>
           )}
 
           <div className="dash-columns">
@@ -166,7 +184,7 @@ export default function ExecutivePage() {
               <h2 className="dash-panel-title">
                 What changed <span className="muted">since {shortDate(dash.since)}</span>
               </h2>
-              {dash.whatChanged.length === 0 ? <p className="empty-inline">Nothing material.</p> : <ChangeList changes={dash.whatChanged} />}
+              {dash.whatChanged.length === 0 ? <p className="empty-inline">Nothing material.</p> : <ChangeList changes={dash.whatChanged} since={dash.since} />}
             </section>
             <section className="card dash-panel dash-panel-mine" aria-label="Needs my action">
               <h2 className="dash-panel-title">Needs my action</h2>
@@ -178,15 +196,15 @@ export default function ExecutivePage() {
             <section className="card dash-panel" aria-label="Upcoming deadlines">
               <h2 className="dash-panel-title">Upcoming deadlines</h2>
               {dash.upcomingDeadlines.length === 0 ? (
-                <p className="empty-inline">No dated decisions in the next 90 days.</p>
+                <p className="empty-inline">No decision due dates in the next 90 days. Dates on tasks and meetings aren&rsquo;t tracked yet, so this may be incomplete.</p>
               ) : (
                 <ul className="dash-list">
                   {dash.upcomingDeadlines.map((u) => (
                     <li key={u.id}>
                       <span className={`dash-due${u.daysAway <= 14 ? " dash-due-soon" : ""}`}>
-                        {shortDate(u.date)} <span className="muted">({u.daysAway === 0 ? "today" : `${u.daysAway}d`})</span>
+                        {formatDueDate(u.date, "short")} <span className="muted">({u.daysAway === 0 ? "today" : `${u.daysAway}d`})</span>
                       </span>{" "}
-                      <Link href="/decisions">{u.title}</Link>
+                      <Link href={decisionHref(u.id)}>{u.title}</Link>
                       <span className="dash-detail"> · {u.owner}</span>
                     </li>
                   ))}
@@ -195,7 +213,7 @@ export default function ExecutivePage() {
             </section>
             <section className="card dash-panel" aria-label="Waiting or blocked">
               <h2 className="dash-panel-title">Waiting / blocked</h2>
-              <ItemList items={dash.waiting} empty="Nothing waiting or blocked." />
+              <ItemList items={dash.waiting} empty="Nothing is marked waiting or blocked. Dependencies mentioned only in text aren't tracked yet, so this may be incomplete." />
             </section>
           </div>
 
@@ -262,7 +280,7 @@ export default function ExecutivePage() {
                 <ul className="dash-list">
                   {data.decisionsInProgress.map((d) => (
                     <li key={d.id}>
-                      <Link href="/decisions">{d.title}</Link> <span className="dash-detail">· {d.decider}</span>
+                      <Link href={decisionHref(d.id)}>{d.title}</Link> <span className="dash-detail">· {d.decider}</span>
                     </li>
                   ))}
                 </ul>
@@ -301,6 +319,7 @@ export default function ExecutivePage() {
                 {" "}
                 · {data.contradictions.length} conflict{data.contradictions.length === 1 ? "" : "s"} · {data.deadlinePassed.length} past-deadline
                 decision{data.deadlinePassed.length === 1 ? "" : "s"} · {data.awaitingReviewTotal} in Review
+                {dash.unsortedTasks > 0 && ` · ${dash.unsortedTasks} tasks still in Unsorted`}
               </span>
             </summary>
             {data.contradictions.map((c) => (
@@ -330,6 +349,12 @@ export default function ExecutivePage() {
                 </>
               )}
             </p>
+            {dash.unsortedTasks > 0 && (
+              <p className="rc-line">
+                {dash.unsortedTasks} open task{dash.unsortedTasks === 1 ? " is" : "s are"} still in Unsorted, not filed under any project.{" "}
+                <Link href="/unsorted">File them</Link>
+              </p>
+            )}
           </details>
 
           <ChatGptReviewPanel isAdmin={user.role === "admin"} />

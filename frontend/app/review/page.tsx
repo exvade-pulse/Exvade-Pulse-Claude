@@ -589,7 +589,7 @@ export default function ReviewPage() {
         <ContradictionCallout conflicts={s.conflicts} />
         {s.changeType === "deadline_passed" && !isHistory && (
           <p className="rc-meta">
-            <Link href="/decisions">Open in Decisions</Link> to record what happened, or use Edit to set a new due date.
+            <Link href={`/decisions#decision-${s.targetId}`}>Open in Decisions</Link> to record what happened, or use Edit to set a new due date.
           </p>
         )}
 

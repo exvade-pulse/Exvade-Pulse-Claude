@@ -90,7 +90,7 @@ export default function ProjectDetailPage() {
         <>
           {data.initiative && (
             <p className="breadcrumb">
-              <Link href="/">Strategy map</Link> / <Link href={`/initiatives/${data.initiative.id}`}>{data.initiative.title}</Link>
+              <Link href="/company-map">Company Map</Link> / <Link href={`/initiatives/${data.initiative.id}`}>{data.initiative.title}</Link>
             </p>
           )}
 

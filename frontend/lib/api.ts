@@ -1066,6 +1066,7 @@ export type DashState = "needs action" | "upcoming deadline" | "waiting" | "rece
 
 export interface DashboardChange {
   date: string;
+  approvedAt: string | null;
   about: string;
   text: string;
   recordType: string;
@@ -1080,6 +1081,7 @@ export interface DashboardPriority {
   state: DashState;
   stateDetail: string;
   nextAction: string | null;
+  nextActionOwner: string | null;
   nextActionIsMine: boolean;
   owner: string | null;
   keyDate: { label: string; date: string } | null;
@@ -1103,7 +1105,10 @@ export interface DashboardItem {
 
 export interface Dashboard {
   since: string;
+  strategySetupIncomplete: boolean;
   priorities: DashboardPriority[];
+  unlinkedWorkstreams: DashboardPriority[];
+  unsortedTasks: number;
   whatChanged: DashboardChange[];
   needsMe: DashboardItem[];
   upcomingDeadlines: Array<{ kind: "decision"; id: string; title: string; date: string; daysAway: number; owner: string }>;

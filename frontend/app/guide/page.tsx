@@ -221,7 +221,7 @@ export default function GuidePage() {
             ["Active / Waiting", "In progress / waiting on someone else."],
             ["Needs attention / Blocked", "Something's wrong / can't move until something (often a decision) happens."],
             ["Completed / Resolved", "Done."],
-            ["Cancelled", "Not relevant anymore. Kept for history, hidden from lists."],
+            ["Cancelled", "Not relevant anymore. Kept for history and hidden from active lists; still findable in search and on the Company Map."],
             ["Superseded", "Merged into, or replaced by, another task."],
             ["Needs disposition", "No new evidence in 90+ days: probably stale, not urgent. Close it or confirm it."],
           ]}
@@ -284,7 +284,7 @@ export default function GuidePage() {
             [<Link href="/review">Review</Link>, "Approve, edit or reject every AI suggestion; add your own updates."],
             [<Link href="/decisions">Decisions</Link>, "Work open decisions: add info, assign, decide, close."],
             [<Link href="/unsorted">Unsorted</Link>, "Tasks waiting for a home."],
-            [<Link href="/reports/weekly">Weekly Report</Link>, "A fixed summary of one week."],
+            [<Link href="/reports/weekly">Weekly Report</Link>, "The work that changed in a given week, shown as it stands today (not a frozen snapshot)."],
             [<Link href="/activity">Activity</Link>, "Everything that changed, and who approved it."],
             [<Link href="/context">Context</Link>, "The company profile the AI reads. Admins edit it; everyone can read it."],
             ["Users, Integrations", "Admins: invite people; connect Gmail, Circleback and ChatGPT."],

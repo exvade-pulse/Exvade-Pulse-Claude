@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { DashboardChange, DashboardItem, DashboardPriority, DashState } from "../../lib/api";
 import { chipClass, STATUS_LABEL } from "./TaskStatusChips";
+import { formatDueDate } from "../../lib/dates";
 
 // Label + symbol, never color alone.
 const STATE: Record<DashState, { icon: string; label: string; className: string }> = {
@@ -29,8 +30,13 @@ function longDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
+// Lands on that decision on the Decisions page, not the top of the list.
+export function decisionHref(id: string): string {
+  return `/decisions#decision-${id}`;
+}
+
 export function itemHref(kind: string, id: string): string {
-  return kind === "task" ? `/tasks/${id}` : kind === "question" ? "/questions" : "/decisions";
+  return kind === "task" ? `/tasks/${id}` : kind === "question" ? "/questions" : decisionHref(id);
 }
 
 // One executive priority: what it is, where it stands, the one next action,
@@ -52,7 +58,9 @@ export function PriorityCard({ priority: p }: { priority: DashboardPriority }) {
 
       {p.nextAction ? (
         <div className={`next-action${p.nextActionIsMine ? " next-action-mine" : ""}`}>
-          <span className="next-action-label">{p.nextActionIsMine ? "Your next action" : "Next action"}</span>
+          <span className="next-action-label">
+            {p.nextActionIsMine ? "Your next action" : p.nextActionOwner ? `Next action · ${p.nextActionOwner}` : "Next action · owner not recorded"}
+          </span>
           <span className="next-action-text">{p.nextAction}</span>
         </div>
       ) : (
@@ -70,7 +78,7 @@ export function PriorityCard({ priority: p }: { priority: DashboardPriority }) {
           <div>
             <dt>Key date</dt>
             <dd title={p.keyDate.label}>
-              <strong>{shortDate(p.keyDate.date)}</strong> · {p.keyDate.label}
+              <strong>{formatDueDate(p.keyDate.date, "short")}</strong> · {p.keyDate.label}
             </dd>
           </div>
         )}
@@ -104,11 +112,11 @@ export function PriorityCard({ priority: p }: { priority: DashboardPriority }) {
               <ul className="dash-list">
                 {d.decisions.map((x) => (
                   <li key={x.id}>
-                    <Link href="/decisions">{x.title}</Link>
+                    <Link href={decisionHref(x.id)}>{x.title}</Link>
                     <span className="muted">
                       {" "}
                       · {x.decider}
-                      {x.dueDate && (x.overdue ? ` · was due ${shortDate(x.dueDate)}` : ` · due ${shortDate(x.dueDate)}`)}
+                      {x.dueDate && (x.overdue ? ` · was due ${formatDueDate(x.dueDate, "short")}` : ` · due ${formatDueDate(x.dueDate, "short")}`)}
                     </span>
                   </li>
                 ))}
@@ -151,12 +159,17 @@ export function PriorityCard({ priority: p }: { priority: DashboardPriority }) {
   );
 }
 
-export function ChangeList({ changes }: { changes: DashboardChange[] }) {
+// The date shown is the evidence date; when that's before the checkpoint
+// (older news approved recently) it says when it was added.
+export function ChangeList({ changes, since }: { changes: DashboardChange[]; since?: string }) {
   return (
     <ul className="dash-list">
       {changes.map((c) => (
         <li key={`${c.recordType}:${c.recordId}`} title={`${c.about}: ${c.text}`}>
-          <span className="dash-date">{shortDate(c.date)}</span>{" "}
+          <span className="dash-date" title="Date of the evidence">
+            {shortDate(c.date)}
+          </span>
+          {since && c.approvedAt && c.date < since && <span className="dash-date"> · added {shortDate(c.approvedAt)}</span>}{" "}
           <Link href={itemHref(c.recordType, c.recordId)}>{c.about}</Link>
           <span className="dash-change-text">: {c.text}</span>
         </li>
@@ -173,7 +186,7 @@ export function ItemList({ items, empty }: { items: DashboardItem[]; empty: stri
         <li key={`${i.kind}:${i.id}`} title={`${i.title} · ${i.detail}`}>
           <span className="dash-kind">{i.kind === "decision" ? "Decision" : "Task"}</span>{" "}
           <Link href={itemHref(i.kind, i.id)}>{i.title}</Link>
-          {i.date && <span className="dash-date"> · due {shortDate(i.date)}</span>}
+          {i.date && <span className="dash-date"> · due {formatDueDate(i.date, "short")}</span>}
           <span className="dash-detail"> · {i.detail}</span>
         </li>
       ))}

@@ -1,8 +1,32 @@
+import { formatDueDate } from "./dates";
+
 // Foreign keys (objectiveId, projectId, ...) are implementation detail, not
 // something a reader needs to see -- "where it belongs" is already conveyed
 // elsewhere (the "Proposes new X" / "Updates existing X" line on a suggestion
 // card, or a task's own breadcrumb).
 export const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId"]);
+
+
+// Plain-language names instead of raw field names.
+const FIELD_LABEL: Record<string, string> = {
+  latestUpdate: "Latest update",
+  nextAction: "Next action",
+  description: "Description",
+  status: "Status",
+  owner: "Owner",
+  title: "Title",
+  priority: "Priority",
+  whyItMatters: "Why it matters",
+  relevantContext: "Context",
+  suggestedNextStep: "Suggested next step",
+  decider: "Decider",
+  stakeholders: "Stakeholders",
+  dueDate: "Due date",
+  relatedTaskId: "Related task",
+  supersededById: "Merge into",
+};
+
+const label = (key: string) => FIELD_LABEL[key] ?? key;
 
 // Shared by the review page's pending/history suggestion cards and the task
 // detail page's approved-suggestion history, so "what changed" reads the same
@@ -13,12 +37,14 @@ export function formatDiff(diff: Record<string, unknown>): string {
     // Array.prototype.toString() (what String(value) falls back to) joins with
     // a bare comma -- fine for most proposedDiff values, but a decision's
     // stakeholders array reads as "Ops lead,CFO" without this.
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`)
+    .map(([key, value]) => `${label(key)}: ${formatDiffValue(value, key)}`)
     .join("\n");
 }
 
-function formatDiffValue(value: unknown): string {
-  if (value === null || value === undefined) return "(empty)";
+function formatDiffValue(value: unknown, key?: string): string {
+  if (value === null || value === undefined || value === "") return "(empty)";
+  if (key === "dueDate" && typeof value === "string" && !Number.isNaN(Date.parse(value))) return formatDueDate(value);
+  if (key === "status" && typeof value === "string") return value.replace(/_/g, " ");
   return Array.isArray(value) ? value.join(", ") : String(value);
 }
 
@@ -35,11 +61,15 @@ export function formatDiffWithCurrentState(
   return Object.entries(diff)
     .filter(([key]) => !HIDDEN_DIFF_KEYS.has(key))
     .map(([key, value]) => {
-      const proposed = formatDiffValue(value);
+      const proposed = formatDiffValue(value, key);
       if (currentState && key in currentState) {
-        return `${key}: ${formatDiffValue(currentState[key])} → ${proposed}`;
+        const current = formatDiffValue(currentState[key], key);
+        // An unchanged value (e.g. a deadline reminder repeating the same
+        // date) must not read like a correction.
+        if (current === proposed) return `${label(key)}: ${proposed} (unchanged)`;
+        return `${label(key)}: ${current} → ${proposed}`;
       }
-      return `${key}: ${proposed}`;
+      return `${label(key)}: ${proposed}`;
     })
     .join("\n");
 }

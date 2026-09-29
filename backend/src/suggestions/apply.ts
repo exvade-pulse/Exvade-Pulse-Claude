@@ -6,6 +6,7 @@ import { createRelationship, RelationshipError } from "../relationships/manage.j
 import { supersedeHierarchy } from "../entities/supersedeHierarchy.js";
 import { applyQuestionProposal, QuestionError, type QuestionProposal } from "../questions/manage.js";
 import { supersedeTask, SupersedeError } from "../tasks/supersede.js";
+import type { ConflictEntry } from "./dedupe.js";
 
 export class SuggestionApplyError extends Error {}
 
@@ -17,10 +18,10 @@ const TABLE_BY_TARGET_TYPE = {
 } as const;
 
 // The task fields worth tracking "when was this actually last confirmed, and
-// by what source" for -- see schema.ts's tasks.fieldEvidence comment. title/
-// description are more structural/narrative than "current operational fact",
-// so they're deliberately left out of v1.
-const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner"] as const;
+// by what source" for -- see schema.ts's tasks.fieldEvidence comment. title
+// is structural and left out; description is tracked because an older source
+// approved late must not replace a newer summary either.
+const TRACKED_EVIDENCE_FIELDS = ["status", "latestUpdate", "nextAction", "owner", "description"] as const;
 
 // Fields a brand-new row of each type cannot be created without -- a real
 // parent id (except objective, which has none) plus a title. interpret.ts's
@@ -156,6 +157,7 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
     );
 
     let resultTargetId: string;
+    const staleConflicts: ConflictEntry[] = [];
 
     if (suggestion.changeType === "merge") {
       // A duplicate merge: the target is the duplicate, supersededById the
@@ -383,6 +385,38 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
       // operational_update that only sets status doesn't disturb the
       // latestUpdate/nextAction/owner evidence already on record.
       let evidencePatch: Record<string, { asOf: string; sourceId: string }> | null = null;
+      if (targetType === "task" && suggestion.targetId && suggestion.changeType !== "cleanup") {
+        // Chronology at approval time, not just at ingestion: an older
+        // source approved after a newer one (e.g. an August note approved
+        // after September evidence) must not replace the newer value. Those
+        // fields are held back and recorded as conflicts on the suggestion.
+        const [current] = await tx
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.id, suggestion.targetId), eq(tasks.organizationId, params.organizationId)));
+        const evidence = (current?.fieldEvidence ?? {}) as Record<string, { asOf?: string } | undefined>;
+        const [source] = await tx.select({ receivedAt: sources.receivedAt }).from(sources).where(eq(sources.id, suggestion.sourceId));
+        const thisAsOf = (source?.receivedAt ?? suggestion.createdAt).getTime();
+        for (const key of TRACKED_EVIDENCE_FIELDS) {
+          const known = evidence[key]?.asOf;
+          if (!(key in fields) || !known || new Date(known).getTime() <= thisAsOf) continue;
+          staleConflicts.push({
+            field: key,
+            proposedValue: fields[key],
+            proposedSourceId: suggestion.sourceId,
+            proposedAsOf: new Date(thisAsOf).toISOString(),
+            currentValue: current ? ((current as Record<string, unknown>)[key] ?? null) : null,
+            currentAsOf: known,
+          });
+          delete (fields as Record<string, unknown>)[key];
+        }
+        if (staleConflicts.length > 0 && Object.keys(fields).length === 0) {
+          const newest = staleConflicts.map((c) => c.currentAsOf.slice(0, 10)).sort().at(-1);
+          throw new SuggestionApplyError(
+            `Pulse already has newer information for ${staleConflicts.map((c) => c.field).join(", ")} (from ${newest}); this update is from ${new Date(thisAsOf).toISOString().slice(0, 10)}. Reject it, or edit it to keep only what is still new.`,
+          );
+        }
+      }
       if (targetType === "task") {
         const trackedKeys: string[] = TRACKED_EVIDENCE_FIELDS.filter((key) => key in fields);
         if (suggestion.changeType === "cleanup" && suggestion.targetId) {
@@ -457,6 +491,7 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
       .update(suggestions)
       .set({
         status: "approved",
+        ...(staleConflicts.length > 0 ? { conflicts: [...((suggestion.conflicts as unknown[] | null) ?? []), ...staleConflicts] } : {}),
         targetId: resultTargetId,
         reviewedBy: params.reviewerId,
         reviewedAt: new Date(),

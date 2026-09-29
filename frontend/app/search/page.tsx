@@ -241,7 +241,7 @@ function SearchPageContent() {
             {results.decisions.map((d) => (
               <div className="task-row" key={d.id}>
                 <div className="task-row-top">
-                  <Link className="task-row-title" href="/decisions">
+                  <Link className="task-row-title" href={`/decisions#decision-${d.id}`}>
                     {d.title}
                   </Link>
                   <span className="badge">{d.status}</span>

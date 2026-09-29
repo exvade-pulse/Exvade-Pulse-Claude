@@ -832,7 +832,11 @@ function decisionLines(d: ReviewDecision): string[] {
 // Priorities and recent changes, as they lead the executive page.
 function dashboardLines(d: Dashboard): string[] {
   const lines = ["EXECUTIVE PRIORITIES"];
-  if (d.priorities.length === 0) lines.push("- None set yet.");
+  if (d.strategySetupIncomplete) {
+    lines.push("- Not set up: there are no strategic questions yet, so Pulse can't rank priorities. Active workstreams not yet under a priority:");
+    for (const w of d.unlinkedWorkstreams) lines.push(`    ${w.title} [${w.state}]${w.nextAction ? ` — next: ${clip(w.nextAction, 160)}` : ""}`);
+  }
+  if (d.unsortedTasks > 0) lines.push(`- ${d.unsortedTasks} open task${d.unsortedTasks === 1 ? " is" : "s are"} still in Unsorted (not filed under any project).`);
   for (const p of d.priorities) {
     lines.push(`- ${p.title} [${p.state}]${p.stateDetail ? ` (${p.stateDetail})` : ""}`, `    ${clip(p.objective, 250)}`);
     if (p.nextAction) lines.push(`    Next: ${clip(p.nextAction, 250)}`);

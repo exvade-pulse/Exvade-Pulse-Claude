@@ -35,7 +35,7 @@ function isOverdue(dueDate: string | null): boolean {
 }
 
 function formatDueDate(dueDate: string): string {
-  return new Date(dueDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return new Date(dueDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 const STATUS_CHIP: Partial<Record<Decision["status"], string>> = {
@@ -90,6 +90,24 @@ export default function DecisionsPage() {
         .catch((err) => setLoadError(err.message));
     }
   }, [user]);
+
+  // Links from elsewhere (#decision-<id>) land on that decision, highlighted.
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [focusMissing, setFocusMissing] = useState(false);
+  useEffect(() => {
+    const match = window.location.hash.match(/^#decision-([0-9a-f-]{36})$/i);
+    if (match) setFocusId(match[1]);
+  }, []);
+  useEffect(() => {
+    if (!focusId || decisions.length === 0) return;
+    const el = document.getElementById(`decision-${focusId}`);
+    if (el) {
+      el.scrollIntoView({ block: "start" });
+      setFocusMissing(false);
+    } else {
+      setFocusMissing(true);
+    }
+  }, [focusId, decisions]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -273,6 +291,9 @@ export default function DecisionsPage() {
       </div>
 
       {loadError && <div className="error-banner">{loadError}</div>}
+      {focusMissing && (
+        <p className="card activity-summary">That decision isn't open anymore (it was decided, closed or merged), so it isn't in this list.</p>
+      )}
       {actionError && <div className="error-banner">{actionError}</div>}
 
       <div className="card-actions" style={{ marginBottom: 16 }}>
@@ -359,7 +380,7 @@ export default function DecisionsPage() {
         const isAddingInfo = addingInfoId === d.id;
         const isAssigning = assigningId === d.id;
         return (
-          <article className="card" key={d.id}>
+          <article className={`card${focusId === d.id ? " decision-focus" : ""}`} key={d.id} id={`decision-${d.id}`}>
             <div className="card-top">
               <div>
                 <p className="card-title">{d.title}</p>

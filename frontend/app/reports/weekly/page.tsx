@@ -197,7 +197,7 @@ export default function WeeklyReportPage() {
               {report.decisionsNeeded.map((d) => (
                 <div className="task-row" key={d.id}>
                   <div className="task-row-top">
-                    <Link className="task-row-title" href="/decisions">
+                    <Link className="task-row-title" href={`/decisions#decision-${d.id}`}>
                       {d.title}
                     </Link>
                     {d.dueDate && <span className="muted">Due {formatDate(d.dueDate.slice(0, 10))}</span>}

@@ -111,7 +111,7 @@ export default function TaskDetailPage() {
         <>
           {(data.objective || data.initiative || data.project) && (
             <p className="breadcrumb">
-              <Link href="/">Strategy map</Link>
+              <Link href="/company-map">Company Map</Link>
               {data.objective && (
                 <>
                   {" / "}
@@ -163,7 +163,7 @@ export default function TaskDetailPage() {
 
             {data.blockingDecision && (
               <p className="blocking-decision">
-                Blocked by open decision: <Link href="/decisions">{data.blockingDecision.title}</Link>
+                Blocked by open decision: <Link href={`/decisions#decision-${data.blockingDecision.id}`}>{data.blockingDecision.title}</Link>
               </p>
             )}
 
