@@ -3,7 +3,10 @@ import { and, eq } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { projects, sources, suggestions, tasks } from "../db/schema.js";
+import { initiatives, projects, sources, suggestions, tasks } from "../db/schema.js";
+import { approveSuggestion } from "../suggestions/apply.js";
+import { supersedeHierarchy } from "../entities/supersedeHierarchy.js";
+import { loadCompanyMapTree } from "../routes/companyMap.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 import { setClaudeClientForTesting, type ClaudeClient } from "../interpretation/claudeClient.js";
@@ -45,7 +48,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     await app.close();
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0, hierarchyChecked: 0, hierarchyDuplicatesFound: 0 });
   });
 
   it("skips a project with fewer than two eligible tasks without calling Claude", async () => {
@@ -66,7 +69,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0, hierarchyChecked: 0, hierarchyDuplicatesFound: 0 });
   });
 
   it("excludes completed/resolved/superseded tasks from both the count and the comparison set", async () => {
@@ -91,7 +94,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0, hierarchyChecked: 0, hierarchyDuplicatesFound: 0 });
   });
 
   it("proposes superseding the duplicate task Claude flags, citing a synthetic manual source", async () => {
@@ -122,7 +125,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     await app.close();
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 1, decisionsChecked: 0, decisionDuplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 1, decisionsChecked: 0, decisionDuplicatesFound: 0, hierarchyChecked: 0, hierarchyDuplicatesFound: 0 });
 
     const suggestionRows = await db
       .select()
@@ -158,7 +161,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 1, tasksChecked: 2, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0, hierarchyChecked: 0, hierarchyDuplicatesFound: 0 });
 
     // createFixtureOrg already inserts one default (type "gmail") source as
     // part of org setup -- the assertion is that the route creates no
@@ -200,8 +203,9 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 2, tasksChecked: 4, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
-    expect(callCount).toBe(2);
+    expect(response.json()).toEqual({ projectsChecked: 2, tasksChecked: 4, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0, hierarchyChecked: 2, hierarchyDuplicatesFound: 0 });
+    // One call per project, plus one comparing the two projects themselves.
+    expect(callCount).toBe(3);
   });
 
   it("never checks or flags another organization's tasks", async () => {
@@ -226,7 +230,7 @@ describe("POST /api/tasks/check-duplicates", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0 });
+    expect(response.json()).toEqual({ projectsChecked: 0, tasksChecked: 0, duplicatesFound: 0, decisionsChecked: 0, decisionDuplicatesFound: 0, hierarchyChecked: 0, hierarchyDuplicatesFound: 0 });
   });
 
   it("returns 401 for an unauthenticated request", async () => {
@@ -234,5 +238,97 @@ describe("POST /api/tasks/check-duplicates", () => {
     const response = await app.inject({ method: "POST", url: "/api/tasks/check-duplicates" });
     await app.close();
     expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("merging duplicate objectives, initiatives and projects", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  it("flags a duplicate project company-wide, and approving moves its tasks to the one kept and hides it from the map", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "dup-project-merge.test" });
+    const [otherInitiative] = await db
+      .insert(initiatives)
+      .values({ organizationId: fixture.org.id, objectiveId: fixture.objective.id, title: "Other initiative" })
+      .returning();
+    const [copy] = await db
+      .insert(projects)
+      .values({ organizationId: fixture.org.id, initiativeId: otherInitiative.id, title: "Test project (copy)", description: "Rig #3 bench work", owner: "Don" })
+      .returning();
+    const [movedTask] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: copy.id, title: "Recalibrate rig #3", status: "completed" })
+      .returning();
+
+    const prompts: string[] = [];
+    const app = await buildApp();
+    setClaudeClientForTesting({
+      createMessage: async (params) => {
+        const prompt = String(params.messages[0].content);
+        prompts.push(prompt);
+        return prompt.includes("open projects")
+          ? toolUseMessage("flag_duplicate_projects", {
+              duplicates: [{ keepId: fixture.project.id, supersedeId: copy.id, reasoning: "Same bench project.", confidence: 0.9 }],
+            })
+          : toolUseMessage("x", { duplicates: [] });
+      },
+    });
+    const response = await app.inject({ method: "POST", url: "/api/tasks/check-duplicates", cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) } });
+    setClaudeClientForTesting(undefined);
+    await app.close();
+
+    expect(response.json()).toMatchObject({ hierarchyChecked: 4, hierarchyDuplicatesFound: 1 });
+    const projectPrompt = prompts.find((p) => p.includes("open projects"))!;
+    expect(projectPrompt).toContain(`title="Test project (copy)" (under initiative: Other initiative) — 1 task`);
+
+    const [suggestion] = await db.select().from(suggestions).where(eq(suggestions.targetId, copy.id));
+    expect(suggestion).toMatchObject({ changeType: "merge", targetType: "project", proposedDiff: { supersededById: fixture.project.id } });
+
+    await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: suggestion.id, reviewerId: fixture.user.id });
+    const [merged] = await db.select().from(projects).where(eq(projects.id, copy.id));
+    expect(merged).toMatchObject({ status: "superseded", supersededById: fixture.project.id });
+    const [kept] = await db.select().from(projects).where(eq(projects.id, fixture.project.id));
+    expect(kept.owner).toBe("Don");
+    expect(kept.description).toContain('merged from duplicate "Test project (copy)"] Rig #3 bench work');
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, movedTask.id));
+    expect(task.projectId).toBe(fixture.project.id);
+
+    const tree = await loadCompanyMapTree(fixture.org.id, "admin");
+    const projectIds = JSON.stringify(tree);
+    expect(projectIds).not.toContain(copy.id);
+  });
+
+  it("merging an initiative moves its projects; a merged record can't be kept or merged again", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "dup-initiative-merge.test" });
+    const [copy] = await db
+      .insert(initiatives)
+      .values({ organizationId: fixture.org.id, objectiveId: fixture.objective.id, title: "Initiative copy" })
+      .returning();
+    const [child] = await db.insert(projects).values({ organizationId: fixture.org.id, initiativeId: copy.id, title: "Child" }).returning();
+
+    const result = await supersedeHierarchy(db, {
+      level: "initiative",
+      organizationId: fixture.org.id,
+      id: copy.id,
+      supersededById: fixture.initiative.id,
+      actorId: fixture.user.id,
+    });
+    expect(result.movedChildren).toBe(1);
+    const [moved] = await db.select().from(projects).where(eq(projects.id, child.id));
+    expect(moved.initiativeId).toBe(fixture.initiative.id);
+
+    const merge = { level: "initiative" as const, organizationId: fixture.org.id, actorId: fixture.user.id };
+    await expect(supersedeHierarchy(db, { ...merge, id: copy.id, supersededById: fixture.initiative.id })).rejects.toThrow("already merged");
+    await expect(supersedeHierarchy(db, { ...merge, id: fixture.initiative.id, supersededById: copy.id })).rejects.toThrow("merged into another");
+    await expect(supersedeHierarchy(db, { ...merge, id: fixture.initiative.id, supersededById: fixture.initiative.id })).rejects.toThrow("itself");
+  });
+
+  it("never merges across organizations", async () => {
+    const mine = await createFixtureOrg(db, { domain: "dup-hier-mine.test" });
+    const theirs = await createFixtureOrg(db, { domain: "dup-hier-theirs.test" });
+    await expect(
+      supersedeHierarchy(db, { level: "objective", organizationId: mine.org.id, id: mine.objective.id, supersededById: theirs.objective.id, actorId: mine.user.id }),
+    ).rejects.toThrow("not found");
   });
 });

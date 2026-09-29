@@ -13,6 +13,7 @@ import {
   RELATION_LABEL,
   submitManualUpdate,
   TYPE_LABEL,
+  type CleanupDetail,
   type ConflictEntry,
   type ContradictionDetail,
   type RelationType,
@@ -188,6 +189,21 @@ function ContradictionCallout({ conflicts }: { conflicts: Suggestion["conflicts"
   );
 }
 
+const CLEANUP_LABEL: Record<CleanupDetail["classification"], string> = {
+  likely_completed: "Likely completed",
+  likely_abandoned: "Likely no longer relevant",
+  likely_superseded: "Likely covered by newer work",
+  replaced_by_new_work: "The work has changed",
+  stale_next_action: "Next action is outdated",
+  still_active: "Probably still active",
+  needs_confirmation: "Needs your confirmation",
+};
+
+function cleanupClassification(s: Suggestion): CleanupDetail["classification"] | null {
+  const detail = (s.conflicts ?? []).find((c): c is CleanupDetail => c.kind === "cleanup");
+  return detail?.classification ?? null;
+}
+
 type ReviewTab = "pending" | "approved" | "rejected";
 
 const TAB_LABEL: Record<ReviewTab, string> = {
@@ -218,6 +234,8 @@ function cardTitle(s: Suggestion): string {
   if (s.targetType === "relationship") return "New relationship";
   if (s.changeType === "merge") return `Possible duplicate: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
   if (s.changeType === "contradiction") return `Conflict detected: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
+  if (s.changeType === "cleanup") return `Cleanup: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
+  if (s.changeType === "replace") return `Replace: ${String(s.currentState?.title ?? TARGET_LABEL[s.targetType])}`;
   if (s.changeType === "deadline_passed") return `Deadline passed: ${String(s.currentState?.title ?? "decision")}`;
   return s.targetId
     ? String(s.currentState?.title ?? `${TARGET_LABEL[s.targetType]} update`)
@@ -428,7 +446,9 @@ export default function ReviewPage() {
             <span className="muted">
               {s.targetType === "relationship"
                 ? "Proposes new relationship"
-                : s.changeType === "merge"
+                : cleanupClassification(s)
+                  ? CLEANUP_LABEL[cleanupClassification(s)!]
+                  : s.changeType === "merge"
                   ? `Proposes merging two ${TARGET_LABEL[s.targetType].toLowerCase()}s`
                   : s.targetId
                   ? `Updates existing ${TARGET_LABEL[s.targetType]}`
@@ -470,15 +490,32 @@ export default function ReviewPage() {
             relationType={s.proposedDiff.relationType as RelationType | undefined}
             note={s.proposedDiff.note as string | undefined}
           />
+        ) : s.changeType === "replace" ? (
+          <div className="merge-explainer">
+            <p className="card-diff">
+              Replace &ldquo;{String(s.currentState?.title ?? "this task")}&rdquo; with a new task: &ldquo;
+              {String((s.proposedDiff.newTask as { title?: string } | undefined)?.title ?? "")}&rdquo;
+              {(s.proposedDiff.newTask as { nextAction?: string | null } | undefined)?.nextAction
+                ? ` (next: ${(s.proposedDiff.newTask as { nextAction: string }).nextAction})`
+                : ""}
+              .
+            </p>
+            <p className="rc-meta">
+              Approving creates the new task in the same project and marks the old one superseded by it. Nothing is deleted.
+            </p>
+          </div>
+        ) : s.changeType === "cleanup" && Object.keys(s.proposedDiff).length === 0 ? (
+          <p className="card-diff">Approving confirms this is still active and clears its &ldquo;stale&rdquo; flag. Reject if it isn&rsquo;t.</p>
         ) : s.changeType === "merge" ? (
           <div className="merge-explainer">
             <p className="card-diff">
-              &ldquo;{String(s.currentState?.title ?? "This record")}&rdquo; looks like a duplicate of &ldquo;
+              &ldquo;{String(s.currentState?.title ?? "This record")}&rdquo;{" "}
+              {cleanupClassification(s) === "likely_superseded" ? "is covered by newer work:" : "looks like a duplicate of"} &ldquo;
               {s.mergeInto?.title ?? "another record"}&rdquo;.
             </p>
             <p className="rc-meta">
               Approving keeps &ldquo;{s.mergeInto?.title ?? "the other record"}&rdquo;, marks this one superseded and copies its
-              notes over. Nothing is deleted.
+              notes over{s.targetType === "project" || s.targetType === "initiative" || s.targetType === "objective" ? ", and moves everything filed under it to the one kept" : ""}. Nothing is deleted.
             </p>
           </div>
         ) : (
@@ -551,7 +588,7 @@ export default function ReviewPage() {
                   {s.changeType === "deadline_passed" ? "Dismiss" : "Reject"}
                 </button>
                 {/* A merge is a yes/no question; its only field is an internal id. */}
-                {s.changeType !== "merge" && (
+                {s.changeType !== "merge" && s.changeType !== "replace" && (
                   <button
                     className="decision-btn edit"
                     disabled={pendingActionId === s.id}

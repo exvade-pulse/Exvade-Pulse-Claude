@@ -205,3 +205,55 @@ export async function findDuplicateDecisions(
     confidence: p.confidence,
   }));
 }
+
+export interface DuplicateCandidateHierarchy {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  // Where it sits, e.g. "under initiative: Pre-clinical validation".
+  parent: string | null;
+  // What is filed under it, e.g. "7 tasks".
+  contents: string;
+}
+
+export interface DuplicateHierarchyPair {
+  keepId: string;
+  supersedeId: string;
+  reasoning: string;
+  confidence: number;
+}
+
+const HIERARCHY_EXAMPLES: Record<"objective" | "initiative" | "project", string> = {
+  objective: 'e.g. "Secure Series B financing" and "Raise Series B" are the same goal',
+  initiative: 'e.g. "Pre-clinical validation" and "Preclinical validation studies" are the same body of work',
+  project: 'e.g. "Bench testing protocol" and "Bench test protocol development" are the same project, even if filed under different initiatives',
+};
+
+// Same one-call-per-list check, for one level of the strategy hierarchy
+// across the whole company (a duplicate project is often filed under a
+// different initiative than its original).
+export async function findDuplicateHierarchy(
+  level: "objective" | "initiative" | "project",
+  items: DuplicateCandidateHierarchy[],
+  claudeClient: ClaudeClient = getClaudeClient(),
+): Promise<DuplicateHierarchyPair[]> {
+  return findDuplicates(
+    items,
+    {
+      toolName: `flag_duplicate_${level}s`,
+      noun: `${level}s`,
+      keepKey: "keepId",
+      supersedeKey: "supersedeId",
+      keepHint: "prefer the one with more work filed under it and the clearer title",
+      scope: "for the company",
+      examples: HIERARCHY_EXAMPLES[level],
+      format: (item) =>
+        [
+          `id=${item.id} status=${item.status} title="${item.title}"${item.parent ? ` (${item.parent})` : ""} — ${item.contents}`,
+          item.description ? `  description: ${item.description}` : null,
+        ].filter((line): line is string => line !== null),
+    },
+    claudeClient,
+  );
+}

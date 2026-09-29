@@ -88,9 +88,32 @@ export interface Suggestion {
   // A free wording-similarity hint on pending "create new task/decision"
   // suggestions that read like an existing record or an earlier pending one.
   likelyDuplicateOf: { kind: "existing" | "pending"; id: string; title: string; similarity: number } | null;
-  // Null in the overwhelming common case -- see ConflictEntry and
-  // ContradictionDetail.
-  conflicts: Array<ConflictEntry | ContradictionDetail> | null;
+  // Null in the overwhelming common case -- see ConflictEntry,
+  // ContradictionDetail and CleanupDetail.
+  conflicts: Array<ConflictEntry | ContradictionDetail | CleanupDetail> | null;
+}
+
+// On a suggestion from the "Clean up" check: how the record was classified.
+export interface CleanupDetail {
+  kind: "cleanup";
+  classification:
+    | "likely_completed"
+    | "likely_abandoned"
+    | "likely_superseded"
+    | "replaced_by_new_work"
+    | "stale_next_action"
+    | "still_active"
+    | "needs_confirmation";
+}
+
+// On-demand Claude pass over stale records and stale next actions: one
+// proposed resolution per record, each waiting in Review.
+export async function runCleanup(): Promise<{ recordsChecked: number; proposals: number }> {
+  const res = await fetch(`${API_URL}/api/reviews/cleanup`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`Cleanup check failed (${res.status})`);
+  }
+  return res.json();
 }
 
 export async function fetchCurrentUser(): Promise<SessionUser | null> {
@@ -194,7 +217,7 @@ export interface DashboardObjective {
   id: string;
   title: string;
   description: string | null;
-  status: "active" | "paused" | "completed" | "cancelled";
+  status: StrategyStatus;
   priority: "low" | "medium" | "high" | "critical";
   owner: string | null;
   createdAt: string;
@@ -468,7 +491,7 @@ export async function resolveDecision(
   return res.json();
 }
 
-export type StrategyStatus = "active" | "paused" | "completed" | "cancelled";
+export type StrategyStatus = "active" | "paused" | "completed" | "cancelled" | "superseded";
 export type Priority = "low" | "medium" | "high" | "critical";
 
 export interface ObjectiveDetail {
@@ -803,8 +826,29 @@ export interface ReviewTask {
   lastEvidenceAt: string;
   daysSinceEvidence: number;
   waitingOnDecision: string | null;
+  waitingOn: string[];
+  nextActionAgeDays: number | null;
+  nextActionStale: boolean;
   attentionScore: number;
   attentionReasons: string[];
+}
+
+export interface ReviewWorkstream {
+  project: string;
+  objective: string;
+  objectivePriority: string;
+  state: "needs attention" | "waiting" | "on track";
+  counts: { blocked: number; needsAttention: number; waiting: number; active: number };
+  topScore: number;
+  lastEvidenceAt: string;
+  tasks: ReviewTask[];
+}
+
+export interface ReviewFocusItem {
+  kind: "deadline" | "conflict" | "decision" | "blocker" | "stale_next";
+  title: string;
+  detail: string;
+  weight: number;
 }
 
 export interface ReviewDecision {
@@ -819,6 +863,11 @@ export interface ReviewDecision {
   relevantContext: string | null;
   suggestedNextStep: string | null;
   relatedTask: string | null;
+  waitingOn: string[];
+  informedBy: string[];
+  coupledWith: string[];
+  nextStepAgeDays: number | null;
+  nextStepStale: boolean;
 }
 
 export interface ReviewChange {
@@ -845,6 +894,8 @@ export interface ExecutiveReviewData {
   // Null until the viewer first marks the review as reviewed.
   sinceLastReview: { lastReviewedAt: string; changes: ReviewChange[] } | null;
   headline: string[];
+  focus: ReviewFocusItem[];
+  workstreams: ReviewWorkstream[];
   contradictions: ReviewContradiction[];
   decisionsNeeded: ReviewDecision[];
   deadlinePassed: ReviewDecision[];
@@ -1070,6 +1121,8 @@ export interface DuplicateCheckResult {
   duplicatesFound: number;
   decisionsChecked: number;
   decisionDuplicatesFound: number;
+  hierarchyChecked: number;
+  hierarchyDuplicatesFound: number;
 }
 
 // Triggers an on-demand Claude pass (one call per project with 2+ open

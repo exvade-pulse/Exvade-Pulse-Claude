@@ -1,8 +1,9 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { auditLog, initiatives, objectives, projects, sources, suggestions, tasks, type EntityNodeType, type RelationType } from "../db/schema.js";
+import { auditLog, initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, type EntityNodeType, type RelationType } from "../db/schema.js";
 import { createDecision, DecisionError, supersedeDecision, updateDecision } from "../decisions/manage.js";
 import { createRelationship, RelationshipError } from "../relationships/manage.js";
+import { supersedeHierarchy } from "../entities/supersedeHierarchy.js";
 import { supersedeTask, SupersedeError } from "../tasks/supersede.js";
 
 export class SuggestionApplyError extends Error {}
@@ -104,6 +105,16 @@ export function pickAllowedFields(
   if (changeType === "merge") {
     return "supersededById" in diff ? { supersededById: diff.supersededById } : {};
   }
+  // A replacement only ever names the new task's own few fields.
+  if (changeType === "replace") {
+    const proposed = diff.newTask;
+    if (!proposed || typeof proposed !== "object") return {};
+    const newTask: Record<string, unknown> = {};
+    for (const key of ["title", "nextAction", "description"]) {
+      if (key in proposed) newTask[key] = (proposed as Record<string, unknown>)[key];
+    }
+    return { newTask };
+  }
   const contextFields = changeType === "context" ? CONTEXT_ONLY_FIELDS[targetType] : undefined;
   const allowed = contextFields ?? ALLOWED_FIELDS[targetType];
   const result: Record<string, unknown> = {};
@@ -159,6 +170,8 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
           await supersedeDecision(tx, { ...merge, decisionId: suggestion.targetId });
         } else if (targetType === "task") {
           await supersedeTask(tx, { ...merge, taskId: suggestion.targetId });
+        } else if (targetType === "objective" || targetType === "initiative" || targetType === "project") {
+          await supersedeHierarchy(tx, { ...merge, level: targetType, id: suggestion.targetId });
         } else {
           throw new SuggestionApplyError(`Merging isn't supported for ${targetType}`);
         }
@@ -169,6 +182,52 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         throw err;
       }
       resultTargetId = suggestion.targetId;
+    } else if (suggestion.changeType === "replace") {
+      // The work changed shape: create the new task in the old one's
+      // project, then supersede the old task with it (kept, linked, notes
+      // copied -- see supersedeTask). One approval, one transaction.
+      const newTask = fields.newTask as { title?: unknown; nextAction?: unknown; description?: unknown } | undefined;
+      const title = typeof newTask?.title === "string" ? newTask.title.trim() : "";
+      if (targetType !== "task" || !suggestion.targetId || !title) {
+        throw new SuggestionApplyError("Replace suggestion is missing the task to replace or the new task's title");
+      }
+      const [old] = await tx
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.id, suggestion.targetId), eq(tasks.organizationId, params.organizationId)));
+      if (!old) throw new SuggestionApplyError("Task not found or not in this organization");
+      if (TERMINAL_TASK_STATUSES.includes(old.status)) {
+        throw new SuggestionApplyError(`Task is already ${old.status}`);
+      }
+      const nextAction = typeof newTask?.nextAction === "string" && newTask.nextAction.trim() ? newTask.nextAction.trim() : null;
+      const now = new Date().toISOString();
+      const [created] = await tx
+        .insert(tasks)
+        .values({
+          organizationId: params.organizationId,
+          projectId: old.projectId,
+          title,
+          description: typeof newTask?.description === "string" && newTask.description.trim() ? newTask.description.trim() : null,
+          nextAction,
+          owner: old.owner,
+          fieldEvidence: {
+            status: { asOf: now, sourceId: suggestion.sourceId },
+            ...(nextAction ? { nextAction: { asOf: now, sourceId: suggestion.sourceId } } : {}),
+          },
+        })
+        .returning({ id: tasks.id });
+      try {
+        await supersedeTask(tx, {
+          organizationId: params.organizationId,
+          taskId: old.id,
+          supersededById: created.id,
+          actorId: params.reviewerId,
+        });
+      } catch (err) {
+        if (err instanceof SupersedeError) throw new SuggestionApplyError(err.message);
+        throw err;
+      }
+      resultTargetId = old.id;
     } else if (targetType === "relationship") {
       // Always a create (targetId is never set for a relationship draft --
       // see interpret.ts/relationshipDetection.ts, there's no single existing
@@ -284,7 +343,21 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
       // latestUpdate/nextAction/owner evidence already on record.
       let evidencePatch: Record<string, { asOf: string; sourceId: string }> | null = null;
       if (targetType === "task") {
-        const trackedKeys = TRACKED_EVIDENCE_FIELDS.filter((key) => key in fields);
+        const trackedKeys: string[] = TRACKED_EVIDENCE_FIELDS.filter((key) => key in fields);
+        if (suggestion.changeType === "cleanup" && suggestion.targetId) {
+          // A person just looked at this record: its status is confirmed as
+          // of now, and approving a bare "still active" confirms the next
+          // action too, which is what clears the stale flags.
+          const [current] = await tx
+            .select({ status: tasks.status })
+            .from(tasks)
+            .where(and(eq(tasks.id, suggestion.targetId), eq(tasks.organizationId, params.organizationId)));
+          if (current && TERMINAL_TASK_STATUSES.includes(current.status)) {
+            throw new SuggestionApplyError(`Task is already ${current.status}`);
+          }
+          if (!trackedKeys.includes("status")) trackedKeys.push("status");
+          if (Object.keys(fields).length === 0) trackedKeys.push("nextAction");
+        }
         if (trackedKeys.length > 0) {
           const [source] = await tx
             .select({ receivedAt: sources.receivedAt })

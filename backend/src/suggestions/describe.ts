@@ -44,6 +44,10 @@ export async function describeSuggestions(
         ? `${nameOf(diff.fromType, diff.fromId)} ${String(diff.relationType)} ${nameOf(diff.toType, diff.toId)}`
         : row.changeType === "merge" && row.targetId
           ? `Merge duplicate ${row.targetType} "${nameOf(row.targetType, row.targetId)}" into "${nameOf(row.targetType, diff.supersededById)}"`
+          : row.changeType === "replace" && row.targetId
+          ? `Replace "${nameOf(row.targetType, row.targetId)}" with new task "${String((diff.newTask as { title?: unknown } | undefined)?.title ?? "(untitled)")}"`
+          : row.changeType === "cleanup" && row.targetId
+          ? `Cleanup: ${nameOf(row.targetType, row.targetId)}`
           : row.targetId
           ? nameOf(row.targetType, row.targetId)
           : `New ${row.targetType}: ${String(diff.title ?? "(untitled)")}`;

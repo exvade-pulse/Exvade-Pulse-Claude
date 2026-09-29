@@ -1,9 +1,21 @@
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, notInArray, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { decisions, LIVE_DECISION_STATUSES, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, type UserRole } from "../db/schema.js";
+import {
+  decisions,
+  entityRelationships,
+  LIVE_DECISION_STATUSES,
+  sources,
+  suggestions,
+  tasks,
+  TERMINAL_TASK_STATUSES,
+  type EntityNodeType,
+  type UserRole,
+} from "../db/schema.js";
 import { visibilityFilter } from "../access/visibility.js";
 import { loadCompanyMapTree } from "../routes/companyMap.js";
 import { describeSuggestions } from "../suggestions/describe.js";
+import { resolveNames } from "../relationships/manage.js";
+import { loadRealUpdatedAt, resolveRealUpdatedAt } from "../entities/realUpdatedAt.js";
 import type { SinceLastReview } from "./reviewChanges.js";
 
 // The executive review: what needs a decision, what's at risk, what's
@@ -46,6 +58,14 @@ export interface ReviewTask {
   lastEvidenceAt: string;
   daysSinceEvidence: number;
   waitingOnDecision: string | null;
+  // Everything this task is waiting on: its blocking decision plus any
+  // depends_on / blocks / awaiting_response_from links still in play.
+  waitingOn: string[];
+  // How old the evidence behind the next action is, tracked separately from
+  // the record itself: a record can still be valid while its next step has
+  // gone stale. Null when there's no next action.
+  nextActionAgeDays: number | null;
+  nextActionStale: boolean;
   attentionScore: number;
   attentionReasons: string[];
 }
@@ -62,6 +82,36 @@ export interface ReviewDecision {
   relevantContext: string | null;
   suggestedNextStep: string | null;
   relatedTask: string | null;
+  // From relationships, only counting records still in play.
+  waitingOn: string[];
+  informedBy: string[];
+  coupledWith: string[];
+  nextStepAgeDays: number | null;
+  nextStepStale: boolean;
+}
+
+// One workstream (project) rolled up to a single line, so the review shows
+// "Bench testing protocol — needs attention" rather than every task at the
+// same level. Its tasks stay available behind an expander.
+export interface ReviewWorkstream {
+  project: string;
+  objective: string;
+  objectivePriority: string;
+  state: "needs attention" | "waiting" | "on track";
+  counts: { blocked: number; needsAttention: number; waiting: number; active: number };
+  topScore: number;
+  lastEvidenceAt: string;
+  tasks: ReviewTask[];
+}
+
+// The handful of things most worth your attention right now, drawn from
+// every section and ranked by consequence -- the answer to "what should I
+// focus on next?".
+export interface ReviewFocusItem {
+  kind: "deadline" | "conflict" | "decision" | "blocker" | "stale_next";
+  title: string;
+  detail: string;
+  weight: number;
 }
 
 export interface ReviewDevelopment {
@@ -110,6 +160,8 @@ export interface ExecutiveReviewData {
   // they last marked it reviewed); null when they never have.
   sinceLastReview?: SinceLastReview | null;
   headline: string[];
+  focus: ReviewFocusItem[];
+  workstreams: ReviewWorkstream[];
   contradictions: ReviewContradiction[];
   decisionsNeeded: ReviewDecision[];
   deadlinePassed: ReviewDecision[];
@@ -123,6 +175,39 @@ export interface ExecutiveReviewData {
   awaitingReviewTotal: number;
   inventory: ReviewInventoryProject[];
   counts: { openTasks: number; blocked: number; needsAttention: number; waiting: number; openDecisions: number };
+}
+
+// A next step goes stale much faster than the record it belongs to:
+// three weeks without new evidence and it's worth re-checking.
+export const NEXT_ACTION_STALE_DAYS = 21;
+const FOCUS_LIMIT = 8;
+
+function nextActionFreshness(nextAction: string | null, asOf: Date | string, now: Date) {
+  if (!nextAction) return { nextActionAgeDays: null, nextActionStale: false };
+  const age = daysBetween(asOf, now);
+  return { nextActionAgeDays: age, nextActionStale: age > NEXT_ACTION_STALE_DAYS };
+}
+
+// Keeps the existing order (soonest due first) but pulls each decision's
+// coupled partners up to sit right after it, so two issues that should be
+// considered together are read together.
+function keepCoupledAdjacent(list: ReviewDecision[]): ReviewDecision[] {
+  const byTitle = new Map(list.map((d) => [d.title, d]));
+  const placed = new Set<string>();
+  const result: ReviewDecision[] = [];
+  for (const d of list) {
+    if (placed.has(d.id)) continue;
+    result.push(d);
+    placed.add(d.id);
+    for (const partnerTitle of d.coupledWith) {
+      const partner = byTitle.get(partnerTitle);
+      if (partner && !placed.has(partner.id)) {
+        result.push(partner);
+        placed.add(partner.id);
+      }
+    }
+  }
+  return result;
 }
 
 function daysBetween(from: Date | string, now: Date): number {
@@ -188,7 +273,7 @@ export async function buildExecutiveReviewData(
 ): Promise<ExecutiveReviewData> {
   const recentSince = new Date(now.getTime() - RECENT_DAYS * MS_PER_DAY);
 
-  const [tree, openDecisionRows, recentRows, pendingRows] = await Promise.all([
+  const [tree, openDecisionRows, recentRows, pendingRows, relationshipRows, taskEvidenceRows] = await Promise.all([
     loadCompanyMapTree(organizationId, role),
     db
       .select({
@@ -202,6 +287,7 @@ export async function buildExecutiveReviewData(
         relevantContext: decisions.relevantContext,
         suggestedNextStep: decisions.suggestedNextStep,
         relatedTaskId: decisions.relatedTaskId,
+        updatedAt: decisions.updatedAt,
       })
       .from(decisions)
       .where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES), visibilityFilter(role, decisions.visibility)))
@@ -237,7 +323,16 @@ export async function buildExecutiveReviewData(
       .from(suggestions)
       .where(and(eq(suggestions.organizationId, organizationId), inArray(suggestions.status, ["pending", "edited"])))
       .orderBy(desc(suggestions.confidence)),
+    db.select().from(entityRelationships).where(eq(entityRelationships.organizationId, organizationId)),
+    db
+      .select({ id: tasks.id, fieldEvidence: tasks.fieldEvidence })
+      .from(tasks)
+      .where(and(eq(tasks.organizationId, organizationId), notInArray(tasks.status, TERMINAL_TASK_STATUSES))),
   ]);
+  const nextActionAsOf = new Map(
+    taskEvidenceRows.map((row) => [row.id, (row.fieldEvidence as Record<string, { asOf?: string }> | null)?.nextAction?.asOf ?? null]),
+  );
+  const decisionUpdated = await loadRealUpdatedAt(db, organizationId, "decision", openDecisionRows.map((d) => d.id));
 
   const decisionDue = new Map(openDecisionRows.map((d) => [d.id, d.dueDate]));
   const soon = now.getTime() + 14 * MS_PER_DAY;
@@ -274,6 +369,8 @@ export async function buildExecutiveReviewData(
             lastEvidenceAt: new Date(task.updatedAt).toISOString(),
             daysSinceEvidence: days,
             waitingOnDecision: task.blockingDecision?.title ?? null,
+            waitingOn: task.blockingDecision ? [task.blockingDecision.title] : [],
+            ...nextActionFreshness(task.nextAction, nextActionAsOf.get(task.id) ?? task.updatedAt, now),
             attentionScore: score,
             attentionReasons: reasons,
           };
@@ -316,10 +413,59 @@ export async function buildExecutiveReviewData(
       relevantContext: d.relevantContext,
       suggestedNextStep: d.suggestedNextStep,
       relatedTask: d.relatedTaskId ? taskTitleById.get(d.relatedTaskId) ?? null : null,
+      waitingOn: [],
+      informedBy: [],
+      coupledWith: [],
+      ...(() => {
+        const f = nextActionFreshness(d.suggestedNextStep, resolveRealUpdatedAt(d.updatedAt, decisionUpdated.get(d.id)), now);
+        return { nextStepAgeDays: f.nextActionAgeDays, nextStepStale: f.nextActionStale };
+      })(),
     };
   };
   const allDecisions = openDecisionRows.map(toDecision);
-  const undecided = allDecisions.filter((d) => d.status !== "action_in_progress");
+
+  // Relationships shape what's shown, not just metadata. Only links to
+  // records still in play count (a finished task isn't something a decision
+  // is "waiting on"), and only records this viewer can see.
+  const liveTaskIds = new Set(openTasks.map((t) => t.id));
+  const liveDecisionIds = new Set(allDecisions.map((d) => d.id));
+  const inPlay = (type: EntityNodeType, id: string) =>
+    type === "task" ? liveTaskIds.has(id) : type === "decision" ? liveDecisionIds.has(id) : true;
+  const relevantLinks = relationshipRows.filter((r) => inPlay(r.fromType, r.fromId) && inPlay(r.toType, r.toId));
+  const linkNames = await resolveNames(
+    db,
+    organizationId,
+    relevantLinks.flatMap((r) => [
+      { type: r.fromType, id: r.fromId },
+      { type: r.toType, id: r.toId },
+    ]),
+  );
+  const nameOf = (type: EntityNodeType, id: string) => linkNames.get(`${type}:${id}`) ?? "(unknown)";
+  const add = (map: Map<string, Set<string>>, key: string, value: string) => map.set(key, (map.get(key) ?? new Set()).add(value));
+  const waitingOn = new Map<string, Set<string>>();
+  const informedBy = new Map<string, Set<string>>();
+  const coupledWith = new Map<string, Set<string>>();
+  for (const r of relevantLinks) {
+    const from = `${r.fromType}:${r.fromId}`;
+    const to = `${r.toType}:${r.toId}`;
+    if (r.relationType === "depends_on" || r.relationType === "awaiting_response_from") add(waitingOn, from, nameOf(r.toType, r.toId));
+    if (r.relationType === "blocks") add(waitingOn, to, nameOf(r.fromType, r.fromId));
+    if (r.relationType === "informs") add(informedBy, to, nameOf(r.fromType, r.fromId));
+    if (r.relationType === "coupled_with") {
+      add(coupledWith, from, nameOf(r.toType, r.toId));
+      add(coupledWith, to, nameOf(r.fromType, r.fromId));
+    }
+  }
+  for (const d of allDecisions) {
+    d.waitingOn = [...(waitingOn.get(`decision:${d.id}`) ?? [])];
+    d.informedBy = [...(informedBy.get(`decision:${d.id}`) ?? [])];
+    d.coupledWith = [...(coupledWith.get(`decision:${d.id}`) ?? [])];
+  }
+  for (const t of openTasks) {
+    t.waitingOn = [...new Set([...t.waitingOn, ...(waitingOn.get(`task:${t.id}`) ?? [])])];
+  }
+
+  const undecided = keepCoupledAdjacent(allDecisions.filter((d) => d.status !== "action_in_progress"));
   // A decision already being carried out isn't "overdue": its deadline was
   // for the call, and the call was made.
   const decisionsInProgress = allDecisions.filter((d) => d.status === "action_in_progress").map((d) => ({ ...d, daysOverdue: null }));
@@ -397,15 +543,81 @@ export async function buildExecutiveReviewData(
     );
   }
   if (risks.length > 0) headline.push(`${plural(risks.length, "item is", "items are")} blocked, waiting or flagged for attention`);
+  const staleNextCount =
+    current.filter((t) => t.nextActionStale).length + undecided.filter((d) => d.nextStepStale).length;
+  if (staleNextCount > 0) {
+    headline.push(`${plural(staleNextCount, "next action may be", "next actions may be")} stale (no new evidence in ${NEXT_ACTION_STALE_DAYS}+ days)`);
+  }
   if (needsDisposition.length > 0) {
     headline.push(`${plural(needsDisposition.length, "old record needs", "old records need")} disposition (no evidence in ${DISPOSITION_DAYS}+ days) — close, update or confirm; not urgent`);
   }
   if (pending.length > 0) headline.push(`${plural(pending.length, "suggested change is", "suggested changes are")} waiting in Review`);
   if (headline.length === 0) headline.push("Nothing needs a decision or is blocked right now.");
 
+  // One line per workstream, built from current (non-stale) work only.
+  const dispositionIds = new Set(needsDisposition.map((t) => t.id));
+  const workstreams: ReviewWorkstream[] = inventory
+    .map((group) => {
+      const live = group.tasks.filter((t) => !dispositionIds.has(t.id));
+      const count = (status: string) => live.filter((t) => t.status === status).length;
+      const counts = { blocked: count("blocked"), needsAttention: count("needs_attention"), waiting: count("waiting"), active: count("active") };
+      const state: ReviewWorkstream["state"] =
+        counts.blocked + counts.needsAttention > 0 ? "needs attention" : counts.waiting > 0 ? "waiting" : "on track";
+      return {
+        project: group.project,
+        objective: group.objective,
+        objectivePriority: group.objectivePriority,
+        state,
+        counts,
+        topScore: Math.max(0, ...live.map((t) => t.attentionScore)),
+        lastEvidenceAt: live.map((t) => t.lastEvidenceAt).sort().at(-1) ?? "",
+        tasks: live,
+      };
+    })
+    .filter((w) => w.tasks.length > 0)
+    .sort((a, b) => b.topScore - a.topScore || a.project.localeCompare(b.project));
+
+  // "What should I focus on next?" -- the most consequential items from
+  // every section, ranked. Past-deadline decisions and conflicts first: the
+  // record can't be relied on until they're resolved.
+  const focus: ReviewFocusItem[] = [];
+  for (const d of deadlinePassed) {
+    focus.push({ kind: "deadline", title: d.title, detail: `${d.daysOverdue} days past due with no recorded outcome — confirm what happened`, weight: 100 });
+  }
+  // One focus line per record, however many conflicts it has.
+  const conflictsByRecord = new Map<string, { title: string; fields: Set<string>; count: number }>();
+  for (const c of contradictions) {
+    const key = `${c.recordType}:${c.recordId}`;
+    const entry = conflictsByRecord.get(key) ?? { title: c.recordTitle, fields: new Set<string>(), count: 0 };
+    entry.fields.add(c.field);
+    entry.count += 1;
+    conflictsByRecord.set(key, entry);
+  }
+  for (const { title, fields, count } of conflictsByRecord.values()) {
+    const what = count > 1 ? `${count} conflicts (${[...fields].join(", ")})` : `Conflicting information (${[...fields][0]})`;
+    focus.push({ kind: "conflict", title, detail: `${what} — resolve before relying on it`, weight: 95 });
+  }
+  for (const d of decisionsNeeded) {
+    const dueSoon = !!d.dueDate && new Date(d.dueDate).getTime() <= soon;
+    const parts = [dueSoon ? `due ${formatDate(d.dueDate)}` : null, d.waitingOn.length ? `waiting on ${d.waitingOn.join(", ")}` : `decider: ${d.decider}`];
+    focus.push({ kind: "decision", title: d.title, detail: `Decision needed — ${parts.filter(Boolean).join(" · ")}`, weight: dueSoon ? 90 : 65 });
+  }
+  for (const t of risks) {
+    const on = t.waitingOn.length ? ` — waiting on ${t.waitingOn.join(", ")}` : "";
+    focus.push({ kind: "blocker", title: t.title, detail: `${statusLabel(t.status).toLowerCase()}${on} (${t.project})`, weight: 40 + t.attentionScore / 2 });
+  }
+  for (const t of operatingActions) {
+    if (t.nextActionStale && t.attentionScore >= 20) {
+      focus.push({ kind: "stale_next", title: t.title, detail: `Next action is ${t.nextActionAgeDays} days old — confirm or replace it`, weight: 45 });
+    }
+  }
+  focus.sort((a, b) => b.weight - a.weight);
+
   return {
     generatedAt: now.toISOString(),
     headline,
+    focus: focus.slice(0, FOCUS_LIMIT),
+    workstreams,
     contradictions,
     decisionsNeeded,
     deadlinePassed,
@@ -447,7 +659,11 @@ function taskLines(t: ReviewTask, withPath: boolean): string[] {
   const head = `- [${statusLabel(t.status)}] ${t.title}${withPath ? ` (${t.objective} › ${t.project})` : ""}`;
   const details = [`Owner: ${t.owner ?? "not recorded"}`, `Last evidence: ${formatDate(t.lastEvidenceAt)}`];
   if (t.waitingOnDecision) details.push(`Waiting on decision: ${t.waitingOnDecision}`);
-  if (t.nextAction) details.push(`Next: ${clip(t.nextAction, 200)}`);
+  const otherWaits = t.waitingOn.filter((w) => w !== t.waitingOnDecision);
+  if (otherWaits.length > 0) details.push(`Waiting on: ${otherWaits.join(", ")}`);
+  if (t.nextAction) {
+    details.push(`Next: ${clip(t.nextAction, 200)}${t.nextActionStale ? ` (may be stale: ${t.nextActionAgeDays} days old)` : ""}`);
+  }
   return [head, `    ${details.join(" | ")}`];
 }
 
@@ -458,7 +674,12 @@ function decisionLines(d: ReviewDecision): string[] {
   if (d.stakeholders.length > 0) lines.push(`    Stakeholders: ${d.stakeholders.join(", ")}`);
   if (d.whyItMatters) lines.push(`    Why it matters: ${clip(d.whyItMatters, 500)}`);
   if (d.relevantContext) lines.push(`    Context: ${clip(d.relevantContext, 500)}`);
-  if (d.suggestedNextStep) lines.push(`    Suggested next step: ${clip(d.suggestedNextStep, 300)}`);
+  if (d.suggestedNextStep) {
+    lines.push(`    Suggested next step: ${clip(d.suggestedNextStep, 300)}${d.nextStepStale ? ` (may be stale: ${d.nextStepAgeDays} days without new evidence)` : ""}`);
+  }
+  if (d.waitingOn.length > 0) lines.push(`    Waiting on: ${d.waitingOn.join(", ")}`);
+  if (d.coupledWith.length > 0) lines.push(`    Consider together with: ${d.coupledWith.join(", ")}`);
+  if (d.informedBy.length > 0) lines.push(`    Informed by: ${d.informedBy.join(", ")}`);
   if (d.relatedTask) lines.push(`    Related task: ${d.relatedTask}`);
   return lines;
 }
@@ -474,6 +695,11 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
     "THIS WEEK",
     ...data.headline.map((h) => `- ${h}`),
   ];
+
+  if (data.focus.length > 0) {
+    lines.push("", "FOCUS (most consequential first)");
+    data.focus.forEach((f, i) => lines.push(`${i + 1}. ${f.title} — ${f.detail}`));
+  }
 
   if (data.sinceLastReview) {
     const { lastReviewedAt, changes } = data.sinceLastReview;
@@ -515,9 +741,19 @@ export function renderExecutiveReviewText(data: ExecutiveReviewData): string {
   if (data.risks.length === 0) lines.push("- None.");
   for (const t of data.risks) lines.push(...taskLines(t, true));
 
-  lines.push("", "4. OPERATING ACTIONS (active work, ordered by attention)");
+  lines.push("", "4. OPERATING ACTIONS (active work, rolled up by workstream)");
   if (data.operatingActions.length === 0) lines.push("- None.");
-  for (const t of data.operatingActions) lines.push(...taskLines(t, true));
+  const activeIds = new Set(data.operatingActions.map((t) => t.id));
+  for (const w of data.workstreams) {
+    const active = w.tasks.filter((t) => activeIds.has(t.id));
+    if (active.length === 0) continue;
+    const c = w.counts;
+    const mix = [c.blocked && `${c.blocked} blocked`, c.needsAttention && `${c.needsAttention} need attention`, c.waiting && `${c.waiting} waiting`, `${c.active} active`]
+      .filter(Boolean)
+      .join(", ");
+    lines.push(`${w.project} — ${w.state} (${mix}) [${w.objective}]`);
+    for (const t of active) lines.push(...taskLines(t, false).map((l) => `  ${l}`));
+  }
 
   lines.push(
     "",

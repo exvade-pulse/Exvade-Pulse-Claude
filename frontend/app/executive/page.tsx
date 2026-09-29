@@ -8,17 +8,18 @@ import {
   checkContradictions,
   fetchExecutiveReview,
   markExecutiveReviewReviewed,
+  runCleanup,
   type ExecutiveReviewData,
   type SessionUser,
 } from "../../lib/api";
 import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
-import { ContradictionCard, DecisionCard, TaskRow } from "../components/ReviewCards";
+import { ContradictionCard, DecisionCard, TaskRow, WorkstreamCard } from "../components/ReviewCards";
 import { TaskDisposition } from "../components/TaskDisposition";
 
 // Long lists show their top items; the rest sit behind "Show all" so the
 // page stays scannable in under a minute.
-const OPERATING_PREVIEW = 8;
+const WORKSTREAM_PREVIEW = 6;
 const DEVELOPMENTS_PREVIEW = 6;
 const CHANGES_PREVIEW = 5;
 
@@ -35,6 +36,25 @@ export default function ExecutivePage() {
   const [markedAt, setMarkedAt] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<string | null>(null);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+
+  async function handleCleanup() {
+    setCleaning(true);
+    setCleanupResult(null);
+    try {
+      const { recordsChecked, proposals } = await runCleanup();
+      setCleanupResult(
+        recordsChecked === 0
+          ? "Nothing to clean up."
+          : `Checked ${recordsChecked} record${recordsChecked === 1 ? "" : "s"} — ${proposals} proposal${proposals === 1 ? "" : "s"} waiting in Review.`,
+      );
+    } catch (err) {
+      setCleanupResult(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setCleaning(false);
+    }
+  }
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -54,7 +74,7 @@ export default function ExecutivePage() {
     try {
       const { recordsChecked, contradictionsFound } = await checkContradictions();
       setCheckResult(
-        `Checked ${recordsChecked} record${recordsChecked === 1 ? "" : "s"} -- found ${contradictionsFound} new conflict${contradictionsFound === 1 ? "" : "s"}.`,
+        `Checked ${recordsChecked} record${recordsChecked === 1 ? "" : "s"} — found ${contradictionsFound} new conflict${contradictionsFound === 1 ? "" : "s"}.`,
       );
       const refreshed = await fetchExecutiveReview();
       setData(refreshed.data);
@@ -101,7 +121,7 @@ export default function ExecutivePage() {
     );
   }
 
-  const operating = data ? (showAllOperating ? data.operatingActions : data.operatingActions.slice(0, OPERATING_PREVIEW)) : [];
+  const workstreams = data ? (showAllOperating ? data.workstreams : data.workstreams.slice(0, WORKSTREAM_PREVIEW)) : [];
 
   return (
     <main className="page">
@@ -131,6 +151,19 @@ export default function ExecutivePage() {
               ))}
             </ul>
           </section>
+
+          {data.focus.length > 0 && (
+            <section className="card exec-focus" aria-label="Focus">
+              <p className="exec-headline-title">Focus</p>
+              <ol>
+                {data.focus.map((f) => (
+                  <li key={`${f.kind}-${f.title}`}>
+                    <strong>{f.title}</strong> <span className="muted">— {f.detail}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
 
           <h2 className="section-title">Since last review</h2>
           {!data.sinceLastReview ? (
@@ -214,27 +247,33 @@ export default function ExecutivePage() {
             </div>
           )}
 
-          <h2 className="section-title">Operating actions</h2>
-          {data.operatingActions.length === 0 ? (
+          <h2 className="section-title">Workstreams</h2>
+          {data.workstreams.length === 0 ? (
             <p className="empty-inline">No active work with recent evidence.</p>
           ) : (
             <>
-              <div className="card task-list">
-                {operating.map((t) => (
-                  <TaskRow key={t.id} task={t} />
-                ))}
-              </div>
-              {data.operatingActions.length > OPERATING_PREVIEW && (
+              {workstreams.map((w) => (
+                <WorkstreamCard key={`${w.objective}-${w.project}`} workstream={w} />
+              ))}
+              {data.workstreams.length > WORKSTREAM_PREVIEW && (
                 <button className="text-btn" onClick={() => setShowAllOperating((v) => !v)}>
-                  {showAllOperating ? "Show fewer" : `Show all ${data.operatingActions.length}`}
+                  {showAllOperating ? "Show fewer" : `Show all ${data.workstreams.length} workstreams`}
                 </button>
               )}
             </>
           )}
 
           <h2 className="section-title">Needs disposition</h2>
+          <div className="card-actions exec-check-row">
+            <button className="decision-btn" disabled={cleaning} onClick={handleCleanup}>
+              {cleaning ? "Checking…" : "Clean up stale records"}
+            </button>
+            {cleanupResult && <span className="muted">{cleanupResult}</span>}
+          </div>
           {data.needsDisposition.length === 0 ? (
-            <p className="empty-inline">No stale records.</p>
+            <p className="empty-inline">
+              No old records. The cleanup check also reviews next actions that may be out of date.
+            </p>
           ) : (
             <details className="card exec-disposition">
               <summary>

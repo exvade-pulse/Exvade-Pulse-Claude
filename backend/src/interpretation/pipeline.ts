@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { decisions, initiatives, LIVE_DECISION_STATUSES, objectives, projects, sources, tasks } from "../db/schema.js";
 import { isNoiseSource } from "./noiseFilter.js";
@@ -34,15 +34,15 @@ async function loadCompanyContext(db: Database, organizationId: string): Promise
     db
       .select({ id: objectives.id, title: objectives.title, status: objectives.status })
       .from(objectives)
-      .where(eq(objectives.organizationId, organizationId)),
+      .where(and(eq(objectives.organizationId, organizationId), ne(objectives.status, "superseded"))),
     db
       .select({ id: initiatives.id, title: initiatives.title, status: initiatives.status })
       .from(initiatives)
-      .where(eq(initiatives.organizationId, organizationId)),
+      .where(and(eq(initiatives.organizationId, organizationId), ne(initiatives.status, "superseded"))),
     db
       .select({ id: projects.id, title: projects.title, status: projects.status })
       .from(projects)
-      .where(eq(projects.organizationId, organizationId)),
+      .where(and(eq(projects.organizationId, organizationId), ne(projects.status, "superseded"))),
     db
       .select({ id: tasks.id, title: tasks.title, status: tasks.status })
       .from(tasks)

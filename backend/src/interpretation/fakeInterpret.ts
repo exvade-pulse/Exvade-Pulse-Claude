@@ -6,7 +6,7 @@ export interface FakeEmail {
 }
 
 export interface SuggestionDraft {
-  changeType: "operational_update" | "context" | "new_task" | "decision" | "deadline" | "resolved" | "relationship" | "merge" | "contradiction" | "deadline_passed";
+  changeType: "operational_update" | "context" | "new_task" | "decision" | "deadline" | "resolved" | "relationship" | "merge" | "contradiction" | "deadline_passed" | "cleanup" | "replace";
   targetType: "objective" | "initiative" | "project" | "task" | "decision" | "relationship";
   targetId: string | null;
   proposedDiff: Record<string, unknown>;

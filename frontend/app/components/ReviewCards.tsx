@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReviewContradiction, ReviewDecision, ReviewTask } from "../../lib/api";
+import type { ReviewContradiction, ReviewDecision, ReviewTask, ReviewWorkstream } from "../../lib/api";
 import { chipClass, STATUS_LABEL } from "./TaskStatusChips";
 
 function formatDate(iso: string): string {
@@ -16,7 +16,8 @@ function ago(days: number): string {
 // matters and the next step (the two lines an executive actually needs),
 // then everything else behind "Details".
 export function DecisionCard({ decision, deadlinePassed = false }: { decision: ReviewDecision; deadlinePassed?: boolean }) {
-  const hasDetails = decision.relevantContext || decision.stakeholders.length > 0 || decision.relatedTask;
+  const hasDetails =
+    decision.relevantContext || decision.stakeholders.length > 0 || decision.relatedTask || decision.informedBy.length > 0;
   return (
     <article className={`card rc-card${deadlinePassed ? " rc-card-attention" : ""}`}>
       <div className="rc-top">
@@ -42,7 +43,16 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
       {decision.suggestedNextStep && (
         <p className="rc-line">
           <span className="rc-label">Next</span> {decision.suggestedNextStep}
+          {decision.nextStepStale && <span className="stale-note"> may be stale ({decision.nextStepAgeDays} days old)</span>}
         </p>
+      )}
+      {decision.waitingOn.length > 0 && (
+        <p className="rc-line">
+          <span className="rc-label">Waiting on</span> {decision.waitingOn.join(" · ")}
+        </p>
+      )}
+      {decision.coupledWith.length > 0 && (
+        <p className="rc-meta">Consider together with: {decision.coupledWith.join(" · ")}</p>
       )}
       <p className="rc-meta">Decider: {decision.decider}</p>
 
@@ -52,6 +62,7 @@ export function DecisionCard({ decision, deadlinePassed = false }: { decision: R
           {decision.relevantContext && <p className="rc-line">{decision.relevantContext}</p>}
           {decision.stakeholders.length > 0 && <p className="rc-meta">Stakeholders: {decision.stakeholders.join(", ")}</p>}
           {decision.relatedTask && <p className="rc-meta">Related task: {decision.relatedTask}</p>}
+          {decision.informedBy.length > 0 && <p className="rc-meta">Informed by: {decision.informedBy.join(" · ")}</p>}
         </details>
       )}
 
@@ -98,6 +109,44 @@ export function ContradictionCard({ contradiction: c }: { contradiction: ReviewC
   );
 }
 
+// A workstream (project) as one line: its state and task mix up front, the
+// individual tasks behind an expander -- the executive view shows the
+// workstream, the operating detail stays one click away.
+export function WorkstreamCard({ workstream: w }: { workstream: ReviewWorkstream }) {
+  const c = w.counts;
+  const mix = [
+    c.blocked > 0 && `${c.blocked} blocked`,
+    c.needsAttention > 0 && `${c.needsAttention} need attention`,
+    c.waiting > 0 && `${c.waiting} waiting`,
+    c.active > 0 && `${c.active} active`,
+  ].filter(Boolean);
+  const staleNext = w.tasks.filter((t) => t.nextActionStale).length;
+  return (
+    <article className={`card rc-card${w.state === "needs attention" ? " rc-card-attention" : ""}`}>
+      <div className="rc-top">
+        <p className="card-title rc-title">{w.project}</p>
+        <span className={w.state === "needs attention" ? "chip chip-attention" : w.state === "waiting" ? "chip" : "chip chip-done"}>
+          {w.state}
+        </span>
+      </div>
+      <p className="rc-meta">
+        {w.objective} · {mix.join(", ")}
+        {staleNext > 0 && <span className="stale-note"> · {staleNext} next action{staleNext === 1 ? "" : "s"} may be stale</span>}
+      </p>
+      <details className="rc-details">
+        <summary>
+          {w.tasks.length} task{w.tasks.length === 1 ? "" : "s"}
+        </summary>
+        <div className="task-list">
+          {w.tasks.map((t) => (
+            <TaskRow key={t.id} task={t} />
+          ))}
+        </div>
+      </details>
+    </article>
+  );
+}
+
 // One task per row: status and title first, then the next action, owner and
 // how fresh its evidence is. Why it was ranked where it is lives behind
 // "Why this is here" -- the score is supporting detail, not the headline.
@@ -122,14 +171,15 @@ export function TaskRow({
       <p className="task-row-meta">
         {task.project} · Owner: {task.owner ?? "not recorded"} · Last evidence {ago(task.daysSinceEvidence)}
       </p>
-      {task.waitingOnDecision && (
+      {task.waitingOn.length > 0 && (
         <p className="rc-line">
-          <span className="rc-label">Waiting on</span> {task.waitingOnDecision}
+          <span className="rc-label">Waiting on</span> {task.waitingOn.join(" · ")}
         </p>
       )}
       {task.nextAction && (
         <p className="rc-line">
           <span className="rc-label">Next</span> {task.nextAction}
+          {task.nextActionStale && <span className="stale-note"> may be stale ({task.nextActionAgeDays} days old)</span>}
         </p>
       )}
       {showWhy && (

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { decisions, objectives, sources, suggestions, tasks } from "../db/schema.js";
+import { decisions, entityRelationships, objectives, sources, suggestions, tasks } from "../db/schema.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 import { buildExecutiveReview, buildExecutiveReviewData, renderExecutiveReviewText, scoreAttention } from "../reports/executiveReview.js";
@@ -350,5 +350,127 @@ describe("private review links", () => {
     const response = await app.inject({ method: "GET", url: "/robots.txt" });
     await app.close();
     expect(response.body).toContain("Disallow: /");
+  });
+});
+
+describe("executive review structure: links, freshness, roll-ups, focus", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  async function link(fixture: Fixture, from: [string, string], relationType: string, to: [string, string]) {
+    await db.insert(entityRelationships).values({
+      organizationId: fixture.org.id,
+      fromType: from[0] as never,
+      fromId: from[1],
+      toType: to[0] as never,
+      toId: to[1],
+      relationType: relationType as never,
+      createdBy: fixture.user.id,
+    });
+  }
+
+  it("shows what a decision is waiting on, what informs it, and keeps coupled decisions adjacent", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-links.test" });
+    const [pellet] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "White-pellet cell analysis", status: "active" })
+      .returning();
+    const [done] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Finished bench run", status: "completed" })
+      .returning();
+    const [gauge] = await db
+      .insert(tasks)
+      .values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "16G/18G dome testing", status: "active" })
+      .returning();
+    const [a] = await db.insert(decisions).values({ organizationId: fixture.org.id, title: "A: Change needle gauge?", decider: "Don" }).returning();
+    const [b] = await db.insert(decisions).values({ organizationId: fixture.org.id, title: "B: Unrelated call", decider: "CEO" }).returning();
+    const [c] = await db.insert(decisions).values({ organizationId: fixture.org.id, title: "C: Enroll another EFS patient?", decider: "CEO" }).returning();
+
+    await link(fixture, ["decision", a.id], "depends_on", ["task", pellet.id]);
+    await link(fixture, ["task", done.id], "blocks", ["decision", a.id]); // finished -- shouldn't count
+    await link(fixture, ["task", gauge.id], "informs", ["decision", a.id]);
+    await link(fixture, ["decision", c.id], "coupled_with", ["decision", a.id]);
+
+    const data = await buildExecutiveReviewData(fixture.org.id, "admin", NOW);
+    const aView = data.decisionsNeeded.find((d) => d.id === a.id)!;
+    expect(aView.waitingOn).toEqual(["White-pellet cell analysis"]);
+    expect(aView.informedBy).toEqual(["16G/18G dome testing"]);
+    expect(aView.coupledWith).toEqual(["C: Enroll another EFS patient?"]);
+    const order = data.decisionsNeeded.map((d) => d.id);
+    expect(Math.abs(order.indexOf(a.id) - order.indexOf(c.id))).toBe(1);
+    expect(order).toContain(b.id);
+
+    const text = section(renderExecutiveReviewText(data), "1. DECISIONS NEEDED");
+    expect(text).toContain("Waiting on: White-pellet cell analysis");
+    expect(text).toContain("Consider together with: C: Enroll another EFS patient?");
+  });
+
+  it("flags a stale next action even when the record itself is fresh", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-stale-next.test" });
+    const oldAsOf = new Date(NOW.getTime() - 40 * DAY).toISOString();
+    await db.insert(tasks).values([
+      {
+        organizationId: fixture.org.id, projectId: fixture.project.id, title: "Follow-on study scoping", status: "active",
+        nextAction: "Wait for Sandra's proposal due May 8", updatedAt: new Date(NOW.getTime() - 2 * DAY),
+        fieldEvidence: { nextAction: { asOf: oldAsOf, sourceId: null }, latestUpdate: { asOf: new Date(NOW.getTime() - 2 * DAY).toISOString(), sourceId: null } },
+      },
+      {
+        organizationId: fixture.org.id, projectId: fixture.project.id, title: "Fresh one", status: "active",
+        nextAction: "Call vendor", updatedAt: new Date(NOW.getTime() - 2 * DAY),
+        fieldEvidence: { nextAction: { asOf: new Date(NOW.getTime() - 2 * DAY).toISOString(), sourceId: null } },
+      },
+    ]);
+    await db.insert(decisions).values({
+      organizationId: fixture.org.id, title: "Follow-on study", decider: "CEO", suggestedNextStep: "Wait for Sandra's proposal",
+      updatedAt: new Date(NOW.getTime() - 60 * DAY),
+    });
+
+    const data = await buildExecutiveReviewData(fixture.org.id, "admin", NOW);
+    const stale = data.operatingActions.find((t) => t.title === "Follow-on study scoping")!;
+    expect(stale).toMatchObject({ nextActionStale: true, nextActionAgeDays: 40, daysSinceEvidence: 2 });
+    expect(data.operatingActions.find((t) => t.title === "Fresh one")!.nextActionStale).toBe(false);
+    expect(data.decisionsNeeded[0]).toMatchObject({ nextStepStale: true, nextStepAgeDays: 60 });
+    expect(data.headline).toContain("2 next actions may be stale (no new evidence in 21+ days)");
+    expect(renderExecutiveReviewText(data)).toContain("(may be stale: 40 days old)");
+  });
+
+  it("rolls tasks up into one line per workstream, leaving stale records out", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-rollup.test" });
+    await db.insert(tasks).values([
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Blocked one", status: "blocked" },
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Active one", status: "active" },
+      { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Ancient", status: "active", updatedAt: new Date(NOW.getTime() - 200 * DAY) },
+    ]);
+
+    const data = await buildExecutiveReviewData(fixture.org.id, "admin", NOW);
+    expect(data.workstreams).toHaveLength(1);
+    expect(data.workstreams[0]).toMatchObject({
+      project: "Test project",
+      state: "needs attention",
+      counts: { blocked: 1, needsAttention: 0, waiting: 0, active: 1 },
+    });
+    expect(data.workstreams[0].tasks.map((t) => t.title).sort()).toEqual(["Active one", "Blocked one"]);
+    expect(section(renderExecutiveReviewText(data), "4. OPERATING ACTIONS")).toContain("Test project — needs attention (1 blocked, 1 active)");
+  });
+
+  it("puts past-deadline decisions first in Focus, then decisions due soon, then blockers", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "exec-focus.test" });
+    await db.insert(decisions).values([
+      { organizationId: fixture.org.id, title: "Open-ended call", decider: "CEO" },
+      { organizationId: fixture.org.id, title: "Due soon call", decider: "CEO", dueDate: new Date(NOW.getTime() + 3 * DAY) },
+      { organizationId: fixture.org.id, title: "Late call", decider: "CEO", dueDate: new Date(NOW.getTime() - 3 * DAY) },
+    ]);
+    await db.insert(tasks).values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Stuck task", status: "blocked" });
+
+    const data = await buildExecutiveReviewData(fixture.org.id, "admin", NOW);
+    expect(data.focus.map((f) => [f.kind, f.title])).toEqual([
+      ["deadline", "Late call"],
+      ["decision", "Due soon call"],
+      ["decision", "Open-ended call"],
+      ["blocker", "Stuck task"],
+    ]);
+    expect(renderExecutiveReviewText(data)).toContain("FOCUS (most consequential first)\n1. Late call — 3 days past due");
   });
 });

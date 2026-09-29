@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, ne } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import {
@@ -47,7 +47,7 @@ export async function loadCompanyMapTree(organizationId: string, role: UserRole)
         updatedAt: objectives.updatedAt,
       })
       .from(objectives)
-      .where(eq(objectives.organizationId, organizationId))
+      .where(and(eq(objectives.organizationId, organizationId), ne(objectives.status, "superseded")))
       .orderBy(objectives.title),
     db
       .select({
@@ -60,7 +60,7 @@ export async function loadCompanyMapTree(organizationId: string, role: UserRole)
         updatedAt: initiatives.updatedAt,
       })
       .from(initiatives)
-      .where(eq(initiatives.organizationId, organizationId))
+      .where(and(eq(initiatives.organizationId, organizationId), ne(initiatives.status, "superseded")))
       .orderBy(initiatives.title),
     db
       .select({
@@ -72,7 +72,7 @@ export async function loadCompanyMapTree(organizationId: string, role: UserRole)
         updatedAt: projects.updatedAt,
       })
       .from(projects)
-      .where(eq(projects.organizationId, organizationId))
+      .where(and(eq(projects.organizationId, organizationId), ne(projects.status, "superseded")))
       .orderBy(projects.title),
     db
       .select({

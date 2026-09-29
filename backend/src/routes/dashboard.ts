@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import { initiatives, objectives, projects, tasks } from "../db/schema.js";
@@ -42,13 +42,13 @@ export async function dashboardRoutes(app: FastifyInstance) {
         updatedAt: objectives.updatedAt,
       })
       .from(objectives)
-      .where(eq(objectives.organizationId, organizationId))
+      .where(and(eq(objectives.organizationId, organizationId), ne(objectives.status, "superseded")))
       .orderBy(priorityRank, objectives.title);
 
     const initiativeCounts = await db
       .select({ objectiveId: initiatives.objectiveId, count: count() })
       .from(initiatives)
-      .where(eq(initiatives.organizationId, organizationId))
+      .where(and(eq(initiatives.organizationId, organizationId), ne(initiatives.status, "superseded")))
       .groupBy(initiatives.objectiveId);
 
     // Tasks carry organizationId directly, so this filters correctly without

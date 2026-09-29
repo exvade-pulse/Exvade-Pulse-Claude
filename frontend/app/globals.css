@@ -1061,6 +1061,22 @@ summary:focus-visible {
   justify-content: flex-end;
 }
 
+/* "Next action may be stale" -- a quiet caution, not an alarm. */
+.stale-note {
+  font-size: var(--text-sm);
+  color: var(--caution);
+}
+
+.exec-focus ol {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.exec-focus li {
+  font-size: var(--text-md);
+  margin: var(--space-2) 0;
+}
+
 .exec-check-row {
   margin-top: 0;
   margin-bottom: var(--space-2);

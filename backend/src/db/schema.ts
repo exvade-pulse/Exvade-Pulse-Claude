@@ -24,6 +24,9 @@ export const strategyStatusEnum = pgEnum("strategy_status", [
   "paused",
   "completed",
   "cancelled",
+  // Merged into another record of the same level (supersededById); its
+  // children were moved there. Kept for history, hidden from the map.
+  "superseded",
 ]);
 
 export const taskStatusEnum = pgEnum("task_status", [
@@ -74,11 +77,19 @@ export const changeTypeEnum = pgEnum("change_type", [
   // due date: "what actually happened?" Resolves itself once the decision
   // is decided, closed or given a new due date.
   "deadline_passed",
+  // From the on-demand stale-record cleanup check: close, confirm, or a
+  // new next action for one record. The classification lives in
+  // suggestions.conflicts (kind: "cleanup"). An empty diff means "confirm
+  // it's still active".
+  "cleanup",
+  // Cleanup found the work has changed: approving creates proposedDiff.newTask
+  // in the same project and supersedes the old task with it.
+  "replace",
 ]);
 
 // Change types that are their own question for the reviewer, never folded
 // into (or absorbing) an ordinary pending update on the same record.
-export const STANDALONE_CHANGE_TYPES = ["merge", "contradiction", "deadline_passed"] as const;
+export const STANDALONE_CHANGE_TYPES = ["merge", "contradiction", "deadline_passed", "cleanup", "replace"] as const;
 
 export const suggestionStatusEnum = pgEnum("suggestion_status", [
   "pending",
@@ -224,6 +235,7 @@ export const objectives = pgTable("objectives", {
   status: strategyStatusEnum("status").notNull().default("active"),
   priority: priorityEnum("priority").notNull().default("medium"),
   owner: text("owner"),
+  supersededById: uuid("superseded_by_id").references((): AnyPgColumn => objectives.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -241,6 +253,7 @@ export const initiatives = pgTable("initiatives", {
   status: strategyStatusEnum("status").notNull().default("active"),
   priority: priorityEnum("priority").notNull().default("medium"),
   owner: text("owner"),
+  supersededById: uuid("superseded_by_id").references((): AnyPgColumn => initiatives.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -257,6 +270,7 @@ export const projects = pgTable("projects", {
   description: text("description"),
   status: strategyStatusEnum("status").notNull().default("active"),
   owner: text("owner"),
+  supersededById: uuid("superseded_by_id").references((): AnyPgColumn => projects.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

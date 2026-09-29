@@ -206,6 +206,9 @@ export default function CompanyMapPage() {
 
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [duplicateResult, setDuplicateResult] = useState<DuplicateCheckResult | null>(null);
+  const totalDuplicates = duplicateResult
+    ? duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound + duplicateResult.hierarchyDuplicatesFound
+    : 0;
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
   const [checkingRelationships, setCheckingRelationships] = useState(false);
@@ -302,13 +305,12 @@ export default function CompanyMapPage() {
 
       {duplicateResult && (
         <p className="card activity-summary">
-          Checked {duplicateResult.tasksChecked} task{duplicateResult.tasksChecked === 1 ? "" : "s"} across{" "}
-          {duplicateResult.projectsChecked} project{duplicateResult.projectsChecked === 1 ? "" : "s"} and{" "}
-          {duplicateResult.decisionsChecked} open decision{duplicateResult.decisionsChecked === 1 ? "" : "s"} -- found{" "}
-          {duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound} likely duplicate
-          {duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound === 1 ? "" : "s"}. Each is a merge
-          suggestion; nothing changes until you approve it.
-          {duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound > 0 && (
+          Checked {duplicateResult.tasksChecked} task{duplicateResult.tasksChecked === 1 ? "" : "s"},{" "}
+          {duplicateResult.decisionsChecked} open decision{duplicateResult.decisionsChecked === 1 ? "" : "s"} and{" "}
+          {duplicateResult.hierarchyChecked} objectives, initiatives and projects — found{" "}
+          {totalDuplicates} likely duplicate{totalDuplicates === 1 ? "" : "s"}. Each is a merge suggestion; nothing
+          changes until you approve it. Merging a project, initiative or objective moves everything under it to the one kept.
+          {totalDuplicates > 0 && (
             <>
               {" "}
               <Link href="/review">Review them</Link>.
