@@ -80,9 +80,12 @@ export function withCompanyContext(client: ClaudeClient, content: string | null 
 }
 
 // The Claude client for one organization's AI work, with its context.
-export async function getContextualClaudeClient(db: DbOrTx, organizationId: string, base: ClaudeClient = getClaudeClient()) {
+// The real client is only looked up when a call is actually made, so a route
+// that turns out to have nothing to check never needs an API key.
+export async function getContextualClaudeClient(db: DbOrTx, organizationId: string, base?: ClaudeClient) {
   const row = await loadCompanyContext(db, organizationId);
-  return withCompanyContext(base, row?.content);
+  const lazy: ClaudeClient = { createMessage: (params) => (base ?? getClaudeClient()).createMessage(params) };
+  return withCompanyContext(lazy, row?.content);
 }
 
 const DRAFT_SECTIONS = [
