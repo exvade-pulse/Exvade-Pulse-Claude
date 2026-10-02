@@ -20,7 +20,8 @@ import { TaskDisposition } from "../components/TaskDisposition";
 import { ChangeList, DateTypeTag, decisionHref, ItemList, PriorityCard, shortDate } from "../components/Dashboard";
 import { formatDueDate } from "../../lib/dates";
 
-// An operating dashboard first, a database review second: priorities, what
+// Operating Detail (the day-to-day view; the Executive Overview at
+// /overview is the summary for leadership). An operating dashboard first, a database review second: priorities, what
 // changed, what needs you, real dates and what's stuck up top; the detail
 // and the housekeeping collapsed below.
 
@@ -127,7 +128,7 @@ export default function ExecutivePage() {
     <main className="page exec-page">
       <Nav user={user} />
       <div className="header">
-        <h1>Executive review</h1>
+        <h1>Operating detail</h1>
         {data && (
           <div className="card-actions exec-header-actions">
             <span className="muted">As of {new Date(data.generatedAt).toLocaleString()}</span>

@@ -22,7 +22,7 @@ export default function ViewLinkPage() {
     setError(null);
     try {
       await unlockViewLink(token, password);
-      window.location.href = "/executive";
+      window.location.href = "/overview";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setBusy(false);

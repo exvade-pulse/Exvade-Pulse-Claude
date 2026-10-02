@@ -197,6 +197,13 @@
       "when": 1790712253560,
       "tag": "0027_dashing_korvac",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790979536950,
+      "tag": "0028_fixed_butterfly",
+      "breakpoints": true
     }
   ]
 }

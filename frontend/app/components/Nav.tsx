@@ -32,8 +32,9 @@ export function Nav({ user }: { user?: SessionUser | null }) {
       </div>
     )}
     <nav className="nav">
+      <Link href="/overview">Overview</Link>
+      <Link href="/executive">Operating Detail</Link>
       <Link href="/">Dashboard</Link>
-      <Link href="/executive">Executive</Link>
       <Link href="/questions">Questions</Link>
       <Link href="/company-map">Company Map</Link>
       <Link href="/company-entities">Entities</Link>

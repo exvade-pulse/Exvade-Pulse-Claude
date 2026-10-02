@@ -1809,3 +1809,108 @@ summary:focus-visible {
 }
 .date-type-confirmed { border-color: var(--text-secondary); color: var(--text); }
 .date-type-estimated { border-style: dashed; }
+
+/* ---------- Executive Overview (/overview) ----------
+   Health always pairs an icon and a word with its color; the roadmap has a
+   text equivalent (list views) and phones get the list instead. */
+.xo-page { max-width: 1120px; }
+.xo-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--space-2) var(--space-4); margin-bottom: var(--space-4); }
+.xo-h1 { font-size: 28px; line-height: 1.2; margin: 0; }
+.xo-sub { color: var(--text-secondary); font-size: var(--text-sm); margin: var(--space-1) 0 0; }
+.xo-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-4); min-width: 0; }
+.xo-label { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 var(--space-2); }
+.xo-label-sm { margin-top: var(--space-3); }
+.xo-row { display: grid; grid-template-columns: 1.15fr 1fr; gap: var(--space-4); margin-bottom: var(--space-5); }
+.xo-row-even { grid-template-columns: 1fr 1fr; margin-top: var(--space-5); }
+.xo-row-between { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--space-2); }
+.xo-stack { display: grid; gap: var(--space-4); }
+.xo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-5); }
+.xo-narrative { font-size: var(--text-lg); line-height: 1.6; margin: 0; }
+.xo-empty { color: var(--text-secondary); font-size: var(--text-md); margin: 0; }
+.xo-meta { color: var(--text-muted); font-size: var(--text-sm); margin: var(--space-2) 0 0; }
+.xo-missing { color: var(--text-muted); font-style: italic; }
+.xo-more { color: var(--accent); font-weight: 600; font-size: var(--text-sm); text-decoration: none; }
+.xo-more:hover { text-decoration: underline; }
+.xo-warn { color: var(--caution); font-size: var(--text-sm); margin: var(--space-1) 0; }
+.xo-flag { color: var(--attention); font-weight: 600; }
+.xo-conf { color: var(--text-muted); }
+.xo-chip { font-size: var(--text-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); white-space: nowrap; }
+
+.xo-health { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.xo-h-on_track { background: var(--ok-soft); color: var(--ok); }
+.xo-h-at_risk { background: var(--caution-soft); color: var(--caution); }
+.xo-h-blocked { background: var(--attention-soft); color: var(--attention); }
+.xo-h-not_assessed { background: #efeff0; color: #5c5c66; }
+
+.xo-outcome { display: grid; gap: var(--space-2); align-content: start; }
+.xo-outcome-top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-2); }
+.xo-outcome-title { font-size: 15px; line-height: 1.3; margin: 0; }
+.xo-outcome-title a { color: var(--text); text-decoration: none; }
+.xo-outcome-title a:hover { text-decoration: underline; }
+.xo-why { font-size: var(--text-sm); color: var(--text-secondary); margin: 0; }
+.xo-kv { display: grid; grid-template-columns: 76px 1fr; gap: 2px var(--space-2); font-size: var(--text-sm); margin: 0; }
+.xo-kv dt { color: var(--text-muted); }
+.xo-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+.xo-attn { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.xo-attn-item { border-left: 3px solid var(--caution); background: var(--caution-soft); padding: 6px 10px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.xo-attn-high { border-left-color: var(--attention); background: var(--attention-soft); }
+.xo-attn-title { display: block; font-weight: 600; font-size: var(--text-md); color: var(--text); text-decoration: none; }
+.xo-attn-title:hover { text-decoration: underline; }
+.xo-attn-detail { display: block; font-size: var(--text-sm); color: var(--text-secondary); }
+
+.xo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.xo-list > li { border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); font-size: var(--text-sm); }
+.xo-list > li:last-child { border-bottom: none; padding-bottom: 0; }
+.xo-list a { color: var(--accent); text-decoration: none; }
+
+.xo-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.xo-toggle button, .xo-tabs button { background: var(--surface); border: none; padding: 4px 10px; font-size: var(--text-sm); color: var(--text-secondary); cursor: pointer; }
+.xo-toggle button + button { border-left: 1px solid var(--border); }
+.xo-toggle .xo-on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.xo-tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); border-bottom: 1px solid var(--border); margin-bottom: var(--space-4); }
+.xo-tabs button { background: none; padding: 8px 12px; border-bottom: 2px solid transparent; }
+.xo-tabs .xo-on { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+
+/* Roadmap */
+.xo-rm { display: grid; grid-template-columns: 180px 1fr; font-size: 12px; margin-top: var(--space-3); }
+.xo-rm-head, .xo-rm-lane { display: contents; }
+.xo-rm-qs { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--border); }
+.xo-rm-qs span { padding: 4px 6px; color: var(--text-muted); font-weight: 600; border-left: 1px solid var(--border); }
+.xo-rm-name { padding: 9px 8px 9px 0; font-weight: 600; color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); line-height: 1.25; }
+.xo-rm-name:hover { text-decoration: underline; }
+.xo-rm-track { position: relative; min-height: 40px; border-bottom: 1px solid var(--border); background-image: linear-gradient(to right, var(--border) 1px, transparent 1px); background-size: 25% 100%; }
+.xo-rm-today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); }
+.xo-rm-slip { position: absolute; top: 50%; border-top: 2px dotted var(--caution); }
+.xo-dia, .xo-dia-key { display: inline-block; width: 12px; height: 12px; border: 2px solid #44444c; background: var(--surface); transform: rotate(45deg); }
+.xo-dia { position: absolute; top: 50%; margin: -6px 0 0 -6px; }
+.xo-dia:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.xo-dia-achieved { background: var(--ok); border-color: var(--ok); }
+.xo-dia-committed { background: #44444c; }
+.xo-dia-unconfirmed { border-style: dashed; }
+.xo-dia-missed { border-color: var(--attention); background: var(--attention-soft); }
+.xo-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--text-secondary); margin-top: var(--space-2); }
+.xo-dia-key { width: 9px; height: 9px; margin-right: 5px; vertical-align: 0; }
+.xo-rm-compact { display: none; }
+.xo-nnl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-3); }
+.xo-nnl-head { font-size: var(--text-md); margin: 0 0 var(--space-2); }
+.xo-ms-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-2); font-size: var(--text-sm); }
+.xo-ms-list li { display: grid; grid-template-columns: 96px 1fr; gap: var(--space-2); }
+.xo-ms-when { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.xo-ms-list a { color: var(--accent); text-decoration: none; }
+.xo-ms-achieved { border-left: 3px solid var(--ok); }
+.xo-ms-missed { border-left: 3px solid var(--attention); }
+
+.xo-form { display: grid; gap: var(--space-2); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px dashed var(--border); }
+.xo-textarea { width: 100%; font: inherit; line-height: 1.5; }
+.xo-details summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-sm); margin-top: var(--space-3); }
+
+@media (max-width: 820px) {
+  .xo-row, .xo-row-even, .xo-grid, .xo-nnl { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .xo-rm, .xo-legend { display: none; }
+  .xo-rm-compact { display: block; }
+  .xo-h1 { font-size: 23px; }
+  .xo-card .card-actions { flex-wrap: wrap; }
+}

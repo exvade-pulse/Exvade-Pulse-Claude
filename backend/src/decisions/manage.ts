@@ -101,6 +101,11 @@ interface UpdateParams {
     stakeholders: string[];
     dueDate: Date | null;
     relatedTaskId: string | null;
+    // Executive overview fields; objectiveId is checked by the caller
+    // (overview/manage.ts) against this organization's live objectives.
+    objectiveId: string | null;
+    recommendation: string | null;
+    impactOfDelay: string | null;
   }>;
 }
 

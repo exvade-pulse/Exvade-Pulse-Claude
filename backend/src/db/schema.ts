@@ -232,6 +232,12 @@ export const authorizedUsers = pgTable(
 // levels just need the reference app's proven "Owner: Name" pattern. A full
 // stakeholders array here would be real added UI scope (managing a list at
 // four levels) with no evidence yet that it's needed; add it later if it is.
+// An outcome's health as assessed by a person (never averaged from tasks).
+// "not_assessed" is the explicit default so a missing assessment never reads
+// as on track.
+export const objectiveHealthEnum = pgEnum("objective_health", ["on_track", "at_risk", "blocked", "not_assessed"]);
+export type ObjectiveHealth = (typeof objectiveHealthEnum.enumValues)[number];
+
 export const objectives = pgTable("objectives", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id")
@@ -242,6 +248,16 @@ export const objectives = pgTable("objectives", {
   status: strategyStatusEnum("status").notNull().default("active"),
   priority: priorityEnum("priority").notNull().default("medium"),
   owner: text("owner"),
+  // Executive overview: the one-sentence business reason, the current health
+  // assessment (with its reason, when and by whom), and a fixed display
+  // order so outcome cards don't jump around. History is in
+  // objective_health_history.
+  rationale: text("rationale"),
+  health: objectiveHealthEnum("health").notNull().default("not_assessed"),
+  healthRationale: text("health_rationale"),
+  healthAssessedAt: timestamp("health_assessed_at", { withTimezone: true }),
+  healthAssessedBy: text("health_assessed_by"),
+  displayOrder: integer("display_order"),
   supersededById: uuid("superseded_by_id").references((): AnyPgColumn => objectives.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -461,6 +477,11 @@ export const decisions = pgTable("decisions", {
   // Optional citation back to the source (email/transcript) this decision came
   // from, mirroring suggestions.sourceId.
   sourceId: uuid("source_id").references(() => sources.id),
+  // Executive overview: the outcome this decision affects, what is
+  // recommended, and what waiting costs.
+  objectiveId: uuid("objective_id").references(() => objectives.id, { onDelete: "set null" }),
+  recommendation: text("recommendation"),
+  impactOfDelay: text("impact_of_delay"),
   // Same visibilityEnum as tasks.visibility -- see its comment. Not in
   // ALLOWED_FIELDS.decision either, for the same reason.
   visibility: visibilityEnum("visibility").notNull().default("team"),
@@ -585,6 +606,122 @@ export const executiveReviewSnapshots = pgTable("executive_review_snapshots", {
     .references(() => users.id, { onDelete: "cascade" }),
   summary: jsonb("summary").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Every health assessment of an outcome, oldest first -- the source of the
+// trend arrow and the audit trail. An override (health set against what
+// Pulse's signals suggest) needs a reason and a date to look at it again.
+export const objectiveHealthHistory = pgTable("objective_health_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  objectiveId: uuid("objective_id")
+    .notNull()
+    .references(() => objectives.id, { onDelete: "cascade" }),
+  health: objectiveHealthEnum("health").notNull(),
+  rationale: text("rationale"),
+  assessedAt: timestamp("assessed_at", { withTimezone: true }).notNull().defaultNow(),
+  assessedBy: text("assessed_by"),
+  // "person" (set directly) or "review" (an approved suggestion).
+  source: text("source").notNull().default("person"),
+  overrideReason: text("override_reason"),
+  reviewBy: timestamp("review_by", { withTimezone: true }),
+});
+
+// A dated, executive-level checkpoint for an outcome. The baseline date is
+// the committed plan; the forecast is today's best estimate, so a slip shows
+// as forecast vs baseline rather than silently replacing the plan.
+export const milestoneConfidenceEnum = pgEnum("milestone_confidence", ["committed", "forecast", "unconfirmed"]);
+export const milestoneStateEnum = pgEnum("milestone_state", ["planned", "achieved", "missed", "dropped"]);
+export type MilestoneConfidence = (typeof milestoneConfidenceEnum.enumValues)[number];
+export type MilestoneState = (typeof milestoneStateEnum.enumValues)[number];
+
+export const milestones = pgTable("milestones", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  objectiveId: uuid("objective_id")
+    .notNull()
+    .references(() => objectives.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  // What has to be true to call it achieved.
+  successCriteria: text("success_criteria"),
+  owner: text("owner"),
+  // Calendar dates, stored at midnight UTC like tasks.dueDate.
+  baselineDate: timestamp("baseline_date", { withTimezone: true }),
+  forecastDate: timestamp("forecast_date", { withTimezone: true }),
+  actualDate: timestamp("actual_date", { withTimezone: true }),
+  confidence: milestoneConfidenceEnum("confidence").notNull().default("unconfirmed"),
+  state: milestoneStateEnum("state").notNull().default("planned"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const milestoneLinkTypeEnum = pgEnum("milestone_link_type", ["task", "decision", "project"]);
+
+// The work and decisions a milestone depends on. Plain uuid entityId
+// (validated in application code), same pattern as strategic_question_links.
+export const milestoneLinks = pgTable(
+  "milestone_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    milestoneId: uuid("milestone_id")
+      .notNull()
+      .references(() => milestones.id, { onDelete: "cascade" }),
+    entityType: milestoneLinkTypeEnum("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("milestone_links_unique").on(table.milestoneId, table.entityType, table.entityId)],
+);
+
+// A risk to an outcome, with an owner and a mitigation -- distinct from a
+// blocked task, which is something already going wrong.
+export const riskEscalationEnum = pgEnum("risk_escalation", ["watching", "decision_needed"]);
+export const riskStatusEnum = pgEnum("risk_status", ["open", "closed"]);
+
+export const risks = pgTable("risks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  objectiveId: uuid("objective_id")
+    .notNull()
+    .references(() => objectives.id, { onDelete: "cascade" }),
+  milestoneId: uuid("milestone_id").references(() => milestones.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  impact: text("impact"),
+  // Free text ("low", "medium", "high", or a sentence); optional.
+  likelihood: text("likelihood"),
+  mitigation: text("mitigation"),
+  owner: text("owner"),
+  nextReviewAt: timestamp("next_review_at", { withTimezone: true }),
+  escalation: riskEscalationEnum("escalation").notNull().default("watching"),
+  status: riskStatusEnum("status").notNull().default("open"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// A published, company-wide reporting period: the narrative and a compact
+// summary of health, milestone dates, decisions and risks at publication,
+// which the next period's "what changed" compares against. Unlike
+// executive_review_snapshots this is one shared record, not per user.
+export const reportingSnapshots = pgTable("reporting_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id")
+    .notNull()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+  periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+  narrative: text("narrative"),
+  summary: jsonb("summary").notNull(),
+  publishedAt: timestamp("published_at", { withTimezone: true }).notNull().defaultNow(),
+  publishedBy: uuid("published_by").references(() => users.id),
 });
 
 // Append-only: rows are never updated or deleted by application code.

@@ -110,7 +110,31 @@ export default function GuidePage() {
         rather than overwriting.
       </p>
 
-      <h2 className="section-title">The Executive review</h2>
+      <h2 className="section-title">The Executive Overview</h2>
+      <div className="card">
+        <p>
+          <Link href="/overview">Overview</Link> is the summary for leadership: about a minute to see where the company is, what needs a
+          decision and how each of the six outcomes is doing. Outcomes are the objectives on the Company Map (Unsorted isn&apos;t one).
+        </p>
+        <Defs
+          items={[
+            ["Where we are", "A 60–90 word summary, published by an admin with each review. Draft with AI writes a starting version from what's in Pulse; nothing is saved until you publish."],
+            ["Leadership attention", "At most three items, in a fixed order: decisions due within 30 days (or overdue), blocked work holding up a milestone in the next 90 days, outcomes that got worse since the last review, an \"on track\" that Pulse's own records contradict, then milestones due within 30 days."],
+            ["Outcome cards", "Health (on track, at risk, blocked or not assessed) is set by a person with a one-line reason; it's never averaged from tasks. Trend comes from earlier assessments. An assessment older than 30 days says \"review needed\"."],
+            ["Roadmap", "One lane per outcome across four quarters, with a Today line. Filled diamond: committed; hollow: forecast; dashed: unconfirmed; green: achieved. A dotted line shows a slip from the committed baseline. Now / Next / Later and List show the same thing as text."],
+            ["What changed", "Health and milestone changes since the last published review. Before the first review is published it says the comparison isn't available."],
+            ["Top risks", "Open risks, escalated ones first, then those affecting the soonest milestone."],
+          ]}
+        />
+        <p>
+          Open an outcome to <strong>assess its health</strong>, add <strong>milestones</strong> (a committed baseline date plus a forecast; only
+          an admin can move a committed baseline), link the work and decisions they depend on, record <strong>risks</strong>, and attach
+          open <strong>decisions</strong> with a recommendation and what delay would cost. Milestones are dropped and risks closed, never
+          deleted.
+        </p>
+      </div>
+
+      <h2 className="section-title">Operating Detail (the weekly working view)</h2>
       <div className="card">
         <Defs
           items={[
@@ -153,7 +177,7 @@ export default function GuidePage() {
             [
               "Clean up stale records",
               <>
-                <Link href="/executive">Executive</Link>. For each old record or outdated next action, proposes one fix: close it,
+                <Link href="/executive">Operating Detail</Link>. For each old record or outdated next action, proposes one fix: close it,
                 mark it covered by newer work, replace it with a new task, give it a new next action, or confirm it&rsquo;s still
                 active. Never closes something just because it&rsquo;s old.
               </>,
@@ -161,7 +185,7 @@ export default function GuidePage() {
             [
               "Check for contradictions",
               <>
-                <Link href="/executive">Executive</Link>. Flags newer information that contradicts what&rsquo;s recorded, with a
+                <Link href="/executive">Operating Detail</Link>. Flags newer information that contradicts what&rsquo;s recorded, with a
                 proposed correction.
               </>,
             ],
@@ -189,7 +213,7 @@ export default function GuidePage() {
       <h2 className="section-title">Your weekly routine</h2>
       <ol className="guide-steps">
         <li>
-          Open <Link href="/executive">Executive</Link>. Scan the <em>priorities</em>, <em>What changed</em> and <em>Needs my action</em>.
+          Open <Link href="/executive">Operating Detail</Link>. Scan the <em>priorities</em>, <em>What changed</em> and <em>Needs my action</em>.
         </li>
         <li>
           Check <em>Upcoming deadlines</em> and <em>Waiting / blocked</em>, resolve anything in <em>Data quality</em>, then work through{" "}
@@ -279,8 +303,9 @@ export default function GuidePage() {
       <div className="card">
         <Defs
           items={[
+            [<Link href="/overview">Overview</Link>, "The leadership summary: outcomes, what needs a decision, roadmap, changes, risks."],
             [<Link href="/">Dashboard</Link>, "Quick status: decisions needed, counts, what needs attention."],
-            [<Link href="/executive">Executive</Link>, "The weekly review: what needs you, what changed, what's stale."],
+            [<Link href="/executive">Operating Detail</Link>, "The weekly review: what needs you, what changed, what's stale."],
             [<Link href="/questions">Questions</Link>, "Strategic questions: add, link records, resolve with an answer, or let the AI suggest them."],
             [<Link href="/company-map">Company Map</Link>, "The whole tree; duplicate and relationship checks."],
             [<Link href="/review">Review</Link>, "Approve, edit or reject every AI suggestion; add your own updates."],
