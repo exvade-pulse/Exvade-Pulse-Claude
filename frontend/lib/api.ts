@@ -1004,6 +1004,8 @@ export interface FindingsJob {
   byKind: Record<string, number>;
   needsVerification: number;
   appFeedback: Array<{ area: string; issue: string; suggestion: string | null; priority: "must" | "should" | "nice" }>;
+  // Instructions Pulse couldn't act on, with why.
+  unresolved: Array<{ text: string; reason: string }>;
   errors: string[];
 }
 

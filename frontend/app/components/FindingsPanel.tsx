@@ -103,7 +103,9 @@ export function FindingsPanel({ onFinished }: { onFinished: () => void }) {
               {job.status === "failed"
                 ? "Something went wrong."
                 : job.proposals === 0
-                  ? "No specific data corrections found."
+                  ? job.unresolved?.length
+                    ? "Nothing could be applied. See why below."
+                    : "No specific data corrections found."
                   : `${plural(job.proposals, "proposal")} added to Pending below`}
             </strong>
             {job.proposals > 0 && (
@@ -121,6 +123,22 @@ export function FindingsPanel({ onFinished }: { onFinished: () => void }) {
               {e}
             </p>
           ))}
+          {job.unresolved?.length > 0 && (
+            <>
+              <p className="edit-field-label">
+                {plural(job.unresolved.length, "instruction")} Pulse couldn&apos;t act on. Fix the name or create the destination first,
+                then paste these again:
+              </p>
+              <ul className="dash-list">
+                {job.unresolved.map((u, i) => (
+                  <li key={i}>
+                    <strong>{u.text}</strong>
+                    <span className="dash-detail">: {u.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           {job.appFeedback.length > 0 && (
             <>
               <p className="edit-field-label">

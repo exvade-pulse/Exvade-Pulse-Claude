@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { testDb, truncateAll } from "./helpers.js";
 import { createFixtureOrg } from "./fixtures.js";
-import { authorizedUsers, decisions, objectives, projects, suggestions, tasks } from "../db/schema.js";
+import { authorizedUsers, decisions, initiatives, objectives, projects, suggestions, tasks } from "../db/schema.js";
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 import { approveSuggestion } from "../suggestions/apply.js";
@@ -182,6 +182,58 @@ describe("POST /api/reviews/findings", () => {
     await app.close();
     const [row] = await db.select().from(suggestions).where(eq(suggestions.targetId, task.id));
     expect(row.proposedDiff).toEqual({ projectId: other.id });
+  });
+
+  it("files a task moved into an initiative, and reports what it couldn't act on instead of dropping it", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "findings-initiative.test" });
+    const [a, b] = await db
+      .insert(tasks)
+      .values([
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Kessel kickoff" },
+        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Grant report" },
+      ])
+      .returning();
+    // fixture.initiative holds exactly one project; this one holds none.
+    const [empty] = await db.insert(initiatives).values({ organizationId: fixture.org.id, objectiveId: fixture.objective.id, title: "Kessel transfer" }).returning();
+    const many = Array.from({ length: 62 }, (_, i) => ({ action: "update", targetType: "task", targetId: "22222222-2222-4222-8222-2222222222" + String(i).padStart(2, "0"), fields: { title: "x" }, reasoning: `ghost ${i}`, confidence: 0.9 }));
+    setClaudeClientForTesting({
+      createMessage: async (params) =>
+        params.tool_choice?.type === "tool"
+          ? toolUse("redact_text", { redactedText: String(params.messages[0].content) })
+          : toolUse("propose_corrections", {
+              changes: [
+                { action: "update", targetType: "task", targetId: a.id, fields: { projectId: empty.id }, reasoning: "Kessel work.", confidence: 0.9 },
+                { action: "update", targetType: "task", targetId: b.id, fields: { projectId: fixture.initiative.id }, reasoning: "Grant work.", confidence: 0.9 },
+                ...many,
+              ],
+              unresolved: [{ text: 'Move "Old thing" into "Gone"', reason: "No project named Gone." }],
+              appFeedback: [],
+            }),
+    });
+    const app = await buildApp();
+    const cookies = await cookieFor(fixture);
+    let job = (await app.inject({ method: "POST", url: "/api/reviews/findings", cookies, payload: { text: "Moves." } })).json();
+    for (let i = 0; i < 50 && job.status === "running"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      job = (await app.inject({ method: "GET", url: `/api/reviews/findings/${job.id}`, cookies })).json();
+    }
+    setClaudeClientForTesting(undefined);
+    await app.close();
+
+    expect(job.proposals).toBe(2);
+    const reasons = job.unresolved.map((u: { reason: string }) => u.reason);
+    expect(reasons).toContain("No project named Gone.");
+    expect(reasons.filter((r: string) => r.startsWith("No record with that name"))).toHaveLength(58);
+    expect(reasons.some((r: string) => r.startsWith("Over the limit of 60"))).toBe(true);
+
+    const rows = await db.select().from(suggestions).where(eq(suggestions.organizationId, fixture.org.id));
+    expect(rows.find((r) => r.targetId === a.id)!.proposedDiff).toEqual({ newParent: { title: "Kessel transfer", parentId: empty.id } });
+    expect(rows.find((r) => r.targetId === b.id)!.proposedDiff).toEqual({ projectId: fixture.project.id });
+
+    for (const row of rows) await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: row.id, reviewerId: fixture.user.id });
+    const [created] = await db.select().from(projects).where(eq(projects.initiativeId, empty.id));
+    expect(created.title).toBe("Kessel transfer");
+    expect((await db.select().from(tasks).where(eq(tasks.id, a.id)))[0].projectId).toBe(created.id);
   });
 
   it("rejects an empty or oversized paste and hides other organizations' jobs", async () => {

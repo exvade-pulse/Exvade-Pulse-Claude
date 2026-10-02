@@ -13,6 +13,7 @@ import {
   splitIntoChunks,
   type AppFeedbackItem,
   type FindingProposal,
+  type UnresolvedItem,
 } from "../interpretation/reviewFindings.js";
 
 const MAX_DOCUMENT_CHARS = 200_000;
@@ -31,6 +32,9 @@ interface Job {
   byKind: Record<string, number>;
   needsVerification: number;
   appFeedback: AppFeedbackItem[];
+  // Instructions Pulse couldn't act on, with why -- shown so nothing is
+  // skipped silently.
+  unresolved: UnresolvedItem[];
   errors: string[];
   startedAt: number;
 }
@@ -99,7 +103,7 @@ async function runJob(job: Job, text: string) {
     const aiClient = await getContextualClaudeClient(db, job.organizationId);
     const redactionClient = getClaudeClient();
 
-    const results: Array<{ redacted: string; proposals: FindingProposal[]; appFeedback: AppFeedbackItem[] } | null> = new Array(chunks.length).fill(null);
+    const results: Array<{ redacted: string; proposals: FindingProposal[]; appFeedback: AppFeedbackItem[]; unresolved: UnresolvedItem[] } | null> = new Array(chunks.length).fill(null);
     let next = 0;
     const worker = async () => {
       while (next < chunks.length) {
@@ -123,6 +127,7 @@ async function runJob(job: Job, text: string) {
 
     const done = results.filter((r): r is NonNullable<typeof r> => r !== null);
     const proposals = combine(done.flatMap((r) => r.proposals));
+    job.unresolved = done.flatMap((r) => r.unresolved).slice(0, 200);
     const seenFeedback = new Set<string>();
     job.appFeedback = done
       .flatMap((r) => r.appFeedback)
@@ -181,6 +186,7 @@ export async function reviewFindingsRoutes(app: FastifyInstance) {
       byKind: {},
       needsVerification: 0,
       appFeedback: [],
+      unresolved: [],
       errors: [],
       startedAt: now,
     };
