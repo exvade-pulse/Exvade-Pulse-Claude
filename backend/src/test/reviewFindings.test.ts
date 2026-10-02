@@ -97,6 +97,7 @@ describe("POST /api/reviews/findings", () => {
             },
             { action: "create", targetType: "project", fields: { title: "Pathology / Explant", initiativeId: fixture.initiative.id }, reasoning: "C08 grouping.", confidence: 0.7 },
             { action: "create", targetType: "project", fields: { title: "Orphan" }, reasoning: "missing parent", confidence: 0.7 },
+            { action: "create", targetType: "objective", fields: { title: "Advance clinical and regulatory readiness", owner: "Sean", description: "Keeps the EFS and FDA path moving." }, reasoning: "Reviewer asked for a new outcome.", confidence: 0.8 },
           ],
           appFeedback: [
             { area: "Dates", issue: "Date-only values render a day early", suggestion: "Treat as dates, not instants", priority: "must" },
@@ -120,7 +121,7 @@ describe("POST /api/reviews/findings", () => {
     setClaudeClientForTesting(undefined);
     await app.close();
 
-    expect(job).toMatchObject({ status: "done", proposals: 5, needsVerification: 1, byKind: { update: 2, merge: 1, question: 1, create: 1 } });
+    expect(job).toMatchObject({ status: "done", proposals: 6, needsVerification: 1, byKind: { update: 2, merge: 1, question: 1, create: 2 } });
     expect(job.appFeedback).toHaveLength(1);
     expect(prompt).toContain(`task id=${needle.id}`);
     expect(prompt).toContain("description: White pellet attributed to 18G use.");
@@ -133,7 +134,7 @@ describe("POST /api/reviews/findings", () => {
     expect(needleRow.conflicts).toEqual([{ kind: "review", finding: "C02", needsVerification: true, verifyNote: "Confirm the actual needle with Duke." }]);
     expect(rows.find((r) => r.changeType === "merge")).toMatchObject({ targetId: fast2.id, proposedDiff: { supersededById: fast1.id } });
     expect(rows.find((r) => r.changeType === "question")!.proposedDiff).toMatchObject({ taskIds: [needle.id], label: "Clinical Sampling / White Pellet" });
-    expect(rows.find((r) => r.changeType === "new_task")!.proposedDiff).toEqual({ title: "Pathology / Explant", initiativeId: fixture.initiative.id });
+    expect(rows.find((r) => r.changeType === "new_task" && r.targetType === "project")!.proposedDiff).toEqual({ title: "Pathology / Explant", initiativeId: fixture.initiative.id });
 
     // Nothing changed until approval; approval applies the correction.
     const [before] = await db.select().from(tasks).where(eq(tasks.id, needle.id));
@@ -143,6 +144,9 @@ describe("POST /api/reviews/findings", () => {
     expect(after).toMatchObject({ projectId: clinical.id, description: "18G attribution withdrawn; 21G may have been used; cause unresolved." });
     const [objective] = await db.select().from(objectives).where(eq(objectives.id, fixture.objective.id));
     expect(objective.priority).toBe("critical");
+    const created = await db.select().from(objectives).where(eq(objectives.title, "Advance clinical and regulatory readiness"));
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ organizationId: fixture.org.id, owner: "Sean", description: "Keeps the EFS and FDA path moving." });
     const [merged] = await db.select().from(decisions).where(eq(decisions.id, fast2.id));
     expect(merged.status).toBe("superseded");
   });

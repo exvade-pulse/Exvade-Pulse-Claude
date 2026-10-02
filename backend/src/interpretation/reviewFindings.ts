@@ -181,7 +181,7 @@ Rules:
 - One "update" per record per part: combine all field changes for it.
 - A changed text field (description, latestUpdate, relevantContext, etc.) replaces the whole field, so return its complete new value: keep everything in it that is still correct and change only what the finding addresses. Don't prefix it with "Correction:" or narrate the change; write it as the record should read. Only change fields of records whose full current values are shown below.
 - To move a task, update its projectId to an existing project id. To change importance, update an objective's priority (low/medium/high/critical).
-- Create an initiative/project only when the text calls for a new grouping and nothing existing fits; tasks can't be moved into something created in the same run, so say in the reasoning which tasks should move once it exists.
+- Create an initiative/project only when the text calls for a new grouping and nothing existing fits. Create an objective only when the text explicitly asks for a new top-level objective or outcome. Nothing can be moved into something created in the same run, so say in the reasoning what should move once it exists.
 - Strategic questions: propose them when the text names them, with linked record ids.
 - Pure software, layout, navigation or design feedback (e.g. "show snippets in search", "dates render a day early") goes in appFeedback, not changes.
 - Use only ids from the lists below.
@@ -303,7 +303,7 @@ interface Meta {
 
 export type FindingProposal =
   | ({ kind: "update"; targetType: RecordType; targetId: string; fields: Record<string, unknown> } & Meta)
-  | ({ kind: "create"; targetType: Exclude<RecordType, "objective">; fields: Record<string, unknown> } & Meta)
+  | ({ kind: "create"; targetType: RecordType; fields: Record<string, unknown> } & Meta)
   | ({ kind: "merge"; targetType: RecordType; duplicateId: string; keepId: string } & Meta)
   | ({ kind: "question"; proposal: QuestionProposal } & Meta);
 
@@ -395,7 +395,7 @@ export async function proposeFromFindings(
       updated.add(target.id);
       proposals.push({ kind: "update", targetType: target.type, targetId: target.id, fields, ...meta });
     } else if (c.action === "create") {
-      if (!c.targetType || c.targetType === "objective") continue;
+      if (!c.targetType) continue;
       const fields = cleanFields(c.targetType, c.fields ?? {}, ctx);
       if (!fields) continue;
       const required = c.targetType === "decision" ? ["title", "decider"] : REQUIRED_CREATE_FIELDS[c.targetType];
