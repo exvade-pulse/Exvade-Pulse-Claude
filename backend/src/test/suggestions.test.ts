@@ -1235,7 +1235,7 @@ describe("GET /api/suggestions breadcrumb", () => {
   });
 });
 
-describe("GET /api/suggestions movingToProject", () => {
+describe("GET /api/suggestions movingTo", () => {
   beforeEach(async () => {
     await truncateAll(db);
   });
@@ -1272,8 +1272,8 @@ describe("GET /api/suggestions movingToProject", () => {
     });
     await app.close();
 
-    const body = response.json() as { suggestions: Array<{ movingToProject: { id: string; title: string } | null }> };
-    expect(body.suggestions[0].movingToProject).toEqual({ id: otherProject.id, title: "Bench testing protocol" });
+    const body = response.json() as { suggestions: Array<{ movingTo: unknown }> };
+    expect(body.suggestions[0].movingTo).toEqual({ level: "project", title: "Bench testing protocol", isNew: false, under: null });
   });
 
   it("is null when proposedDiff's projectId is the same as the task's current project (no real move)", async () => {
@@ -1304,8 +1304,8 @@ describe("GET /api/suggestions movingToProject", () => {
     });
     await app.close();
 
-    const body = response.json() as { suggestions: Array<{ movingToProject: unknown }> };
-    expect(body.suggestions[0].movingToProject).toBeNull();
+    const body = response.json() as { suggestions: Array<{ movingTo: unknown }> };
+    expect(body.suggestions[0].movingTo).toBeNull();
   });
 
   it("is null for a brand-new task (targetId null) even though its proposedDiff sets projectId", async () => {
@@ -1330,11 +1330,11 @@ describe("GET /api/suggestions movingToProject", () => {
     });
     await app.close();
 
-    const body = response.json() as { suggestions: Array<{ movingToProject: unknown }> };
-    expect(body.suggestions[0].movingToProject).toBeNull();
+    const body = response.json() as { suggestions: Array<{ movingTo: unknown }> };
+    expect(body.suggestions[0].movingTo).toBeNull();
   });
 
-  it("never leaks another organization's project title into movingToProject", async () => {
+  it("never leaks another organization's project title into movingTo", async () => {
     const orgA = await createFixtureOrg(db, { domain: "moving-to-org-a.test" });
     const orgB = await createFixtureOrg(db, { domain: "moving-to-org-b.test" });
 
@@ -1362,8 +1362,91 @@ describe("GET /api/suggestions movingToProject", () => {
     });
     await app.close();
 
-    const body = response.json() as { suggestions: Array<{ movingToProject: unknown }> };
-    expect(body.suggestions[0].movingToProject).toBeNull();
+    const body = response.json() as { suggestions: Array<{ movingTo: unknown }> };
+    expect(body.suggestions[0].movingTo).toBeNull();
+  });
+});
+
+describe("Move to: picking or creating a destination in Review", () => {
+  beforeEach(async () => {
+    await truncateAll(db);
+  });
+
+  async function moveSuggestion(fixture: Awaited<ReturnType<typeof createFixtureOrg>>) {
+    const [task] = await db.insert(tasks).values({ organizationId: fixture.org.id, projectId: fixture.project.id, title: "Explant IHC", status: "active" }).returning();
+    const [row] = await db
+      .insert(suggestions)
+      .values({ organizationId: fixture.org.id, sourceId: fixture.source.id, targetType: "task", targetId: task.id, changeType: "operational_update", proposedDiff: { projectId: fixture.project.id, status: "blocked" }, reasoning: "x", confidence: 0.8 })
+      .returning();
+    return { task, row };
+  }
+
+  it("creates the new project on approval, moves the task into it, and reuses it for a second card", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "move-new.test" });
+    const first = await moveSuggestion(fixture);
+    const second = await moveSuggestion(fixture);
+    const params = { organizationId: fixture.org.id, actorId: fixture.user.id };
+    const newParent = { title: "Pathology", parentId: fixture.initiative.id };
+    const edited = await editSuggestion(db, { ...params, suggestionId: first.row.id, diff: { newParent } });
+    expect(edited.proposedDiff).toEqual({ status: "blocked", newParent });
+    await editSuggestion(db, { ...params, suggestionId: second.row.id, diff: { newParent: { title: "pathology ", parentId: fixture.initiative.id } } });
+
+    // Nothing exists until approval.
+    expect(await db.select().from(projects).where(eq(projects.title, "Pathology"))).toHaveLength(0);
+    const app = await buildApp();
+    const listed = await app.inject({ method: "GET", url: "/api/suggestions", cookies: { [SESSION_COOKIE_NAME]: await tokenFor(fixture) } });
+    await app.close();
+    const card = (listed.json() as { suggestions: Array<{ id: string; movingTo: unknown }> }).suggestions.find((x) => x.id === first.row.id)!;
+    expect(card.movingTo).toEqual({ level: "project", title: "Pathology", isNew: true, under: fixture.initiative.title });
+
+    for (const r of [first.row, second.row]) await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: r.id, reviewerId: fixture.user.id });
+    const created = await db.select().from(projects).where(eq(projects.organizationId, fixture.org.id));
+    const pathology = created.filter((x) => x.title.toLowerCase() === "pathology");
+    expect(pathology).toHaveLength(1);
+    expect(pathology[0].initiativeId).toBe(fixture.initiative.id);
+    for (const t of [first.task, second.task]) {
+      const [after] = await db.select().from(tasks).where(eq(tasks.id, t.id));
+      expect(after).toMatchObject({ projectId: pathology[0].id, status: "blocked" });
+    }
+    const audit = await db.select().from(auditLog).where(eq(auditLog.action, "project.created"));
+    expect(audit).toHaveLength(1);
+  });
+
+  it("picking an existing destination replaces a new one, and a new objective needs no parent", async () => {
+    const fixture = await createFixtureOrg(db, { domain: "move-switch.test" });
+    const [other] = await db.insert(projects).values({ organizationId: fixture.org.id, initiativeId: fixture.initiative.id, title: "Other" }).returning();
+    const { task, row } = await moveSuggestion(fixture);
+    const params = { organizationId: fixture.org.id, actorId: fixture.user.id, suggestionId: row.id };
+    await editSuggestion(db, { ...params, diff: { newParent: { title: "Pathology", parentId: fixture.initiative.id } } });
+    const switched = await editSuggestion(db, { ...params, diff: { projectId: other.id, newParent: null } });
+    expect(switched.proposedDiff).toEqual({ status: "blocked", projectId: other.id });
+    await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: row.id, reviewerId: fixture.user.id });
+    expect((await db.select().from(tasks).where(eq(tasks.id, task.id)))[0].projectId).toBe(other.id);
+    expect(await db.select().from(projects).where(eq(projects.title, "Pathology"))).toHaveLength(0);
+
+    const [initRow] = await db
+      .insert(suggestions)
+      .values({ organizationId: fixture.org.id, sourceId: fixture.source.id, targetType: "initiative", targetId: fixture.initiative.id, changeType: "operational_update", proposedDiff: { owner: "Sean" }, reasoning: "x", confidence: 0.8 })
+      .returning();
+    await editSuggestion(db, { organizationId: fixture.org.id, actorId: fixture.user.id, suggestionId: initRow.id, diff: { newParent: { title: "Commercial", parentId: null } } });
+    await approveSuggestion(db, { organizationId: fixture.org.id, suggestionId: initRow.id, reviewerId: fixture.user.id });
+    const [commercial] = await db.select().from(objectives).where(eq(objectives.title, "Commercial"));
+    expect(commercial.organizationId).toBe(fixture.org.id);
+    expect((await db.select().from(initiatives).where(eq(initiatives.id, fixture.initiative.id)))[0]).toMatchObject({ objectiveId: commercial.id, owner: "Sean" });
+  });
+
+  it("refuses destinations from another organization, at edit and at approval", async () => {
+    const mine = await createFixtureOrg(db, { domain: "move-mine.test" });
+    const theirs = await createFixtureOrg(db, { domain: "move-theirs.test" });
+    const { row } = await moveSuggestion(mine);
+    const params = { organizationId: mine.org.id, actorId: mine.user.id, suggestionId: row.id };
+    await expect(editSuggestion(db, { ...params, diff: { projectId: theirs.project.id } })).rejects.toThrow(SuggestionApplyError);
+    await expect(editSuggestion(db, { ...params, diff: { newParent: { title: "X", parentId: theirs.initiative.id } } })).rejects.toThrow(SuggestionApplyError);
+    await expect(editSuggestion(db, { ...params, diff: { newParent: { title: "  ", parentId: mine.initiative.id } } })).rejects.toThrow(SuggestionApplyError);
+
+    // A stored diff pointing elsewhere (e.g. written before this check) fails cleanly at approval.
+    await db.update(suggestions).set({ proposedDiff: { projectId: theirs.project.id } }).where(eq(suggestions.id, row.id));
+    await expect(approveSuggestion(db, { organizationId: mine.org.id, suggestionId: row.id, reviewerId: mine.user.id })).rejects.toThrow(SuggestionApplyError);
   });
 });
 

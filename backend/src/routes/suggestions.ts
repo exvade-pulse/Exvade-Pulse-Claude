@@ -17,7 +17,7 @@ import {
   type UserRole,
   type Visibility,
 } from "../db/schema.js";
-import { approveSuggestion, editSuggestion, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
+import { approveSuggestion, editSuggestion, MOVABLE_CHANGE_TYPES, PARENT_OF, parseNewParent, rejectSuggestion, SuggestionApplyError } from "../suggestions/apply.js";
 import { canViewVisibility } from "../access/visibility.js";
 import { resolveNames } from "../relationships/manage.js";
 import { LIKELY_DUPLICATE_THRESHOLD, titleSimilarity, titleTokens } from "../suggestions/similarity.js";
@@ -206,44 +206,72 @@ async function loadBreadcrumbs(
   return result;
 }
 
-// For a task-update suggestion whose proposedDiff sets a *different*
-// projectId than the task's current one (the Unsorted re-triage flow, see
-// routes/unsorted.ts, is the only producer of this today) -- the plain diff
-// view hides projectId entirely (see frontend/lib/formatDiff.ts's
-// HIDDEN_DIFF_KEYS, since a foreign key is normally implementation detail),
-// so without this a reviewer would have no visual sign of what's actually
-// being proposed beyond the reasoning text. Batches one query for the whole
-// suggestion list rather than per-suggestion.
-async function loadMovingToProjects(
+// Where a suggestion would put its record, for the "Moving to" line on the
+// review card -- the plain diff view hides parent ids (see
+// frontend/lib/formatDiff.ts's HIDDEN_DIFF_KEYS), so without this a reviewer
+// would see a move only in the reasoning text. Covers an existing record
+// changing parent, and a new destination the reviewer named in Edit (see
+// apply.ts's NewParent), which only exists once the card is approved.
+// Batches one query per level for the whole list.
+export interface MovingTo {
+  level: "objective" | "initiative" | "project";
+  title: string;
+  isNew: boolean;
+  under: string | null;
+}
+
+async function loadMovingTo(
   organizationId: string,
-  rows: Array<{ id: string; targetType: string; targetId: string | null; proposedDiff: unknown }>,
+  rows: Array<{ id: string; targetType: string; targetId: string | null; changeType: string; proposedDiff: unknown }>,
   currentStates: Map<string, Record<string, unknown>>,
-): Promise<Map<string, { id: string; title: string }>> {
-  const neededProjectIds = new Set<string>();
-  const proposedProjectIdBySuggestion = new Map<string, string>();
+): Promise<Map<string, MovingTo>> {
+  const result = new Map<string, MovingTo>();
+  const wanted: Array<{ suggestionId: string; level: MovingTo["level"]; id: string; isNew: false } | { suggestionId: string; level: MovingTo["level"]; title: string; underId: string | null; isNew: true }> = [];
+  const idsByLevel: Record<MovingTo["level"], Set<string>> = { objective: new Set(), initiative: new Set(), project: new Set() };
 
   for (const row of rows) {
-    if (row.targetType !== "task" || row.targetId === null) continue;
-    const proposedProjectId = (row.proposedDiff as Record<string, unknown>).projectId;
-    if (typeof proposedProjectId !== "string") continue;
-    const currentProjectId = currentStates.get(`task:${row.targetId}`)?.projectId;
-    if (proposedProjectId === currentProjectId) continue;
-    proposedProjectIdBySuggestion.set(row.id, proposedProjectId);
-    neededProjectIds.add(proposedProjectId);
+    if (!(row.targetType in PARENT_OF) || !MOVABLE_CHANGE_TYPES.includes(row.changeType)) continue;
+    const parent = PARENT_OF[row.targetType as keyof typeof PARENT_OF];
+    const diff = row.proposedDiff as Record<string, unknown>;
+    const np = parseNewParent(diff.newParent);
+    if (np) {
+      wanted.push({ suggestionId: row.id, level: parent.level, title: np.title, underId: np.parentId, isNew: true });
+      if (np.parentId && parent.level !== "objective") idsByLevel[PARENT_OF[parent.level].level].add(np.parentId);
+      continue;
+    }
+    const proposed = diff[parent.field];
+    if (row.targetId === null || typeof proposed !== "string") continue;
+    if (proposed === currentStates.get(`${row.targetType}:${row.targetId}`)?.[parent.field]) continue;
+    wanted.push({ suggestionId: row.id, level: parent.level, id: proposed, isNew: false });
+    idsByLevel[parent.level].add(proposed);
   }
+  if (wanted.length === 0) return result;
 
-  if (neededProjectIds.size === 0) return new Map();
+  const titleById = new Map<string, string>();
+  const lookups: Array<[MovingTo["level"], typeof objectives | typeof initiatives | typeof projects]> = [
+    ["objective", objectives],
+    ["initiative", initiatives],
+    ["project", projects],
+  ];
+  await Promise.all(
+    lookups.map(async ([level, table]) => {
+      const ids = [...idsByLevel[level]];
+      if (ids.length === 0) return;
+      const found = await db
+        .select({ id: table.id, title: table.title })
+        .from(table)
+        .where(and(eq(table.organizationId, organizationId), inArray(table.id, ids)));
+      for (const r of found) titleById.set(r.id, r.title);
+    }),
+  );
 
-  const found = await db
-    .select({ id: projects.id, title: projects.title })
-    .from(projects)
-    .where(and(eq(projects.organizationId, organizationId), inArray(projects.id, [...neededProjectIds])));
-  const projectById = new Map(found.map((p) => [p.id, p]));
-
-  const result = new Map<string, { id: string; title: string }>();
-  for (const [suggestionId, projectId] of proposedProjectIdBySuggestion) {
-    const project = projectById.get(projectId);
-    if (project) result.set(suggestionId, project);
+  for (const w of wanted) {
+    if (w.isNew) {
+      result.set(w.suggestionId, { level: w.level, title: w.title, isNew: true, under: w.underId ? titleById.get(w.underId) ?? null : null });
+    } else {
+      const title = titleById.get(w.id);
+      if (title) result.set(w.suggestionId, { level: w.level, title, isNew: false, under: null });
+    }
   }
   return result;
 }
@@ -540,9 +568,9 @@ export async function suggestionRoutes(app: FastifyInstance) {
     // Duplicate hints only make sense while something is still awaiting a call.
     const awaitingRows = rows.filter((row) => row.status === "pending" || row.status === "edited");
     const role = request.user!.role;
-    const [breadcrumbs, movingToProjects, relationshipEndpoints, mergeTargets, duplicateHints, questionInfo] = await Promise.all([
+    const [breadcrumbs, movingTo, relationshipEndpoints, mergeTargets, duplicateHints, questionInfo] = await Promise.all([
       loadBreadcrumbs(organizationId, rows, currentStates),
-      loadMovingToProjects(organizationId, rows, currentStates),
+      loadMovingTo(organizationId, rows, currentStates),
       loadRelationshipEndpoints(organizationId, rows),
       loadMergeTargets(organizationId, rows),
       loadDuplicateHints(organizationId, awaitingRows),
@@ -570,7 +598,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
           row.proposedDiff as Record<string, unknown>,
         ),
         breadcrumb: breadcrumbs.get(row.id) ?? null,
-        movingToProject: movingToProjects.get(row.id) ?? null,
+        movingTo: movingTo.get(row.id) ?? null,
         relationshipEndpoints: relationshipEndpoints.get(row.id) ?? null,
         mergeInto: mergeTargets.get(row.id) ?? null,
         likelyDuplicateOf: duplicateHints.get(row.id) ?? null,

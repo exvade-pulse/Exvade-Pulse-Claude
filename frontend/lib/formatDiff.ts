@@ -3,8 +3,9 @@ import { formatDueDate } from "./dates";
 // Foreign keys (objectiveId, projectId, ...) are implementation detail, not
 // something a reader needs to see -- "where it belongs" is already conveyed
 // elsewhere (the "Proposes new X" / "Updates existing X" line on a suggestion
-// card, or a task's own breadcrumb).
-export const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId"]);
+// card, or a task's own breadcrumb). newParent (a destination named in Edit)
+// shows on the card's "Moving to" line instead.
+export const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId", "newParent"]);
 
 
 // Plain-language names instead of raw field names.

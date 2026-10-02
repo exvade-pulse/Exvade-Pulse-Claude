@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import type { Database } from "../db/client.js";
+import type { Database, DbOrTx } from "../db/client.js";
 import { auditLog, dateTypeEnum, initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, type EntityNodeType, type RelationType } from "../db/schema.js";
 import { createDecision, DecisionError, supersedeDecision, updateDecision } from "../decisions/manage.js";
 import { createRelationship, RelationshipError } from "../relationships/manage.js";
@@ -148,6 +148,90 @@ export function pickAllowedFields(
     }
   }
   return result;
+}
+
+// Where each level sits in the hierarchy: the field that points at its
+// parent, and the parent's level.
+export const PARENT_OF = {
+  initiative: { field: "objectiveId", level: "objective" },
+  project: { field: "initiativeId", level: "initiative" },
+  task: { field: "projectId", level: "project" },
+} as const;
+type ChildLevel = keyof typeof PARENT_OF;
+type HierarchyLevel = "objective" | "initiative" | "project";
+
+// Change types whose card offers the "Move to" picker. Context, cleanup,
+// merge and the rest either can't move a record or mean something else.
+export const MOVABLE_CHANGE_TYPES = ["operational_update", "new_task"];
+
+// A reviewer can send a record somewhere that doesn't exist yet: the edit
+// stores { newParent: { title, parentId } } (parentId is where the new
+// parent itself goes; null for a new objective) and approval creates it.
+// Only a person's edit can set this -- it's not in ALLOWED_FIELDS, so no
+// AI-authored diff ever carries it.
+export interface NewParent {
+  title: string;
+  parentId: string | null;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function parseNewParent(value: unknown): NewParent | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const title = typeof raw.title === "string" ? raw.title.trim().slice(0, 300) : "";
+  if (!title) return null;
+  return { title, parentId: typeof raw.parentId === "string" && raw.parentId ? raw.parentId : null };
+}
+
+function isMovable(targetType: string, changeType: string): targetType is ChildLevel {
+  return targetType in PARENT_OF && MOVABLE_CHANGE_TYPES.includes(changeType);
+}
+
+// The record must exist in this organization and not be merged away.
+async function assertLiveInOrg(tx: DbOrTx, organizationId: string, level: HierarchyLevel, id: unknown, what: string) {
+  const table = TABLE_BY_TARGET_TYPE[level];
+  if (typeof id !== "string" || !UUID.test(id)) throw new SuggestionApplyError(`Pick the ${what} again`);
+  const [row] = await tx
+    .select({ status: table.status })
+    .from(table)
+    .where(and(eq(table.id, id), eq(table.organizationId, organizationId)));
+  if (!row || row.status === "superseded") throw new SuggestionApplyError(`That ${what} no longer exists; pick another`);
+}
+
+// Reuses an existing live record with the same name in the same place, so
+// several cards pointed at the same new project share one.
+async function findOrCreateParent(
+  tx: DbOrTx,
+  params: { organizationId: string; reviewerId: string; suggestionId: string },
+  level: HierarchyLevel,
+  np: NewParent,
+): Promise<string> {
+  const { organizationId } = params;
+  const table = TABLE_BY_TARGET_TYPE[level];
+  const grand = level === "objective" ? null : PARENT_OF[level];
+  if (grand) await assertLiveInOrg(tx, organizationId, grand.level, np.parentId, `${grand.level} for the new ${level}`);
+  const placement = grand ? { [grand.field]: np.parentId! } : {};
+
+  const conditions = [eq(table.organizationId, organizationId), sql`lower(${table.title}) = lower(${np.title})`, sql`${table.status} <> 'superseded'`];
+  if (level === "initiative") conditions.push(eq(initiatives.objectiveId, np.parentId!));
+  if (level === "project") conditions.push(eq(projects.initiativeId, np.parentId!));
+  const [existing] = await tx.select({ id: table.id }).from(table).where(and(...conditions));
+  if (existing) return existing.id;
+
+  const [{ id }] = await tx
+    .insert(table)
+    .values({ organizationId, title: np.title, ...placement } as never)
+    .returning({ id: table.id });
+  await tx.insert(auditLog).values({
+    organizationId,
+    actorId: params.reviewerId,
+    action: `${level}.created`,
+    entityType: level,
+    entityId: id,
+    details: { title: np.title, viaSuggestionId: params.suggestionId },
+  });
+  return id;
 }
 
 interface ApplyParams {
@@ -401,6 +485,19 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
     } else {
       const table = TABLE_BY_TARGET_TYPE[targetType];
 
+      // The destination: a new one the reviewer named (created now, in this
+      // same transaction), or an existing one, which must be a live record
+      // in this organization.
+      if (targetType in PARENT_OF) {
+        const parent = PARENT_OF[targetType as ChildLevel];
+        const np = isMovable(targetType, suggestion.changeType) ? parseNewParent((suggestion.proposedDiff as Record<string, unknown>).newParent) : null;
+        if (np) {
+          fields[parent.field] = await findOrCreateParent(tx, { ...params, suggestionId: suggestion.id }, parent.level, np);
+        } else if (parent.field in fields) {
+          await assertLiveInOrg(tx, params.organizationId, parent.level, fields[parent.field], parent.level);
+        }
+      }
+
       // Only tasks track fieldEvidence (see schema.ts) -- build the patch for
       // whichever tracked fields this diff actually touches, so an
       // operational_update that only sets status doesn't disturb the
@@ -568,6 +665,27 @@ export async function editSuggestion(db: Database, params: EditParams) {
     const targetType = suggestion.targetType as keyof typeof TABLE_BY_TARGET_TYPE;
     const merged = { ...(suggestion.proposedDiff as Record<string, unknown>), ...params.diff };
     const sanitized = pickAllowedFields(targetType, suggestion.changeType, merged);
+
+    // "Move to": either an existing destination (checked now, so a bad pick
+    // fails here rather than at approval) or a new one, never both.
+    if (isMovable(targetType, suggestion.changeType)) {
+      const parent = PARENT_OF[targetType];
+      if (parent.field in params.diff) {
+        await assertLiveInOrg(tx, params.organizationId, parent.level, params.diff[parent.field], parent.level);
+      } else if ("newParent" in params.diff && params.diff.newParent !== null) {
+        const np = parseNewParent(params.diff.newParent);
+        if (!np) throw new SuggestionApplyError(`Give the new ${parent.level} a name`);
+        if (parent.level !== "objective") {
+          const grand = PARENT_OF[parent.level];
+          await assertLiveInOrg(tx, params.organizationId, grand.level, np.parentId, `${grand.level} for the new ${parent.level}`);
+        }
+        sanitized.newParent = np;
+        delete sanitized[parent.field];
+      } else if (!("newParent" in params.diff)) {
+        const kept = parseNewParent((suggestion.proposedDiff as Record<string, unknown>).newParent);
+        if (kept) sanitized.newParent = kept;
+      }
+    }
 
     const [updatedSuggestion] = await tx
       .update(suggestions)

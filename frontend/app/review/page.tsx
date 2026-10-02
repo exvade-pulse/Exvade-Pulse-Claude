@@ -7,6 +7,7 @@ import {
   decideSuggestion,
   editSuggestion,
   entityHref,
+  fetchCompanyMap,
   fetchCurrentUser,
   fetchPendingSuggestions,
   fetchSuggestionsByStatus,
@@ -14,6 +15,7 @@ import {
   submitManualUpdate,
   TYPE_LABEL,
   type CleanupDetail,
+  type CompanyMapResponse,
   type ReviewFindingDetail,
   type ConflictEntry,
   type ContradictionDetail,
@@ -26,6 +28,7 @@ import { formatDiff, formatDiffWithCurrentState, HIDDEN_DIFF_KEYS } from "../../
 import { Nav } from "../components/Nav";
 import { FindingsPanel } from "../components/FindingsPanel";
 import { SourceToggle } from "../components/SourceToggle";
+import { initialMoveChoice, moveDiff, MovePicker, moveTarget, type MoveChoice } from "../components/MovePicker";
 
 const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   objective: "Objective",
@@ -88,13 +91,19 @@ function WorkflowBreadcrumb({ breadcrumb }: { breadcrumb: Suggestion["breadcrumb
   );
 }
 
-// Shown when a suggestion proposes moving an existing task to a different
-// project (the Unsorted re-triage flow) -- the plain diff view hides
-// projectId entirely (see formatDiff.ts's HIDDEN_DIFF_KEYS), so without this
-// a reviewer would have no visual sign of the move beyond the reasoning text.
-function MovingToProject({ movingToProject }: { movingToProject: Suggestion["movingToProject"] }) {
-  if (!movingToProject) return null;
-  return <p className="card-breadcrumb card-moving-to">&rarr; Moving to: {movingToProject.title}</p>;
+// Shown when a suggestion moves a task, project or initiative somewhere else,
+// or into a new destination named in Edit -- the plain diff view hides parent
+// ids entirely (see formatDiff.ts's HIDDEN_DIFF_KEYS), so without this a
+// reviewer would have no visual sign of the move beyond the reasoning text.
+function MovingTo({ movingTo }: { movingTo: Suggestion["movingTo"] }) {
+  if (!movingTo) return null;
+  return (
+    <p className="card-breadcrumb card-moving-to">
+      &rarr; Moving to {movingTo.isNew ? `new ${movingTo.level}` : movingTo.level}: {movingTo.title}
+      {movingTo.under ? ` (under ${movingTo.under})` : ""}
+      {movingTo.isNew ? " · created when you approve" : ""}
+    </p>
+  );
 }
 
 // A targetType: "relationship" suggestion has no single target row to diff
@@ -307,6 +316,10 @@ export default function ReviewPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Record<string, string>>({});
   const [savingEdit, setSavingEdit] = useState(false);
+  const [moveChoice, setMoveChoice] = useState<MoveChoice | null>(null);
+  // Loaded the first time a movable card is edited; cleared after any
+  // approval, since approving can create a new destination.
+  const [companyMap, setCompanyMap] = useState<CompanyMapResponse | null>(null);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
@@ -340,6 +353,7 @@ export default function ReviewPage() {
     setActionError(null);
     try {
       await decideSuggestion(id, decision);
+      if (decision === "approve") setCompanyMap(null);
       setSuggestions((prev) => prev.filter((s) => s.id !== id));
       setSelectedIds((prev) => {
         if (!prev.has(id)) return prev;
@@ -372,6 +386,7 @@ export default function ReviewPage() {
     setActionError(null);
     try {
       const result = await bulkApproveSuggestions(ids);
+      setCompanyMap(null);
       const approvedSet = new Set(result.approved);
       setSuggestions((prev) => prev.filter((s) => !approvedSet.has(s.id)));
       setSelectedIds((prev) => {
@@ -399,22 +414,44 @@ export default function ReviewPage() {
     }
     setActionError(null);
     setEditDraft(draft);
+    setMoveChoice(initialMoveChoice(s));
     setEditingId(s.id);
+    if (moveTarget(s) && !companyMap) {
+      fetchCompanyMap()
+        .then(setCompanyMap)
+        .catch(() => setActionError("Couldn't load the list of destinations. Close Edit and try again."));
+    }
   }
 
   function cancelEdit() {
     setEditingId(null);
     setEditDraft({});
+    setMoveChoice(null);
   }
 
-  async function saveEdit(id: string) {
+  async function saveEdit(s: Suggestion) {
+    const id = s.id;
+    const diff: Record<string, unknown> = { ...editDraft };
+    if (moveChoice) {
+      const move = moveDiff(s, moveChoice);
+      if (typeof move === "string") {
+        setActionError(move);
+        return;
+      }
+      Object.assign(diff, move);
+    }
     setSavingEdit(true);
     setActionError(null);
     try {
-      const updated = await editSuggestion(id, editDraft);
-      setSuggestions((prev) => prev.map((s) => (s.id === id ? updated : s)));
+      // The edit response is the bare suggestion row, without the source,
+      // breadcrumb and other card details: keep those, then reload the list
+      // so derived lines such as "Moving to" reflect the edit.
+      const updated = await editSuggestion(id, diff);
+      setSuggestions((prev) => prev.map((s) => (s.id === id ? { ...s, proposedDiff: updated.proposedDiff, status: updated.status } : s)));
+      fetchPendingSuggestions().then(setSuggestions).catch(() => {});
       setEditingId(null);
       setEditDraft({});
+      setMoveChoice(null);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -481,7 +518,7 @@ export default function ReviewPage() {
             {s.targetType !== "relationship" && (
               <>
                 <WorkflowBreadcrumb breadcrumb={s.breadcrumb} />
-                <MovingToProject movingToProject={s.movingToProject} />
+                <MovingTo movingTo={s.movingTo} />
               </>
             )}
           </div>
@@ -507,6 +544,7 @@ export default function ReviewPage() {
                 />
               </label>
             ))}
+            {moveChoice && <MovePicker suggestion={s} tree={companyMap} choice={moveChoice} onChange={setMoveChoice} />}
           </div>
         ) : s.targetType === "relationship" ? (
           <RelationshipEndpointsLine
@@ -622,7 +660,7 @@ export default function ReviewPage() {
           <div className="card-actions">
             {isEditing ? (
               <>
-                <button className="decision-btn save" disabled={savingEdit} onClick={() => saveEdit(s.id)}>
+                <button className="decision-btn save" disabled={savingEdit} onClick={() => saveEdit(s)}>
                   Save
                 </button>
                 <button className="decision-btn cancel" disabled={savingEdit} onClick={cancelEdit}>

@@ -75,11 +75,12 @@ export interface Suggestion {
     initiative?: { id: string; title: string };
     project?: { id: string; title: string };
   } | null;
-  // Set only when this suggestion proposes moving an existing task to a
-  // *different* project than the one it's currently in (the Unsorted
-  // re-triage flow is the only producer of this today). The plain diff view
-  // hides projectId entirely, so this is the only visual sign of the move.
-  movingToProject: { id: string; title: string } | null;
+  // Set when this suggestion moves an existing task, project or initiative
+  // to a different parent, or puts its record into a new parent the
+  // reviewer named in Edit (isNew: created only on approval; under is where
+  // that new parent goes). The plain diff view hides parent ids entirely, so
+  // this is the only visual sign of the move.
+  movingTo: { level: "objective" | "initiative" | "project"; title: string; isNew: boolean; under: string | null } | null;
   // Set only for a targetType: "relationship" suggestion -- both endpoints'
   // resolved type/id/title, since proposedDiff only carries the raw ids.
   // Null for every other targetType.
