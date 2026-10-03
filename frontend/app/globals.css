@@ -1971,3 +1971,10 @@ summary:focus-visible {
   .xo-h1 { font-size: 23px; }
   .xo-card .card-actions { flex-wrap: wrap; }
 }
+
+/* Paste format guide (Review → Paste review findings, and the Guide). */
+.paste-guide { margin: var(--space-2) 0; }
+.paste-template { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.paste-rules { display: grid; gap: var(--space-2); font-size: var(--text-sm); margin: var(--space-3) 0 0; }
+.paste-rules dt { font-weight: 600; }
+.paste-rules dd { margin: 0; color: var(--text-secondary); }

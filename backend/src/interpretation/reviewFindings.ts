@@ -7,8 +7,15 @@ import {
   decisions,
   initiatives,
   LIVE_DECISION_STATUSES,
+  milestoneConfidenceEnum,
+  milestones,
+  milestoneStateEnum,
+  objectiveHealthEnum,
   objectives,
   priorityEnum,
+  riskEscalationEnum,
+  risks,
+  riskStatusEnum,
   projects,
   strategicQuestions,
   strategyStatusEnum,
@@ -33,8 +40,8 @@ const MAX_CHANGES_PER_CHUNK = 60;
 // from what the AI saw, so it must see all of it.
 const DETAIL_TEXT_CHARS = 6000;
 
-type RecordType = "objective" | "initiative" | "project" | "task" | "decision";
-const RECORD_TYPES: RecordType[] = ["objective", "initiative", "project", "task", "decision"];
+type RecordType = "objective" | "initiative" | "project" | "task" | "decision" | "milestone" | "risk";
+const RECORD_TYPES: RecordType[] = ["objective", "initiative", "project", "task", "decision", "milestone", "risk"];
 
 // Splits at blank lines, headings and table rows so a finding is rarely cut
 // in half; a single oversized paragraph is hard-split.
@@ -67,6 +74,13 @@ interface IndexRecord {
   parent: string | null;
   parentId: string | null;
   details: Record<string, unknown>;
+  // The record's current stored values (dates as YYYY-MM-DD), for dropping
+  // proposed values that are already what's recorded.
+  current?: Record<string, unknown>;
+}
+
+function currentValues(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v instanceof Date ? v.toISOString().slice(0, 10) : v]));
 }
 
 export interface FindingsContext {
@@ -76,19 +90,30 @@ export interface FindingsContext {
 }
 
 export async function loadFindingsContext(db: DbOrTx, organizationId: string): Promise<FindingsContext> {
-  const [objectiveRows, initiativeRows, projectRows, taskRows, decisionRows, questionRows] = await Promise.all([
+  const [objectiveRows, initiativeRows, projectRows, taskRows, decisionRows, questionRows, milestoneRows, riskRows] = await Promise.all([
     db.select().from(objectives).where(and(eq(objectives.organizationId, organizationId), ne(objectives.status, "superseded"))),
     db.select().from(initiatives).where(and(eq(initiatives.organizationId, organizationId), ne(initiatives.status, "superseded"))),
     db.select().from(projects).where(and(eq(projects.organizationId, organizationId), ne(projects.status, "superseded"))),
     db.select().from(tasks).where(and(eq(tasks.organizationId, organizationId), ne(tasks.status, "superseded"))),
     db.select().from(decisions).where(and(eq(decisions.organizationId, organizationId), inArray(decisions.status, LIVE_DECISION_STATUSES))),
     db.select({ id: strategicQuestions.id, title: strategicQuestions.title }).from(strategicQuestions).where(eq(strategicQuestions.organizationId, organizationId)),
+    db.select().from(milestones).where(and(eq(milestones.organizationId, organizationId), ne(milestones.state, "dropped"))),
+    db.select().from(risks).where(eq(risks.organizationId, organizationId)),
   ]);
+  const day = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
   const title = new Map<string, string>([...objectiveRows, ...initiativeRows, ...projectRows].map((r) => [r.id, r.title]));
   const records: IndexRecord[] = [
-    ...objectiveRows.map((o) => ({ type: "objective" as const, id: o.id, title: o.title, status: o.status, parent: null, parentId: null, details: { priority: o.priority, owner: o.owner, description: o.description } })),
-    ...initiativeRows.map((i) => ({ type: "initiative" as const, id: i.id, title: i.title, status: i.status, parent: title.get(i.objectiveId) ?? null, parentId: i.objectiveId, details: { priority: i.priority, owner: i.owner, description: i.description } })),
-    ...projectRows.map((p) => ({ type: "project" as const, id: p.id, title: p.title, status: p.status, parent: title.get(p.initiativeId) ?? null, parentId: p.initiativeId, details: { owner: p.owner, description: p.description } })),
+    ...objectiveRows.map((o) => ({ type: "objective" as const, id: o.id, title: o.title, status: o.status, parent: null, parentId: null, current: currentValues(o), details: {
+        priority: o.priority,
+        owner: o.owner,
+        description: o.description,
+        whyItMatters: o.rationale,
+        health: o.health,
+        healthReason: o.healthRationale,
+        displayOrder: o.displayOrder,
+      } })),
+    ...initiativeRows.map((i) => ({ type: "initiative" as const, id: i.id, title: i.title, status: i.status, parent: title.get(i.objectiveId) ?? null, parentId: i.objectiveId, current: currentValues(i), details: { priority: i.priority, owner: i.owner, description: i.description } })),
+    ...projectRows.map((p) => ({ type: "project" as const, id: p.id, title: p.title, status: p.status, parent: title.get(p.initiativeId) ?? null, parentId: p.initiativeId, current: currentValues(p), details: { owner: p.owner, description: p.description } })),
     ...taskRows.map((t) => ({
       type: "task" as const,
       id: t.id,
@@ -96,6 +121,7 @@ export async function loadFindingsContext(db: DbOrTx, organizationId: string): P
       status: t.status,
       parent: title.get(t.projectId) ?? null,
       parentId: t.projectId,
+      current: currentValues(t),
       details: {
         owner: t.owner,
         description: t.description,
@@ -112,6 +138,7 @@ export async function loadFindingsContext(db: DbOrTx, organizationId: string): P
       status: d.status,
       parent: null,
       parentId: null,
+      current: currentValues(d),
       details: {
         decider: d.decider,
         stakeholders: d.stakeholders,
@@ -119,6 +146,44 @@ export async function loadFindingsContext(db: DbOrTx, organizationId: string): P
         whyItMatters: d.whyItMatters,
         relevantContext: d.relevantContext,
         suggestedNextStep: d.suggestedNextStep,
+        outcome: d.objectiveId ? (title.get(d.objectiveId) ?? null) : null,
+        recommendation: d.recommendation,
+        impactOfDelay: d.impactOfDelay,
+      },
+    })),
+    ...milestoneRows.map((m) => ({
+      type: "milestone" as const,
+      id: m.id,
+      title: m.title,
+      status: m.state,
+      parent: title.get(m.objectiveId) ?? null,
+      parentId: m.objectiveId,
+      current: currentValues(m),
+      details: {
+        confidence: m.confidence,
+        baselineDate: day(m.baselineDate),
+        forecastDate: day(m.forecastDate),
+        actualDate: day(m.actualDate),
+        owner: m.owner,
+        successCriteria: m.successCriteria,
+      },
+    })),
+    ...riskRows.map((r) => ({
+      type: "risk" as const,
+      id: r.id,
+      title: r.title,
+      status: r.status,
+      parent: title.get(r.objectiveId) ?? null,
+      parentId: r.objectiveId,
+      current: currentValues(r),
+      details: {
+        impact: r.impact,
+        likelihood: r.likelihood,
+        mitigation: r.mitigation,
+        owner: r.owner,
+        escalation: r.escalation,
+        nextReviewAt: day(r.nextReviewAt),
+        milestone: r.milestoneId ? (milestoneRows.find((m) => m.id === r.milestoneId)?.title ?? null) : null,
       },
     })),
   ];
@@ -157,7 +222,15 @@ function buildPrompt(chunk: string, ctx: FindingsContext, part: string): string 
       `${type.toUpperCase()}S:\n` +
       ctx.records
         .filter((r) => r.type === type)
-        .map((r) => `- id=${r.id} [${r.status}${type === "objective" ? `, ${r.details.priority}` : ""}] ${r.title}${r.parent ? ` (under: ${r.parent})` : ""}`)
+        .map((r) => {
+          const extra =
+            type === "objective"
+              ? `, ${r.details.priority}, health ${r.details.health}`
+              : type === "milestone"
+                ? `, ${r.details.confidence}, baseline ${r.details.baselineDate ?? "none"}, forecast ${r.details.forecastDate ?? "none"}`
+                : "";
+          return `- id=${r.id} [${r.status}${extra}] ${r.title}${r.parent ? ` (under: ${r.parent})` : ""}`;
+        })
         .join("\n"),
   ).join("\n\n");
   const referenced = referencedRecords(chunk, ctx);
@@ -186,6 +259,15 @@ Rules:
 - To move a task, update its projectId to an existing project id. If the text names an initiative (not a project) as a task's destination, set projectId to that initiative's id; Pulse files the task in a project inside it. To change importance, update an objective's priority (low/medium/high/critical).
 - Create an initiative/project only when the text calls for a new grouping and nothing existing fits. Create an objective only when the text explicitly asks for a new top-level objective or outcome. Nothing can be moved into something created in the same run, so say in the reasoning what should move once it exists.
 - Strategic questions: propose them when the text names them, with linked record ids.
+- Executive Overview fields. Outcomes are the objectives. Read "OUTCOME:" blocks (the paste template) or plain sentences the same way:
+  - Outcome (objective) fields: health (on_track, at_risk, blocked, not_assessed) with healthRationale (one line, required unless not_assessed); rationale = "why it matters"; owner; displayOrder (whole number, 1 = first).
+  - Milestones (targetType "milestone", objectiveId = the outcome): title, successCriteria ("done when"), owner, baselineDate (the committed date), forecastDate (the current estimate), actualDate, confidence (committed, forecast, unconfirmed), state (planned, achieved, missed, dropped). A date marked "committed" sets baselineDate and confidence committed; "forecast" sets forecastDate and confidence forecast; "unconfirmed" or no date sets confidence unconfirmed. "Achieved on <date>" sets state achieved and actualDate.
+  - Risks (targetType "risk", objectiveId = the outcome): title, impact, likelihood, mitigation, owner, nextReviewAt, escalation (watching, decision_needed), status (open, closed), milestoneId (a milestone of the same outcome, by name).
+  - Decisions: objectiveId attaches an existing decision to an outcome; recommendation; impactOfDelay ("if delayed: ..."). Match the decision by name; never create a decision just to hold a recommendation.
+  - Update an existing milestone or risk with the same or nearly the same name under that outcome instead of creating a duplicate. Leave out any field the text doesn't give; a blank or "-" means no change, not "clear it".
+  - Dates as YYYY-MM-DD.
+  - Template lines are "- name | piece | piece ..." in any order. Milestone pieces: "baseline <date>", "forecast <date>", "confidence committed|forecast|unconfirmed", "achieved <date>", "missed", "dropped", "owner <name>", "done when: <text>". Risk pieces: "impact: ", "likelihood: ", "mitigation: ", "owner <name>", "review by <date>", "watching" or "decision needed", "affects: <milestone name>", "closed". Decision pieces: "recommendation: ", "if delayed: ". Outcome lines: "Health:", "Why:" (healthRationale), "Why it matters:" (rationale), "Owner:", "Order:" (displayOrder).
+  - Only propose values that differ from the record's current values; a pasted-back template line that matches what's recorded is not a change.
 - Pure software, layout, navigation or design feedback (e.g. "show snippets in search", "dates render a day early") goes in appFeedback, not changes.
 - Use only ids from the lists below.
 - Account for every specific instruction: each one becomes a change, or goes in unresolved with the reason (e.g. no record by that name, it may have been merged; destination doesn't exist yet).
@@ -282,7 +364,7 @@ const TOOL: Anthropic.Tool = {
 const changeSchema = z.object({
   action: z.enum(["update", "create", "merge", "question"]),
   finding: z.string().nullable().optional(),
-  targetType: z.enum(["objective", "initiative", "project", "task", "decision"]).optional(),
+  targetType: z.enum(["objective", "initiative", "project", "task", "decision", "milestone", "risk"]).optional(),
   targetId: z.string().nullable().optional(),
   keepId: z.string().nullable().optional(),
   fields: z.record(z.string(), z.unknown()).optional(),
@@ -344,10 +426,22 @@ const ENUMS: Record<string, readonly string[]> = {
   "initiative.status": strategyStatusEnum.enumValues,
   "project.status": strategyStatusEnum.enumValues,
   "objective.priority": priorityEnum.enumValues,
+  "objective.health": objectiveHealthEnum.enumValues,
+  "milestone.confidence": milestoneConfidenceEnum.enumValues,
+  "milestone.state": milestoneStateEnum.enumValues,
+  "risk.escalation": riskEscalationEnum.enumValues,
+  "risk.status": riskStatusEnum.enumValues,
   "initiative.priority": priorityEnum.enumValues,
 };
 const TEXT_FIELDS = new Set(["description", "latestUpdate", "nextAction", "whyItMatters", "relevantContext", "suggestedNextStep"]);
-const PARENT_FIELD: Record<string, RecordType> = { objectiveId: "objective", initiativeId: "initiative", projectId: "project", relatedTaskId: "task" };
+const PARENT_FIELD: Record<string, RecordType> = {
+  objectiveId: "objective",
+  initiativeId: "initiative",
+  projectId: "project",
+  relatedTaskId: "task",
+  milestoneId: "milestone",
+};
+const DATE_FIELDS = new Set(["dueDate", "followUpOn", "baselineDate", "forecastDate", "actualDate", "nextReviewAt"]);
 
 // Whitelists fields, checks enum values and that any parent id is a real
 // record of the right type. Returns null if nothing valid is left.
@@ -362,7 +456,8 @@ function cleanFields(type: RecordType, raw: Record<string, unknown>, ctx: Findin
       const parent = typeof value === "string" ? ctx.byId.get(value) : undefined;
       if (!parent || parent.type !== PARENT_FIELD[key]) continue;
     }
-    if ((key === "dueDate" || key === "followUpOn") && value !== null && (typeof value !== "string" || Number.isNaN(Date.parse(value)))) continue;
+    if (DATE_FIELDS.has(key) && value !== null && (typeof value !== "string" || Number.isNaN(Date.parse(value)))) continue;
+    if (key === "displayOrder" && value !== null && !Number.isInteger(Number(value))) continue;
     if (key === "stakeholders" && !Array.isArray(value)) continue;
     out[key] = value;
   }
@@ -453,8 +548,26 @@ export async function proposeFromFindings(
       const cleaned = cleanFields(target.type, c.fields ?? {}, ctx);
       let fields = cleaned && !shownInFull.has(target.id) ? Object.fromEntries(Object.entries(cleaned).filter(([k]) => !TEXT_FIELDS.has(k))) : cleaned;
       if (newParent) fields = { ...(fields ?? {}), newParent };
+      // A value that's already recorded isn't a change (e.g. the template
+      // pasted back with only some lines edited).
+      if (fields && target.current) {
+        const norm = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? (/^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : v.trim()) : String(v));
+        for (const [k, v] of Object.entries(fields)) if (k !== "newParent" && k in target.current && norm(v) === norm(target.current[k])) delete fields[k];
+        // A new reason with the same rating is still a fresh assessment.
+        if (target.type === "objective" && "healthRationale" in fields && !("health" in fields)) fields.health = target.current.health;
+        if (Object.keys(fields).length === 0) continue;
+      }
+      const reported = unresolved.length;
+      if (fields && target.type === "objective" && "health" in fields && fields.health !== "not_assessed" && !fields.healthRationale) {
+        delete fields.health;
+        unresolved.push({ text: `Health for "${target.title}"`, reason: "A health rating needs a one-line reason (Why:)." });
+      }
+      if (fields && target.type === "risk" && typeof fields.milestoneId === "string" && ctx.byId.get(fields.milestoneId)?.parentId !== target.parentId) {
+        delete fields.milestoneId;
+        unresolved.push({ text: `Milestone for risk "${target.title}"`, reason: "That milestone belongs to a different outcome." });
+      }
       if (!fields || Object.keys(fields).length === 0) {
-        drop(c, "Nothing Pulse could apply: the destination or values didn't match an existing record.");
+        if (unresolved.length === reported) drop(c, "Nothing Pulse could apply: the destination or values didn't match an existing record.");
         continue;
       }
       updated.add(target.id);
@@ -465,6 +578,9 @@ export async function proposeFromFindings(
       const fields = newParent ? { ...(cleaned ?? {}), newParent } : cleaned;
       const required = (c.targetType === "decision" ? ["title", "decider"] : REQUIRED_CREATE_FIELDS[c.targetType]).filter((k) => !(newParent && k === "projectId"));
       const missing = fields ? required.filter((k) => !(k in fields)) : required;
+      if (fields && c.targetType === "risk" && typeof fields.milestoneId === "string" && ctx.byId.get(fields.milestoneId)?.parentId !== fields.objectiveId) {
+        delete fields.milestoneId;
+      }
       if (!fields || missing.length > 0) {
         const title = typeof c.fields?.title === "string" ? `New ${c.targetType} "${c.fields.title}"` : undefined;
         unresolved.push({ text: title ?? c.reasoning, reason: `Missing or unrecognised ${missing.join(", ") || "fields"} (e.g. the place it should go doesn't exist).` });

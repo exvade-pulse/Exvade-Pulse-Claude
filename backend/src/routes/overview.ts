@@ -18,6 +18,7 @@ import {
   updateRisk,
 } from "../overview/manage.js";
 import { draftNarrative, publishSnapshot } from "../overview/reporting.js";
+import { buildPasteTemplate } from "../overview/template.js";
 import { getContextualClaudeClient } from "../context/companyContext.js";
 import { DecisionError } from "../decisions/manage.js";
 
@@ -44,6 +45,12 @@ export async function overviewRoutes(app: FastifyInstance) {
   app.get("/api/overview", async (request, reply) => {
     const { organizationId, role } = request.user!;
     reply.send(await buildExecutiveOverview(db, organizationId, role));
+  });
+
+  // Every outcome written out in the paste format, filled in with what is
+  // recorded now, to edit and paste back into Review.
+  app.get("/api/overview/template", async (request, reply) => {
+    reply.send({ text: await buildPasteTemplate(db, request.user!.organizationId, request.user!.role) });
   });
 
   app.get<{ Params: { id: string } }>("/api/overview/outcomes/:id", async (request, reply) => {

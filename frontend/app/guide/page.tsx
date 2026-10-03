@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { PasteFormatGuide } from "../components/PasteFormatGuide";
 import { useEffect, useState } from "react";
 import { fetchCurrentUser, type SessionUser } from "../../lib/api";
 import { Nav } from "../components/Nav";
@@ -132,6 +133,16 @@ export default function GuidePage() {
           open <strong>decisions</strong> with a recommendation and what delay would cost. Milestones are dropped and risks closed, never
           deleted.
         </p>
+      </div>
+
+      <h2 className="section-title">Updating the Overview by copy and paste</h2>
+      <div className="card">
+        <p>
+          On <Link href="/review">Review</Link>, open <em>Paste review findings</em> and click <em>Fill in current values</em>. Every outcome,
+          milestone, risk and decision appears in the box in the format below. Edit what changed (or paste text prepared elsewhere in the
+          same format), click <em>Read findings</em>, and approve the cards. Nothing changes until you approve.
+        </p>
+        <PasteFormatGuide />
       </div>
 
       <h2 className="section-title">Operating Detail (the weekly working view)</h2>

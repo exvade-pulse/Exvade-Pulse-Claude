@@ -162,6 +162,7 @@ export const createRisk = (body: Record<string, unknown>) => request("/api/risks
 export const updateRisk = (id: string, body: Record<string, unknown>) => request(`/api/risks/${id}`, "PATCH", body);
 export const updateDecisionOverview = (id: string, body: { objectiveId?: string | null; recommendation?: string | null; impactOfDelay?: string | null }) =>
   request(`/api/decisions/${id}/overview`, "PATCH", body);
+export const fetchPasteTemplate = () => request<{ text: string }>("/api/overview/template");
 export const draftNarrative = () => request<{ draft: string }>("/api/overview/draft-narrative", "POST");
 export const publishOverview = (narrative: string) => request("/api/overview/publish", "POST", { narrative });
 

@@ -38,6 +38,8 @@ const TARGET_LABEL: Record<Suggestion["targetType"], string> = {
   decision: "Decision",
   relationship: "Relationship",
   question: "Strategic question",
+  milestone: "Milestone",
+  risk: "Risk",
 };
 
 // interpret.ts's system prompt frames confidence as "how sure the model is that
@@ -527,7 +529,7 @@ export default function ReviewPage() {
             <div className="card-badges">
               {s.status === "edited" && <span className="badge badge-edited">edited</span>}
               {isHistory && <span className="badge">{s.status}</span>}
-              <span className="badge">{s.changeType.replace("_", " ")}</span>
+              <span className="badge">{s.changeType === "new_task" && s.targetType !== "task" ? "new" : s.changeType.replace("_", " ")}</span>
             </div>
           </div>
         </div>

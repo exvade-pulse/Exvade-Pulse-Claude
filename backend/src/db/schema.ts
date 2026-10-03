@@ -58,6 +58,10 @@ export const targetTypeEnum = pgEnum("target_type", [
   "decision",
   "relationship",
   "question",
+  // Executive Overview records, proposed through Review (e.g. from pasted
+  // findings); approval goes through overview/manage.ts.
+  "milestone",
+  "risk",
 ]);
 
 export const changeTypeEnum = pgEnum("change_type", [

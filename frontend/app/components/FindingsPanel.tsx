@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { fetchFindingsJob, startFindings, type FindingsJob } from "../../lib/api";
+import { fetchPasteTemplate } from "../../lib/overview";
+import { PasteFormatGuide } from "./PasteFormatGuide";
 
 const KIND_LABEL: Record<string, string> = {
   update: "correction",
@@ -22,6 +24,26 @@ export function FindingsPanel({ onFinished }: { onFinished: () => void }) {
   const [job, setJob] = useState<FindingsJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [filling, setFilling] = useState(false);
+
+  function fill(next: string) {
+    if (text.trim() && !window.confirm("Replace what's in the box?")) return;
+    setText(next);
+  }
+
+  async function fillCurrent() {
+    setFilling(true);
+    setError(null);
+    try {
+      const { text: current } = await fetchPasteTemplate();
+      if (!current) setError("No outcomes yet to fill in.");
+      else fill(current);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't load the current values");
+    } finally {
+      setFilling(false);
+    }
+  }
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => () => {
@@ -70,9 +92,9 @@ export function FindingsPanel({ onFinished }: { onFinished: () => void }) {
         <>
           <label className="edit-field">
             <span className="edit-field-label">
-              Paste a review of Pulse (e.g. from your ChatGPT agent). Specific data corrections become proposals below for you to
-              approve. Anything the reviewer says to verify is flagged and kept out of bulk approval. Design and software feedback
-              comes back as a separate list.
+              Paste a review of Pulse (e.g. from your ChatGPT agent), or updates to the Executive Overview in the format below. Specific
+              data corrections become proposals below for you to approve. Anything the reviewer says to verify is flagged and kept out of
+              bulk approval. Design and software feedback comes back as a separate list.
             </span>
             <textarea
               className="edit-input"
@@ -83,6 +105,17 @@ export function FindingsPanel({ onFinished }: { onFinished: () => void }) {
               placeholder="Paste the whole review, or just the sections with corrections."
             />
           </label>
+          {!running && (
+            <>
+              <div className="card-actions">
+                <button type="button" className="decision-btn" disabled={filling} onClick={fillCurrent}>
+                  {filling ? "Loading…" : "Fill in current values"}
+                </button>
+                <span className="muted">Puts every outcome, milestone, risk and decision in the box, ready to edit.</span>
+              </div>
+              <PasteFormatGuide onFill={fill} />
+            </>
+          )}
           {error && <p className="error-inline">{error}</p>}
           <div className="card-actions">
             <button className="decision-btn save" disabled={running || !text.trim()} onClick={handleStart}>

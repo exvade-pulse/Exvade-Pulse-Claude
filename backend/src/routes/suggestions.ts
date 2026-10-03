@@ -6,8 +6,10 @@ import {
   decisions,
   initiatives,
   LIVE_DECISION_STATUSES,
+  milestones,
   objectives,
   projects,
+  risks,
   sources,
   suggestions,
   tasks,
@@ -34,6 +36,8 @@ const CURRENT_STATE_TABLE = {
   project: projects,
   task: tasks,
   decision: decisions,
+  milestone: milestones,
+  risk: risks,
 } as const;
 
 // Batch-fetches the current row for every (targetType, targetId) pair among
@@ -98,6 +102,8 @@ const PARENT_ID_FIELD: Record<string, string> = {
   task: "projectId",
   project: "initiativeId",
   initiative: "objectiveId",
+  milestone: "objectiveId",
+  risk: "objectiveId",
 };
 
 interface BreadcrumbEntry {
@@ -142,7 +148,7 @@ async function loadBreadcrumbs(
     startParentId.set(row.id, parentId);
     if (row.targetType === "task") neededProjectIds.add(parentId);
     else if (row.targetType === "project") neededInitiativeIds.add(parentId);
-    else if (row.targetType === "initiative") neededObjectiveIds.add(parentId);
+    else neededObjectiveIds.add(parentId);
   }
 
   const projectsById = new Map<string, { id: string; title: string; initiativeId: string }>();
@@ -196,7 +202,7 @@ async function loadBreadcrumbs(
       if (initiative) breadcrumb.initiative = { id: initiative.id, title: initiative.title };
       const objective = initiative ? objectivesById.get(initiative.objectiveId) : undefined;
       if (objective) breadcrumb.objective = { id: objective.id, title: objective.title };
-    } else if (row.targetType === "initiative") {
+    } else {
       const objective = objectivesById.get(parentId);
       if (objective) breadcrumb.objective = { id: objective.id, title: objective.title };
     }
@@ -618,6 +624,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
         organizationId: request.user!.organizationId,
         suggestionId: request.params.id,
         reviewerId: request.user!.userId,
+        reviewerRole: request.user!.role,
       });
       reply.send({ suggestion: updated });
     } catch (err) {
@@ -665,6 +672,7 @@ export async function suggestionRoutes(app: FastifyInstance) {
           organizationId,
           suggestionId: id,
           reviewerId: request.user!.userId,
+          reviewerRole: request.user!.role,
         });
         approved.push(updated.id);
       } catch (err) {

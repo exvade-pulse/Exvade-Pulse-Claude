@@ -44,7 +44,7 @@ export interface ContradictionDetail {
 
 export interface Suggestion {
   id: string;
-  targetType: "objective" | "initiative" | "project" | "task" | "decision" | "relationship" | "question";
+  targetType: "objective" | "initiative" | "project" | "task" | "decision" | "relationship" | "question" | "milestone" | "risk";
   targetId: string | null;
   changeType: string;
   proposedDiff: Record<string, unknown>;

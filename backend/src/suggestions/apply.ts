@@ -1,6 +1,7 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database, DbOrTx } from "../db/client.js";
-import { auditLog, dateTypeEnum, initiatives, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, type EntityNodeType, type RelationType } from "../db/schema.js";
+import { auditLog, dateTypeEnum, decisions, initiatives, objectiveHealthEnum, objectiveHealthHistory, objectives, projects, sources, suggestions, tasks, TERMINAL_TASK_STATUSES, users, type EntityNodeType, type ObjectiveHealth, type RelationType, type UserRole } from "../db/schema.js";
+import { createMilestone, createRisk, OverviewError, updateMilestone, updateRisk } from "../overview/manage.js";
 import { createDecision, DecisionError, supersedeDecision, updateDecision } from "../decisions/manage.js";
 import { createRelationship, RelationshipError } from "../relationships/manage.js";
 import { supersedeHierarchy } from "../entities/supersedeHierarchy.js";
@@ -63,6 +64,8 @@ export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decis
   initiative: ["objectiveId", "title"],
   project: ["initiativeId", "title"],
   task: ["projectId", "title"],
+  milestone: ["objectiveId", "title"],
+  risk: ["objectiveId", "title"],
 };
 
 // "decision" and "relationship" are valid suggestion targetTypes but
@@ -75,7 +78,9 @@ export const REQUIRED_CREATE_FIELDS: Record<Exclude<SuggestionTargetType, "decis
 // its own branch in approveSuggestion instead. ALLOWED_FIELDS/
 // pickAllowedFields still cover both, since interpret.ts's sanitization step
 // whitelists every targetType the model may propose.
-export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision" | "relationship" | "question";
+// "milestone" and "risk" (Executive Overview) are also applied by their own
+// branch, through overview/manage.ts, which validates and audit-logs them.
+export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision" | "relationship" | "question" | "milestone" | "risk";
 
 // Whitelists what a proposed_diff may set on each target type, so an AI-authored
 // (or hand-edited) diff can never smuggle in organization_id or other fields the
@@ -85,7 +90,9 @@ export type SuggestionTargetType = keyof typeof TABLE_BY_TARGET_TYPE | "decision
 // responsible", and this is a single free-text field (not a stakeholders
 // array) by scope decision -- see the comment on schema.ts's owner columns.
 export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
-  objective: ["title", "description", "status", "priority", "owner"],
+  // health/healthRationale/rationale/displayOrder feed the Executive
+  // Overview; approving a health change also records its history.
+  objective: ["title", "description", "status", "priority", "owner", "rationale", "health", "healthRationale", "displayOrder"],
   initiative: ["objectiveId", "title", "description", "status", "priority", "owner"],
   project: ["initiativeId", "title", "description", "status", "owner"],
   task: ["projectId", "title", "description", "status", "latestUpdate", "nextAction", "owner", "dueDate", "dueDateType", "dueLabel", "waitingFor", "followUpOn"],
@@ -98,7 +105,12 @@ export const ALLOWED_FIELDS: Record<SuggestionTargetType, string[]> = {
     "stakeholders",
     "dueDate",
     "relatedTaskId",
+    "objectiveId",
+    "recommendation",
+    "impactOfDelay",
   ],
+  milestone: ["objectiveId", "title", "successCriteria", "owner", "baselineDate", "forecastDate", "actualDate", "confidence", "state"],
+  risk: ["objectiveId", "milestoneId", "title", "impact", "likelihood", "mitigation", "owner", "nextReviewAt", "escalation", "status"],
   relationship: ["fromType", "fromId", "toType", "toId", "relationType", "note"],
   question: ["objectiveId", "title", "hypothesis", "decisionIds", "taskIds", "projectIds", "convertDecisionId", "newDecisions", "label", "nextAction", "keyDependency", "owner"],
 };
@@ -238,6 +250,20 @@ interface ApplyParams {
   organizationId: string;
   suggestionId: string;
   reviewerId: string;
+  // Some approvals are admin-only (moving a milestone's committed
+  // baseline); unknown means the stricter "member".
+  reviewerRole?: UserRole;
+}
+
+// A decision's overview link must point at a live objective in this org.
+async function assertLiveObjective(tx: DbOrTx, organizationId: string, id: unknown) {
+  if (id === null || id === undefined) return;
+  if (typeof id !== "string" || !UUID.test(id)) throw new SuggestionApplyError("That outcome wasn't found");
+  const [row] = await tx
+    .select({ id: objectives.id })
+    .from(objectives)
+    .where(and(eq(objectives.id, id), eq(objectives.organizationId, organizationId), inArray(objectives.status, ["active", "paused"])));
+  if (!row) throw new SuggestionApplyError("That outcome wasn't found");
 }
 
 export async function approveSuggestion(db: Database, params: ApplyParams) {
@@ -414,6 +440,22 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         }
         throw err;
       }
+    } else if (targetType === "milestone" || targetType === "risk") {
+      const actor = { organizationId: params.organizationId, actorId: params.reviewerId, role: params.reviewerRole ?? ("member" as const) };
+      try {
+        const row =
+          targetType === "milestone"
+            ? suggestion.targetId
+              ? await updateMilestone(tx, actor, suggestion.targetId, fields)
+              : await createMilestone(tx, actor, fields)
+            : suggestion.targetId
+              ? await updateRisk(tx, actor, suggestion.targetId, fields)
+              : await createRisk(tx, actor, fields);
+        resultTargetId = row.id;
+      } catch (err) {
+        if (err instanceof OverviewError) throw new SuggestionApplyError(err.message);
+        throw err;
+      }
     } else if (targetType === "decision") {
       const diff = fields as {
         title?: string;
@@ -424,7 +466,11 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         stakeholders?: string[];
         dueDate?: string;
         relatedTaskId?: string;
+        objectiveId?: string | null;
+        recommendation?: string | null;
+        impactOfDelay?: string | null;
       };
+      if ("objectiveId" in fields) await assertLiveObjective(tx, params.organizationId, diff.objectiveId);
 
       if (suggestion.targetId === null) {
         // Delegating to createDecision (rather than a generic insert here) keeps
@@ -452,6 +498,10 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
           // already carries the real source it came from.
           sourceId: suggestion.sourceId,
         });
+        const overviewFields = Object.fromEntries(
+          (["objectiveId", "recommendation", "impactOfDelay"] as const).filter((k) => k in fields).map((k) => [k, diff[k] ?? null]),
+        );
+        if (Object.keys(overviewFields).length > 0) await tx.update(decisions).set(overviewFields).where(eq(decisions.id, decision.id));
         resultTargetId = decision.id;
       } else {
         // A decision-shaped follow-up matched to an already-open decision (see
@@ -471,6 +521,9 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         if ("stakeholders" in fields) updateFields.stakeholders = diff.stakeholders ?? [];
         if ("dueDate" in fields) updateFields.dueDate = diff.dueDate ? new Date(diff.dueDate) : null;
         if ("relatedTaskId" in fields) updateFields.relatedTaskId = diff.relatedTaskId ?? null;
+        if ("objectiveId" in fields) updateFields.objectiveId = diff.objectiveId ?? null;
+        if ("recommendation" in fields) updateFields.recommendation = diff.recommendation ?? null;
+        if ("impactOfDelay" in fields) updateFields.impactOfDelay = diff.impactOfDelay ?? null;
 
         const decision = await updateDecision(tx, {
           organizationId: params.organizationId,
@@ -565,6 +618,28 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
         }
       }
 
+      // A health change on an outcome is an assessment: it needs a reason,
+      // is stamped with who approved it and when, and goes into the history.
+      let healthChange: { health: ObjectiveHealth; rationale: string | null; by: string } | null = null;
+      if (targetType === "objective") {
+        if ("displayOrder" in fields) {
+          const n = fields.displayOrder === null ? null : Number(fields.displayOrder);
+          if (n !== null && !Number.isInteger(n)) throw new SuggestionApplyError("Display order must be a whole number");
+          fields.displayOrder = n;
+        }
+        if ("health" in fields) {
+          const health = fields.health as ObjectiveHealth;
+          if (!objectiveHealthEnum.enumValues.includes(health)) throw new SuggestionApplyError(`Health must be one of: ${objectiveHealthEnum.enumValues.join(", ")}`);
+          const rationale = typeof fields.healthRationale === "string" && fields.healthRationale.trim() ? fields.healthRationale.trim() : null;
+          if (health !== "not_assessed" && !rationale) throw new SuggestionApplyError("A health assessment needs a one-line reason");
+          const [me] = await tx.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, params.reviewerId));
+          healthChange = { health, rationale, by: me?.name || me?.email || "Reviewer" };
+          fields.healthRationale = rationale;
+          fields.healthAssessedAt = new Date();
+          fields.healthAssessedBy = healthChange.by;
+        }
+      }
+
       if (suggestion.targetId) {
         const setClause: Record<string, unknown> = { ...fields, updatedAt: new Date() };
         if (evidencePatch) {
@@ -585,6 +660,16 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
           throw new SuggestionApplyError("Target row not found or not in this organization");
         }
         resultTargetId = updated.id;
+        if (healthChange) {
+          await tx.insert(objectiveHealthHistory).values({
+            organizationId: params.organizationId,
+            objectiveId: updated.id,
+            health: healthChange.health,
+            rationale: healthChange.rationale,
+            assessedBy: healthChange.by,
+            source: "review",
+          });
+        }
       } else {
         const missing = REQUIRED_CREATE_FIELDS[targetType].filter((key) => !(key in fields));
         if (missing.length > 0) {

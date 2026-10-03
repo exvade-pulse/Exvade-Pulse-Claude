@@ -5,7 +5,7 @@ import { formatDueDate } from "./dates";
 // elsewhere (the "Proposes new X" / "Updates existing X" line on a suggestion
 // card, or a task's own breadcrumb). newParent (a destination named in Edit)
 // shows on the card's "Moving to" line instead.
-export const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId", "newParent"]);
+export const HIDDEN_DIFF_KEYS = new Set(["objectiveId", "initiativeId", "projectId", "milestoneId", "newParent"]);
 
 
 // Plain-language names instead of raw field names.
@@ -25,7 +25,28 @@ const FIELD_LABEL: Record<string, string> = {
   dueDate: "Due date",
   relatedTaskId: "Related task",
   supersededById: "Merge into",
+  // Executive Overview fields
+  health: "Health",
+  healthRationale: "Why (health)",
+  rationale: "Why it matters",
+  displayOrder: "Position on overview",
+  recommendation: "Recommendation",
+  impactOfDelay: "If delayed",
+  successCriteria: "Done when",
+  baselineDate: "Baseline date",
+  forecastDate: "Forecast date",
+  actualDate: "Achieved on",
+  confidence: "Date confidence",
+  state: "State",
+  impact: "Impact",
+  likelihood: "Likelihood",
+  mitigation: "Mitigation",
+  nextReviewAt: "Next review",
+  escalation: "Escalation",
 };
+
+const DATE_KEYS = new Set(["dueDate", "baselineDate", "forecastDate", "actualDate", "nextReviewAt", "followUpOn"]);
+const ENUM_KEYS = new Set(["status", "health", "confidence", "state", "escalation"]);
 
 const label = (key: string) => FIELD_LABEL[key] ?? key;
 
@@ -44,8 +65,8 @@ export function formatDiff(diff: Record<string, unknown>): string {
 
 function formatDiffValue(value: unknown, key?: string): string {
   if (value === null || value === undefined || value === "") return "(empty)";
-  if (key === "dueDate" && typeof value === "string" && !Number.isNaN(Date.parse(value))) return formatDueDate(value);
-  if (key === "status" && typeof value === "string") return value.replace(/_/g, " ");
+  if (key && DATE_KEYS.has(key) && typeof value === "string" && !Number.isNaN(Date.parse(value))) return formatDueDate(value);
+  if (key && ENUM_KEYS.has(key) && typeof value === "string") return value.replace(/_/g, " ");
   return Array.isArray(value) ? value.join(", ") : String(value);
 }
 

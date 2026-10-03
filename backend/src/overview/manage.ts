@@ -91,7 +91,7 @@ async function audit(tx: DbOrTx, a: Actor, action: string, entityType: string, e
 
 // --- Outcomes ---------------------------------------------------------------
 
-export async function updateOutcome(db: Database, a: Actor, objectiveId: string, body: Record<string, unknown>) {
+export async function updateOutcome(db: DbOrTx, a: Actor, objectiveId: string, body: Record<string, unknown>) {
   const fields = defined({
     rationale: text(body.rationale, "Rationale", { max: 600 }),
     owner: text(body.owner, "Owner", { max: 200 }),
@@ -113,7 +113,7 @@ export async function updateOutcome(db: Database, a: Actor, objectiveId: string,
 const CONFIDENCE = milestoneConfidenceEnum.enumValues;
 const STATE = milestoneStateEnum.enumValues;
 
-export async function createMilestone(db: Database, a: Actor, body: Record<string, unknown>) {
+export async function createMilestone(db: DbOrTx, a: Actor, body: Record<string, unknown>) {
   const values = {
     title: text(body.title, "Title", { required: true, max: 300 })!,
     successCriteria: text(body.successCriteria, "Success criteria"),
@@ -136,7 +136,7 @@ export async function createMilestone(db: Database, a: Actor, body: Record<strin
 // The baseline is the committed plan: anyone may set the first one, but
 // moving it afterwards is an admin call, so a slip shows against it instead
 // of quietly rewriting the plan.
-export async function updateMilestone(db: Database, a: Actor, milestoneId: string, body: Record<string, unknown>) {
+export async function updateMilestone(db: DbOrTx, a: Actor, milestoneId: string, body: Record<string, unknown>) {
   const fields = defined({
     title: body.title === undefined ? undefined : (text(body.title, "Title", { required: true, max: 300 }) as string),
     successCriteria: text(body.successCriteria, "Success criteria"),
@@ -171,7 +171,7 @@ function pick(row: Record<string, unknown>, keys: string[]) {
 
 const LINK_TABLE = { task: tasks, decision: decisions, project: projects } as const;
 
-export async function linkMilestone(db: Database, a: Actor, milestoneId: string, body: Record<string, unknown>) {
+export async function linkMilestone(db: DbOrTx, a: Actor, milestoneId: string, body: Record<string, unknown>) {
   const entityType = oneOf(body.entityType, ["task", "decision", "project"] as const, "Link type");
   const entityId = body.entityId;
   if (!entityType || typeof entityId !== "string" || !UUID.test(entityId)) throw new OverviewError("Choose a task, decision or project to link");
@@ -188,7 +188,7 @@ export async function linkMilestone(db: Database, a: Actor, milestoneId: string,
 }
 
 // Removes the link only; the linked record is untouched.
-export async function unlinkMilestone(db: Database, a: Actor, milestoneId: string, linkId: string) {
+export async function unlinkMilestone(db: DbOrTx, a: Actor, milestoneId: string, linkId: string) {
   if (!UUID.test(milestoneId) || !UUID.test(linkId)) throw new OverviewError("Link not found", 404);
   return db.transaction(async (tx) => {
     const [gone] = await tx
@@ -225,7 +225,7 @@ function riskFields(body: Record<string, unknown>) {
   };
 }
 
-export async function createRisk(db: Database, a: Actor, body: Record<string, unknown>) {
+export async function createRisk(db: DbOrTx, a: Actor, body: Record<string, unknown>) {
   const title = text(body.title, "Title", { required: true, max: 300 })!;
   const fields = riskFields(body);
   return db.transaction(async (tx) => {
@@ -238,7 +238,7 @@ export async function createRisk(db: Database, a: Actor, body: Record<string, un
   });
 }
 
-export async function updateRisk(db: Database, a: Actor, riskId: string, body: Record<string, unknown>) {
+export async function updateRisk(db: DbOrTx, a: Actor, riskId: string, body: Record<string, unknown>) {
   if (!UUID.test(riskId)) throw new OverviewError("Risk not found", 404);
   return db.transaction(async (tx) => {
     const [existing] = await tx.select().from(risks).where(and(eq(risks.id, riskId), eq(risks.organizationId, a.organizationId)));
@@ -258,7 +258,7 @@ export async function updateRisk(db: Database, a: Actor, riskId: string, body: R
 
 // --- Decisions --------------------------------------------------------------
 
-export async function updateDecisionForOverview(db: Database, a: Actor, decisionId: string, body: Record<string, unknown>) {
+export async function updateDecisionForOverview(db: DbOrTx, a: Actor, decisionId: string, body: Record<string, unknown>) {
   if (!UUID.test(decisionId)) throw new OverviewError("Decision not found", 404);
   const fields = defined({
     recommendation: text(body.recommendation, "Recommendation"),

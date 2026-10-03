@@ -186,11 +186,13 @@ describe("POST /api/reviews/findings", () => {
 
   it("files a task moved into an initiative, and reports what it couldn't act on instead of dropping it", async () => {
     const fixture = await createFixtureOrg(db, { domain: "findings-initiative.test" });
+    const [otherInitiative] = await db.insert(initiatives).values({ organizationId: fixture.org.id, objectiveId: fixture.objective.id, title: "Other" }).returning();
+    const [elsewhere] = await db.insert(projects).values({ organizationId: fixture.org.id, initiativeId: otherInitiative.id, title: "Elsewhere" }).returning();
     const [a, b] = await db
       .insert(tasks)
       .values([
         { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Kessel kickoff" },
-        { organizationId: fixture.org.id, projectId: fixture.project.id, title: "Grant report" },
+        { organizationId: fixture.org.id, projectId: elsewhere.id, title: "Grant report" },
       ])
       .returning();
     // fixture.initiative holds exactly one project; this one holds none.
