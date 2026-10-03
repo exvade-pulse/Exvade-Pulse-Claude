@@ -84,6 +84,63 @@ summary:focus-visible {
   text-decoration: underline;
 }
 
+/* The page you're on, and the menu that holds it. */
+.nav .nav-current {
+  font-weight: 700;
+}
+
+.nav-group {
+  position: relative;
+}
+
+.nav-group-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #3730a3;
+  cursor: pointer;
+}
+
+.nav-group-btn span {
+  font-size: 10px;
+}
+
+.nav-group-btn:hover {
+  text-decoration: underline;
+}
+
+.nav-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -10px;
+  z-index: 20;
+  min-width: 170px;
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
+}
+
+.nav-menu-right {
+  left: auto;
+  right: -10px;
+}
+
+.nav-menu a {
+  display: block;
+  padding: 6px 14px;
+}
+
+.nav-menu a:hover,
+.nav-menu a:focus-visible {
+  background: var(--accent-soft);
+  text-decoration: none;
+}
+
 .nav-search {
   margin-left: auto;
   display: flex;
