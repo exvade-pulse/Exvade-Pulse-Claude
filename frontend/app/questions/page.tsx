@@ -318,9 +318,17 @@ export default function QuestionsPage() {
     setSuggestResult(null);
     try {
       const r = await suggestQuestions();
+      const why = [
+        r.skipped?.noAnswer && "the AI didn't return an answer this time (try again)",
+        r.skipped?.alreadyExists && `${r.skipped.alreadyExists} matched a question that already exists or is waiting in Review`,
+        r.skipped?.tooFewLinks && `${r.skipped.tooFewLinks} linked fewer than two decisions or tasks`,
+        r.skipped?.malformed && `${r.skipped.malformed} came back incomplete`,
+        r.skipped?.unknownObjective && `${r.skipped.unknownObjective} named an outcome that wasn't found`,
+      ].filter(Boolean);
+      const pending = r.alreadyPending ? ` ${r.alreadyPending} suggested question${r.alreadyPending === 1 ? " is" : "s are"} already waiting in Review.` : "";
       setSuggestResult(
         r.questionsProposed === 0
-          ? "No new questions suggested."
+          ? `No new questions suggested${why.length ? `: ${why.join("; ")}` : " (the AI found no new strategic questions)"}.${pending}`
           : `${r.questionsProposed} question${r.questionsProposed === 1 ? "" : "s"} suggested${
               r.conversionsProposed ? ` (${r.conversionsProposed} from over-broad decisions)` : ""
             }. They're waiting in Review for your approval.`,

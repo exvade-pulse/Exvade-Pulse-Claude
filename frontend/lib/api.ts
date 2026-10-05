@@ -961,7 +961,14 @@ export const linkToQuestion = (id: string, entityType: QuestionLinkType, entityI
 export const unlinkFromQuestion = (id: string, entityType: QuestionLinkType, entityId: string) =>
   jsonRequest<{ ok: true }>(`/api/questions/${id}/links/${entityType}/${entityId}`, "DELETE");
 export const suggestQuestions = () =>
-  jsonRequest<{ objectivesChecked: number; questionsProposed: number; conversionsProposed: number }>("/api/questions/suggest", "POST");
+  jsonRequest<{
+    objectivesChecked: number;
+    questionsProposed: number;
+    conversionsProposed: number;
+    alreadyPending?: number;
+    existingQuestions?: number;
+    skipped?: { noAnswer: boolean; malformed: number; unknownObjective: number; alreadyExists: number; tooFewLinks: number };
+  }>("/api/questions/suggest", "POST");
 
 export interface CompanyContextResponse {
   content: string;

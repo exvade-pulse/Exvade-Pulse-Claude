@@ -21,6 +21,16 @@ export interface ProposedQuestion extends QuestionProposal {
   confidence: number;
 }
 
+// Why a proposed question didn't become a suggestion, so "none suggested"
+// can say why instead of looking like nothing happened.
+export interface QuestionSkips {
+  noAnswer: boolean;
+  malformed: number;
+  unknownObjective: number;
+  alreadyExists: number;
+  tooFewLinks: number;
+}
+
 const proposalSchema = z.object({
   objectiveId: z.string().uuid(),
   title: z.string().min(1),
@@ -29,11 +39,13 @@ const proposalSchema = z.object({
   nextAction: z.string().nullable().optional(),
   keyDependency: z.string().nullable().optional(),
   owner: z.string().nullable().optional(),
-  decisionIds: z.array(z.string().uuid()).optional(),
-  taskIds: z.array(z.string().uuid()).optional(),
-  projectIds: z.array(z.string().uuid()).optional(),
-  convertDecisionId: z.string().uuid().nullable().optional(),
-  newDecisions: z.array(z.object({ title: z.string().min(1), decider: z.string().nullable().optional() })).optional(),
+  // Lists may come back as null or with stray non-id entries; both are
+  // tidied below rather than rejecting the whole question.
+  decisionIds: z.array(z.string()).nullable().optional(),
+  taskIds: z.array(z.string()).nullable().optional(),
+  projectIds: z.array(z.string()).nullable().optional(),
+  convertDecisionId: z.string().nullable().optional(),
+  newDecisions: z.array(z.object({ title: z.string().min(1), decider: z.string().nullable().optional() })).nullable().optional(),
   reasoning: z.string().min(1),
   confidence: z.number().min(0).max(1),
 });
@@ -121,8 +133,12 @@ Only use ids from the lists above.`;
 // objective or record, repeating an existing question, converting a decision
 // that isn't open (or converting the same one twice), or linking fewer
 // than two records.
-export async function proposeQuestions(ctx: QuestionContext, claudeClient: ClaudeClient = getClaudeClient()): Promise<ProposedQuestion[]> {
-  if (ctx.objectives.length === 0) return [];
+export async function proposeQuestions(
+  ctx: QuestionContext,
+  claudeClient: ClaudeClient = getClaudeClient(),
+): Promise<{ proposals: ProposedQuestion[]; skipped: QuestionSkips }> {
+  const skipped: QuestionSkips = { noAnswer: false, malformed: 0, unknownObjective: 0, alreadyExists: 0, tooFewLinks: 0 };
+  if (ctx.objectives.length === 0) return { proposals: [], skipped };
   const response = await claudeClient.createMessage({
     model: QUESTION_MODEL,
     max_tokens: 8000,
@@ -133,9 +149,19 @@ export async function proposeQuestions(ctx: QuestionContext, claudeClient: Claud
     messages: [{ role: "user", content: buildPrompt(ctx) }],
   });
   const toolUse = response.content.find((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
-  if (!toolUse) return [];
-  const parsed = z.object({ questions: z.array(proposalSchema) }).safeParse(toolUse.input);
-  if (!parsed.success) return [];
+  const raw = (toolUse?.input as { questions?: unknown } | undefined)?.questions;
+  if (!Array.isArray(raw)) {
+    skipped.noAnswer = true;
+    return { proposals: [], skipped };
+  }
+  // Each question is checked on its own: one malformed entry no longer
+  // throws away the rest.
+  const questions: Array<z.infer<typeof proposalSchema>> = [];
+  for (const item of raw) {
+    const one = proposalSchema.safeParse(item);
+    if (one.success) questions.push(one.data);
+    else skipped.malformed++;
+  }
 
   const objectiveIds = new Set(ctx.objectives.map((o) => o.id));
   const decisionIds = new Set(ctx.decisions.map((d) => d.id));
@@ -145,10 +171,16 @@ export async function proposeQuestions(ctx: QuestionContext, claudeClient: Claud
   const converted = new Set<string>();
 
   const result: ProposedQuestion[] = [];
-  for (const q of parsed.data.questions) {
-    if (!objectiveIds.has(q.objectiveId)) continue;
+  for (const q of questions) {
+    if (!objectiveIds.has(q.objectiveId)) {
+      skipped.unknownObjective++;
+      continue;
+    }
     const tokens = titleTokens(q.title);
-    if (seenTitles.some((t) => titleSimilarity(t, tokens) >= LIKELY_DUPLICATE_THRESHOLD)) continue;
+    if (seenTitles.some((t) => titleSimilarity(t, tokens) >= LIKELY_DUPLICATE_THRESHOLD)) {
+      skipped.alreadyExists++;
+      continue;
+    }
 
     let convertDecisionId = q.convertDecisionId ?? null;
     if (convertDecisionId && (!decisionIds.has(convertDecisionId) || converted.has(convertDecisionId))) convertDecisionId = null;
@@ -160,7 +192,10 @@ export async function proposeQuestions(ctx: QuestionContext, claudeClient: Claud
     const linkedProjects = [...new Set(q.projectIds ?? [])].filter((id) => projectIds.has(id));
     // A question wrapping a single record is just that record; it needs at
     // least two things feeding it (or to be a conversion of a broad decision).
-    if (!convertDecisionId && linkedDecisions.length + linkedTasks.length + linkedProjects.length < 2) continue;
+    if (!convertDecisionId && linkedDecisions.length + linkedTasks.length + linkedProjects.length < 2) {
+      skipped.tooFewLinks++;
+      continue;
+    }
 
     if (convertDecisionId) converted.add(convertDecisionId);
     seenTitles.push(tokens);
@@ -181,5 +216,5 @@ export async function proposeQuestions(ctx: QuestionContext, claudeClient: Claud
       confidence: q.confidence,
     });
   }
-  return result;
+  return { proposals: result, skipped };
 }

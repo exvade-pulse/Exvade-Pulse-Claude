@@ -307,7 +307,8 @@ export async function questionRoutes(app: FastifyInstance) {
   app.post("/api/questions/suggest", async (request, reply) => {
     const organizationId = request.user!.organizationId;
     const context = await loadQuestionContext(organizationId);
-    const proposals = await proposeQuestions(context, await getContextualClaudeClient(db, organizationId));
+    const existingCount = (await db.select({ id: strategicQuestions.id }).from(strategicQuestions).where(eq(strategicQuestions.organizationId, organizationId))).length;
+    const { proposals, skipped } = await proposeQuestions(context, await getContextualClaudeClient(db, organizationId));
     if (proposals.length > 0) {
       const [source] = await db
         .insert(sources)
@@ -336,6 +337,10 @@ export async function questionRoutes(app: FastifyInstance) {
       objectivesChecked: context.objectives.length,
       questionsProposed: proposals.length,
       conversionsProposed: proposals.filter((p) => p.convertDecisionId).length,
+      // Questions already waiting in Review (they aren't suggested twice).
+      alreadyPending: context.existingQuestions.length - existingCount,
+      existingQuestions: existingCount,
+      skipped,
     });
   });
 }

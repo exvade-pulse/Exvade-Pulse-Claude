@@ -82,11 +82,16 @@ describe("proposeQuestions", () => {
             { ...base, title: "Just one decision?", decisionIds: [DEC] },
             { ...base, title: "Which clinical use case and exit path?", convertDecisionId: BROAD, newDecisions: [{ title: "Which use case first?" }, { title: "Which exit path?", decider: "Board" }] },
             { ...base, title: "Exit path again?", convertDecisionId: BROAD, newDecisions: [{ title: "x" }] },
+            // Malformed: dropped on its own, without losing the others.
+            { ...base, title: 5 },
+            // Lists given as null are fine.
+            { ...base, title: "Can we hit volume targets?", decisionIds: [DEC], taskIds: [TASK], projectIds: null, newDecisions: null },
           ],
         }),
     };
-    const result = await proposeQuestions(context, fake);
-    expect(result.map((q) => q.title)).toEqual(["Can we sample reliably enough?", "Which clinical use case and exit path?"]);
+    const { proposals: result, skipped } = await proposeQuestions(context, fake);
+    expect(result.map((q) => q.title)).toEqual(["Can we sample reliably enough?", "Which clinical use case and exit path?", "Can we hit volume targets?"]);
+    expect(skipped).toEqual({ noAnswer: false, malformed: 1, unknownObjective: 1, alreadyExists: 1, tooFewLinks: 3 });
     expect(result[0]).toMatchObject({ decisionIds: [DEC], taskIds: [TASK], hypothesis: "Yes at 18G", convertDecisionId: null, newDecisions: [] });
     expect(result[1]).toMatchObject({
       convertDecisionId: BROAD,
@@ -220,7 +225,7 @@ describe("question routes", () => {
     });
     const response = await app.inject({ method: "POST", url: "/api/questions/suggest", cookies: await cookieFor(fixture) });
     setClaudeClientForTesting(undefined);
-    expect(response.json()).toEqual({ objectivesChecked: 1, questionsProposed: 2, conversionsProposed: 1 });
+    expect(response.json()).toMatchObject({ objectivesChecked: 1, questionsProposed: 2, conversionsProposed: 1, alreadyPending: 0, existingQuestions: 0, skipped: { noAnswer: false } });
     expect(await db.select().from(strategicQuestions)).toHaveLength(0);
 
     const list = await app.inject({ method: "GET", url: "/api/suggestions", cookies: await cookieFor(fixture) });
