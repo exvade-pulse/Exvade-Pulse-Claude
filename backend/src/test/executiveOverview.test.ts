@@ -49,6 +49,39 @@ function milestone(id: string, objectiveId: string, over: Partial<OverviewInput[
 
 const empty: OverviewInput = { objectives: [], history: [], milestones: [], milestoneBlockers: [], decisions: [], risks: [], snapshot: null };
 
+describe("computeOverview deadlines and evidence dates", () => {
+  it("lists overdue and next-45-day dates soonest first, with how firm each is, and dates evidence by source not edits", () => {
+    const view = computeOverview(
+      {
+        ...empty,
+        objectives: [objective("o1", { displayOrder: 1 }), objective("o2", { displayOrder: 2 })],
+        milestones: [
+          milestone("m-soon", "o1", { baselineDate: day("2026-10-20"), confidence: "committed" }),
+          milestone("m-far", "o1", { forecastDate: day("2027-02-01") }),
+          milestone("m-done", "o1", { baselineDate: day("2026-10-10"), actualDate: day("2026-10-09"), state: "achieved" }),
+        ],
+        decisions: [{ id: "d1", title: "Engage ORAQ?", decider: "Sean", dueDate: day("2026-09-30"), objectiveId: "o2", recommendation: null, impactOfDelay: null }],
+        openTasks: [
+          { id: "t1", title: "Staging review", objectiveId: "o2", owner: null, dueDate: day("2026-10-26"), dueDateType: "estimated", dueLabel: "Vendor target", evidenceAt: day("2026-10-14") },
+          { id: "t2", title: "Undated", objectiveId: "o1", owner: "Don", dueDate: null, dueDateType: null, dueLabel: null, evidenceAt: day("2026-10-01") },
+          { id: "t3", title: "Late", objectiveId: "o1", owner: "Don", dueDate: day("2027-03-01"), dueDateType: "planned", dueLabel: null, evidenceAt: null },
+        ],
+        latestSourceAt: new Date("2026-10-15T13:00:00Z"),
+      },
+      NOW,
+    );
+    expect(view.deadlines.map((d) => [d.kind, d.id, d.daysAway, d.confidence])).toEqual([
+      ["decision", "d1", -2, "decide-by date"],
+      ["milestone", "m-soon", 18, "committed"],
+      ["task", "t1", 24, "estimated"],
+    ]);
+    expect(view.deadlineTotal).toBe(3);
+    expect(view.deadlines[2]).toMatchObject({ label: "Vendor target", owner: null, objectiveId: "o2" });
+    expect(view.outcomes.map((o) => o.evidenceThrough)).toEqual(["2026-10-01", "2026-10-14"]);
+    expect(view.evidenceThrough).toBe("2026-10-15");
+  });
+});
+
 describe("computeOverview", () => {
   it("orders outcomes by display order, then creation, and never treats a missing assessment as on track or stale", () => {
     const view = computeOverview(

@@ -26,6 +26,19 @@ export interface Outcome {
   undatedMilestones: number;
   openRisks: number;
   decisionsNeeded: number;
+  evidenceThrough: string | null;
+}
+
+export interface Deadline {
+  kind: "decision" | "milestone" | "task";
+  id: string;
+  title: string;
+  label: string | null;
+  date: string;
+  daysAway: number;
+  confidence: string;
+  objectiveId: string | null;
+  owner: string | null;
 }
 
 export interface AttentionItem {
@@ -81,6 +94,9 @@ export interface ExecutiveOverview {
   changes: Array<{ kind: "health" | "milestone_date" | "milestone_state"; title: string; before: string | null; after: string | null; objectiveId: string | null }> | null;
   topRisks: OverviewRisk[];
   openRiskTotal: number;
+  deadlines: Deadline[];
+  deadlineTotal: number;
+  evidenceThrough: string | null;
 }
 
 export interface MilestoneDetail {

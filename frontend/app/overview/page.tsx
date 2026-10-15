@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { fetchCurrentUser, type SessionUser } from "../../lib/api";
-import { fetchOverview, type ExecutiveOverview } from "../../lib/overview";
+import { fetchOverview, formatDay, type ExecutiveOverview } from "../../lib/overview";
 import { Nav } from "../components/Nav";
-import { AttentionList, MaterialChanges, NarrativePanel, OutcomeCard, TopRisks } from "../components/overview/Parts";
+import { AttentionList, DeadlinesStrip, MaterialChanges, NarrativePanel, OutcomeCard, TopRisks } from "../components/overview/Parts";
 import { StrategicRoadmap } from "../components/overview/Roadmap";
 
 // The Executive Overview: for someone who checks in every few weeks. Where
@@ -52,7 +52,11 @@ export default function OverviewPage() {
         <div>
           <h1 className="xo-h1">Executive overview</h1>
           <p className="xo-sub">
-            {overview ? `As of ${new Date(overview.asOf).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}` : "Loading…"}
+            {overview
+              ? `As of ${new Date(overview.asOf).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })} · ${
+                  overview.evidenceThrough ? `evidence through ${formatDay(overview.evidenceThrough)}` : "no sources received yet"
+                }`
+              : "Loading…"}
           </p>
         </div>
         <Link className="xo-more" href="/executive">
@@ -77,6 +81,8 @@ export default function OverviewPage() {
             <NarrativePanel overview={overview} canPublish={user.role === "admin" && !user.readOnly} onPublished={load} />
             <AttentionList items={overview.attention} total={overview.attentionTotal} />
           </div>
+
+          <DeadlinesStrip overview={overview} />
 
           <section aria-labelledby="xo-outcomes">
             <h2 className="xo-label" id="xo-outcomes">

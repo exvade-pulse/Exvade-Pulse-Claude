@@ -6,6 +6,7 @@ import { authorizedUsers, decisions, initiatives, objectives, projects, sources,
 import { buildApp } from "../app.js";
 import { signSession, SESSION_COOKIE_NAME } from "../auth/jwt.js";
 import { buildExecutiveReviewData } from "../reports/executiveReview.js";
+import { buildDashboard } from "../reports/dashboard.js";
 
 const { db, client } = testDb();
 
@@ -81,6 +82,35 @@ describe("Operating Detail ranking", () => {
     const data = await buildExecutiveReviewData(f.org.id, "admin");
     expect(data.workstreams.map((w) => w.objective)).toEqual(["Funding", "Reliable sampling"]);
     expect(data.workstreams[0]).toMatchObject({ objectiveOrder: 1, project: "Marcus report" });
+  });
+
+  it("groups every open task under its outcome into blocked, mine, waiting and team, in outcome order with Unsorted last", async () => {
+    const f = await createFixtureOrg(db, { domain: "work-by-outcome.test" });
+    await db.update(objectives).set({ title: "Reliable sampling", displayOrder: 2 }).where(eq(objectives.id, f.objective.id));
+    const [first] = await db.insert(objectives).values({ organizationId: f.org.id, title: "Funding", displayOrder: 1 }).returning();
+    const [ini] = await db.insert(initiatives).values({ organizationId: f.org.id, objectiveId: first.id, title: "Grants" }).returning();
+    const [proj] = await db.insert(projects).values({ organizationId: f.org.id, initiativeId: ini.id, title: "Marcus report" }).returning();
+    const [triageObj] = await db.insert(objectives).values({ organizationId: f.org.id, title: "Unsorted / Needs Triage" }).returning();
+    const [triageIni] = await db.insert(initiatives).values({ organizationId: f.org.id, objectiveId: triageObj.id, title: "Unsorted" }).returning();
+    const [triage] = await db.insert(projects).values({ organizationId: f.org.id, initiativeId: triageIni.id, title: "Unsorted / Needs Triage" }).returning();
+    await db.insert(tasks).values([
+      { organizationId: f.org.id, projectId: proj.id, title: "Reconcile report", status: "active", owner: "Test Reviewer" },
+      { organizationId: f.org.id, projectId: proj.id, title: "Await P&L", status: "active", owner: "Idean", waitingFor: "Accounting" },
+      { organizationId: f.org.id, projectId: f.project.id, title: "Needle test", status: "blocked", owner: "Test Reviewer" },
+      { organizationId: f.org.id, projectId: f.project.id, title: "Assay", status: "active", owner: "Vidya" },
+      { organizationId: f.org.id, projectId: f.project.id, title: "Old", status: "completed", owner: "Vidya" },
+      { organizationId: f.org.id, projectId: triage.id, title: "Website", status: "active" },
+    ]);
+    const data = await buildExecutiveReviewData(f.org.id, "admin");
+    const dash = await buildDashboard(f.org.id, data, { userId: f.user.id, name: "Test Reviewer", email: f.user.email, role: "member" }, null);
+    const titles = (rows: Array<{ title: string }>) => rows.map((r) => r.title);
+    expect(dash.workByOutcome.map((g) => g.objective)).toEqual(["Funding", "Reliable sampling", "Unsorted / Needs Triage"]);
+    const [funding, sampling, unsorted] = dash.workByOutcome;
+    expect([titles(funding.mine), titles(funding.waiting), titles(funding.team), titles(funding.blocked)]).toEqual([["Reconcile report"], ["Await P&L"], [], []]);
+    expect(funding.waiting[0]).toMatchObject({ waitingOn: "Accounting", owner: "Idean" });
+    // Blocked wins over "mine"; completed work isn't listed.
+    expect([titles(sampling.blocked), titles(sampling.mine), titles(sampling.team), sampling.total]).toEqual([["Needle test"], [], ["Assay"], 2]);
+    expect(unsorted.team[0]).toMatchObject({ title: "Website", owner: null, dueDate: null });
   });
 
   it("lists a decision's recommendation, cost of delay and outcome", async () => {

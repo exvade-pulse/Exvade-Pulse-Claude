@@ -1081,6 +1081,30 @@ export interface ReviewContradiction {
   correctedValue: string;
 }
 
+export interface WorkRow {
+  id: string;
+  title: string;
+  project: string;
+  status: string;
+  owner: string | null;
+  nextAction: string | null;
+  nextActionStale: boolean;
+  waitingOn: string | null;
+  dueDate: string | null;
+  dueDateType: "confirmed" | "planned" | "estimated" | null;
+  dueLabel: string | null;
+}
+
+export interface OutcomeWork {
+  objective: string;
+  objectiveOrder: number | null;
+  mine: WorkRow[];
+  team: WorkRow[];
+  waiting: WorkRow[];
+  blocked: WorkRow[];
+  total: number;
+}
+
 export interface ExecutiveReviewData {
   generatedAt: string;
   // Null until the viewer first marks the review as reviewed.
@@ -1153,6 +1177,7 @@ export interface Dashboard {
   since: string;
   strategySetupIncomplete: boolean;
   priorities: DashboardPriority[];
+  workByOutcome: OutcomeWork[];
   unlinkedWorkstreams: DashboardPriority[];
   unsortedTasks: number;
   whatChanged: DashboardChange[];

@@ -10,6 +10,7 @@ import {
   publishOverview,
   TREND_LABEL,
   type AttentionItem,
+  type Deadline,
   type ExecutiveOverview,
   type Health,
   type Outcome,
@@ -88,6 +89,10 @@ export function OutcomeCard({ outcome: o }: { outcome: Outcome }) {
         <dd>{o.owner ?? <span className="xo-missing">Not set</span>}</dd>
         <dt>Reviewed</dt>
         <dd>{o.assessedAt ? `${formatDay(o.assessedAt.slice(0, 10))}${o.assessedBy ? ` by ${o.assessedBy}` : ""}` : "Never"}</dd>
+        <dt>Evidence</dt>
+        <dd title="The newest source date (email, meeting note, paste) behind this outcome's open work. Editing a task doesn't change it.">
+          {o.evidenceThrough ? `through ${formatDay(o.evidenceThrough)}` : <span className="xo-missing">no dated evidence</span>}
+        </dd>
       </dl>
       {(o.decisionsNeeded > 0 || o.openRisks > 0) && (
         <p className="xo-meta">
@@ -231,6 +236,52 @@ export function NarrativePanel({ overview, canPublish, onPublished }: { overview
             </div>
           )}
         </>
+      )}
+    </section>
+  );
+}
+
+function deadlineHref(d: Deadline): string {
+  if (d.kind === "decision") return decisionHref(d.id);
+  if (d.kind === "task") return `/tasks/${d.id}`;
+  return d.objectiveId ? `${outcomeHref(d.objectiveId)}#milestones` : "/overview";
+}
+
+const KIND_LABEL: Record<Deadline["kind"], string> = { decision: "Decision", milestone: "Milestone", task: "Task" };
+
+// The next few weeks at a glance, overdue first. A date's firmness is
+// always shown: a forecast is not a commitment.
+export function DeadlinesStrip({ overview }: { overview: ExecutiveOverview }) {
+  const outcomes = new Map(overview.outcomes.map((o) => [o.id, o.title]));
+  return (
+    <section className="xo-card" aria-labelledby="xo-deadlines">
+      <h2 className="xo-label" id="xo-deadlines">
+        Deadlines: overdue and next 45 days {overview.deadlineTotal > 0 && `(${overview.deadlineTotal})`}
+      </h2>
+      {overview.deadlines.length === 0 ? (
+        <p className="xo-empty">Nothing dated in the next 45 days and nothing overdue. Only dates recorded on decisions, milestones and tasks appear here.</p>
+      ) : (
+        <ul className="xo-deadlines">
+          {overview.deadlines.map((d) => (
+            <li key={`${d.kind}:${d.id}`} className={d.daysAway < 0 ? "xo-overdue" : undefined}>
+              <span className="xo-dl-when">
+                {formatDay(d.date)}
+                <span className="xo-dl-away">{d.daysAway < 0 ? `${-d.daysAway}d overdue` : d.daysAway === 0 ? "today" : `in ${d.daysAway}d`}</span>
+              </span>
+              <span>
+                <Link href={deadlineHref(d)}>{d.label && d.kind === "task" ? `${d.label}: ${d.title}` : d.title}</Link>
+                <span className="xo-attn-detail">
+                  {KIND_LABEL[d.kind]} · {d.confidence}
+                  {d.objectiveId && outcomes.get(d.objectiveId) ? ` · ${outcomes.get(d.objectiveId)}` : ""}
+                  {d.owner ? ` · ${d.owner}` : " · owner not set"}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {overview.deadlineTotal > overview.deadlines.length && (
+        <p className="xo-meta">{overview.deadlineTotal - overview.deadlines.length} more; see each outcome and Operating Detail.</p>
       )}
     </section>
   );

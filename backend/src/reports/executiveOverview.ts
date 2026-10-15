@@ -1,13 +1,16 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, max } from "drizzle-orm";
 import type { DbOrTx } from "../db/client.js";
 import {
   decisions,
+  initiatives,
   milestoneLinks,
   milestones,
   objectiveHealthHistory,
   objectives,
+  projects,
   reportingSnapshots,
   risks,
+  sources,
   tasks,
   type MilestoneConfidence,
   type MilestoneState,
@@ -34,6 +37,11 @@ const DECISION_WINDOW_DAYS = 30;
 const BLOCKER_WINDOW_DAYS = 90;
 const MILESTONE_SOON_DAYS = 30;
 const TOP_RISKS = 3;
+// The deadlines strip: everything dated in the next DEADLINE_DAYS days plus
+// anything overdue and unresolved, soonest first.
+const DEADLINE_DAYS = 45;
+const DEADLINES_SHOWN = 8;
+const OPEN_TASK_STATUSES = ["active", "waiting", "needs_attention", "blocked"] as const;
 
 // Decisions still waiting to be made (action_in_progress is already decided).
 const UNDECIDED = ["open", "pending_info"] as const;
@@ -96,6 +104,37 @@ export interface OverviewInput {
     narrative: string | null;
     summary: SnapshotSummary;
   } | null;
+  // Open tasks under the outcomes: their dates feed the deadlines strip and
+  // their evidence dates the "evidence through" label. evidenceAt is the
+  // newest source date behind any of the task's fields -- not when someone
+  // last edited it.
+  openTasks?: Array<{
+    id: string;
+    title: string;
+    objectiveId: string;
+    owner: string | null;
+    dueDate: Date | null;
+    dueDateType: "confirmed" | "planned" | "estimated" | null;
+    dueLabel: string | null;
+    evidenceAt: Date | null;
+  }>;
+  // The newest source (email, transcript, paste) Pulse has received.
+  latestSourceAt?: Date | null;
+}
+
+export interface Deadline {
+  kind: "decision" | "milestone" | "task";
+  id: string;
+  title: string;
+  // What happens on the date, when recorded (a task's milestone label).
+  label: string | null;
+  date: string;
+  daysAway: number;
+  // How firm the date is: a decision's decide-by date, a milestone's
+  // committed/forecast/unconfirmed, a task's confirmed/planned/estimated.
+  confidence: string;
+  objectiveId: string | null;
+  owner: string | null;
 }
 
 // What a published reporting snapshot records, for "what changed".
@@ -135,6 +174,9 @@ export interface Outcome {
   undatedMilestones: number;
   openRisks: number;
   decisionsNeeded: number;
+  // Newest source date behind this outcome's open work (YYYY-MM-DD), or
+  // null when none is recorded.
+  evidenceThrough: string | null;
 }
 
 export type AttentionKind = "decision" | "blocker" | "deterioration" | "assessment_outdated" | "milestone_soon";
@@ -191,6 +233,10 @@ export interface ExecutiveOverview {
   changes: OverviewChange[] | null;
   topRisks: Array<Omit<OverviewInput["risks"][number], "nextReviewAt"> & { nextReviewAt: string | null; milestoneTitle: string | null }>;
   openRiskTotal: number;
+  deadlines: Deadline[];
+  deadlineTotal: number;
+  // Newest source Pulse has received (YYYY-MM-DD): what "current" means here.
+  evidenceThrough: string | null;
 }
 
 const dayIndex = (d: Date) => Math.floor(d.getTime() / MS_PER_DAY);
@@ -271,6 +317,12 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
       undatedMilestones: mine.length - dated.length,
       openRisks: input.risks.filter((r) => r.objectiveId === o.id).length,
       decisionsNeeded: input.decisions.filter((d) => d.objectiveId === o.id).length,
+      evidenceThrough: isoDay(
+        (input.openTasks ?? [])
+          .filter((t) => t.objectiveId === o.id && t.evidenceAt)
+          .map((t) => t.evidenceAt!)
+          .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
+      ),
     };
   });
   const outcomeById = new Map(outcomeViews.map((o) => [o.id, o]));
@@ -437,6 +489,30 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
       milestoneTitle: r.milestoneId ? (milestoneById.get(r.milestoneId)?.title ?? null) : null,
     }));
 
+  // --- Deadlines: next DEADLINE_DAYS days, plus overdue and unresolved ----
+  const deadlines: Deadline[] = [];
+  const inWindow = (d: Date | null) => {
+    const away = daysAway(d);
+    return away !== null && away <= DEADLINE_DAYS ? away : null;
+  };
+  for (const d of input.decisions) {
+    const away = inWindow(d.dueDate);
+    if (away === null) continue;
+    deadlines.push({ kind: "decision", id: d.id, title: d.title, label: "Decide by", date: isoDay(d.dueDate)!, daysAway: away, confidence: "decide-by date", objectiveId: d.objectiveId, owner: d.decider });
+  }
+  for (const m of planned) {
+    const date = milestoneDate(m);
+    const away = inWindow(date);
+    if (away === null || !outcomeById.has(m.objectiveId)) continue;
+    deadlines.push({ kind: "milestone", id: m.id, title: m.title, label: null, date: isoDay(date)!, daysAway: away, confidence: m.confidence, objectiveId: m.objectiveId, owner: m.owner });
+  }
+  for (const t of input.openTasks ?? []) {
+    const away = inWindow(t.dueDate);
+    if (away === null) continue;
+    deadlines.push({ kind: "task", id: t.id, title: t.title, label: t.dueLabel, date: isoDay(t.dueDate)!, daysAway: away, confidence: t.dueDateType ?? "date type not set", objectiveId: t.objectiveId, owner: t.owner });
+  }
+  deadlines.sort((a, b) => a.daysAway - b.daysAway || (order.get(a.objectiveId ?? "") ?? Number.MAX_SAFE_INTEGER) - (order.get(b.objectiveId ?? "") ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id));
+
   return {
     asOf: now.toISOString(),
     period: input.snapshot
@@ -450,6 +526,9 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
     changes,
     topRisks,
     openRiskTotal: openRisks.length,
+    deadlines: deadlines.slice(0, DEADLINES_SHOWN),
+    deadlineTotal: deadlines.length,
+    evidenceThrough: isoDay(input.latestSourceAt ?? null),
   };
 }
 
@@ -484,6 +563,38 @@ export async function buildExecutiveOverview(db: DbOrTx, organizationId: string,
     db.select().from(reportingSnapshots).where(eq(reportingSnapshots.organizationId, organizationId)).orderBy(desc(reportingSnapshots.publishedAt)).limit(1),
   ]);
 
+  const [taskRows, [latestSource]] = await Promise.all([
+    db
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        objectiveId: initiatives.objectiveId,
+        owner: tasks.owner,
+        dueDate: tasks.dueDate,
+        dueDateType: tasks.dueDateType,
+        dueLabel: tasks.dueLabel,
+        fieldEvidence: tasks.fieldEvidence,
+      })
+      .from(tasks)
+      .innerJoin(projects, eq(projects.id, tasks.projectId))
+      .innerJoin(initiatives, eq(initiatives.id, projects.initiativeId))
+      .where(
+        and(
+          eq(tasks.organizationId, organizationId),
+          inArray(tasks.status, [...OPEN_TASK_STATUSES]),
+          inArray(initiatives.objectiveId, ids),
+          visibilityFilter(role, tasks.visibility),
+        ),
+      ),
+    db.select({ at: max(sources.receivedAt) }).from(sources).where(eq(sources.organizationId, organizationId)),
+  ]);
+  const openTasks = taskRows.map((t) => {
+    const stamps = Object.values((t.fieldEvidence ?? {}) as Record<string, { asOf?: string } | undefined>)
+      .map((e) => (e?.asOf ? new Date(e.asOf) : null))
+      .filter((d): d is Date => d !== null && !Number.isNaN(d.getTime()));
+    return { ...t, evidenceAt: stamps.sort((a, b) => b.getTime() - a.getTime())[0] ?? null };
+  });
+
   const milestoneIds = milestoneRows.map((m) => m.id);
   const milestoneBlockers = milestoneIds.length
     ? await db
@@ -511,6 +622,8 @@ export async function buildExecutiveOverview(db: DbOrTx, organizationId: string,
       decisions: decisionRows.map((d) => ({ ...d, objectiveId: d.objectiveId && ids.includes(d.objectiveId) ? d.objectiveId : null })),
       risks: riskRows,
       snapshot: snapshot ? { ...snapshot, summary: snapshot.summary as SnapshotSummary } : null,
+      openTasks,
+      latestSourceAt: latestSource?.at ?? null,
     },
     now,
   );

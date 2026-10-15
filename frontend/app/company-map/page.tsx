@@ -190,6 +190,59 @@ function toggleId(set: Set<string>, id: string): Set<string> {
   return next;
 }
 
+// The compact view: one row per task with its full place in the tree, so
+// the inventory can be scanned or sorted without deep indentation.
+function MapTable({ objectives }: { objectives: CompanyMapResponse["objectives"] }) {
+  const rows = objectives.flatMap((o) =>
+    o.initiatives.flatMap((i) =>
+      i.projects.flatMap((p) =>
+        p.tasks.length
+          ? p.tasks.map((t) => ({ o, i, p, t }))
+          : [{ o, i, p, t: null as CompanyMapResponse["objectives"][number]["initiatives"][number]["projects"][number]["tasks"][number] | null }],
+      ),
+    ),
+  );
+  if (rows.length === 0) return <p className="empty-state">Nothing here yet.</p>;
+  return (
+    <div className="map-table-wrap">
+      <table className="map-table">
+        <thead>
+          <tr>
+            <th scope="col">Task</th>
+            <th scope="col">Status</th>
+            <th scope="col">Owner</th>
+            <th scope="col">Project</th>
+            <th scope="col">Initiative</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ o, i, p, t }) => (
+            <tr key={t?.id ?? p.id}>
+              <td>{t ? <Link href={`/tasks/${t.id}`}>{t.title}</Link> : <span className="muted">No tasks yet</span>}</td>
+              <td>{t ? t.status.replace(/_/g, " ") : ""}</td>
+              <td>{t ? (t.owner ?? <span className="muted">not set</span>) : ""}</td>
+              <td>
+                <Link href={`/projects/${p.id}`}>{p.title}</Link>
+              </td>
+              <td>
+                <Link href={`/initiatives/${i.id}`}>{i.title}</Link>
+              </td>
+              <td>
+                <Link href={`/objectives/${o.id}`}>{o.title}</Link>
+              </td>
+              <td className="map-table-date">{t ? new Date(t.updatedAt).toLocaleDateString() : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const MAP_PREFS_KEY = "pulse.companyMapPrefs";
+
 export default function CompanyMapPage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
   const [data, setData] = useState<CompanyMapResponse | null>(null);
@@ -210,6 +263,28 @@ export default function CompanyMapPage() {
     ? duplicateResult.duplicatesFound + duplicateResult.decisionDuplicatesFound + duplicateResult.hierarchyDuplicatesFound
     : 0;
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+
+  // Tree or compact table, and which outcome to show; remembered per browser.
+  const [view, setView] = useState<"tree" | "table">("tree");
+  const [outcomeFilter, setOutcomeFilter] = useState("all");
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(MAP_PREFS_KEY) ?? "{}") as { view?: string; outcome?: string };
+      if (saved.view === "tree" || saved.view === "table") setView(saved.view);
+      if (typeof saved.outcome === "string") setOutcomeFilter(saved.outcome);
+    } catch {
+      /* storage unavailable: keep the defaults */
+    }
+  }, []);
+  function savePrefs(next: { view?: "tree" | "table"; outcome?: string }) {
+    if (next.view) setView(next.view);
+    if (next.outcome !== undefined) setOutcomeFilter(next.outcome);
+    try {
+      localStorage.setItem(MAP_PREFS_KEY, JSON.stringify({ view: next.view ?? view, outcome: next.outcome ?? outcomeFilter }));
+    } catch {
+      /* ignore */
+    }
+  }
 
   const [checkingRelationships, setCheckingRelationships] = useState(false);
   const [relationshipResult, setRelationshipResult] = useState<RelationshipSuggestResult | null>(null);
@@ -261,6 +336,8 @@ export default function CompanyMapPage() {
         .catch((err) => setLoadError(err.message));
     }
   }, [user]);
+
+  const shown = (data?.objectives ?? []).filter((o) => outcomeFilter === "all" || o.id === outcomeFilter);
 
   if (user === "loading") {
     return (
@@ -342,8 +419,34 @@ export default function CompanyMapPage() {
       )}
 
       {data && data.objectives.length > 0 && (
+        <div className="map-controls">
+          <div className="xo-toggle" role="group" aria-label="Map view">
+            <button type="button" className={view === "tree" ? "xo-on" : ""} aria-pressed={view === "tree"} onClick={() => savePrefs({ view: "tree" })}>
+              Tree
+            </button>
+            <button type="button" className={view === "table" ? "xo-on" : ""} aria-pressed={view === "table"} onClick={() => savePrefs({ view: "table" })}>
+              Compact table
+            </button>
+          </div>
+          <label className="map-filter">
+            <span className="muted">Outcome</span>
+            <select className="edit-input" value={outcomeFilter} onChange={(e) => savePrefs({ outcome: e.target.value })}>
+              <option value="all">All outcomes</option>
+              {data.objectives.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.title}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {data && data.objectives.length > 0 && view === "table" && <MapTable objectives={shown} />}
+
+      {data && data.objectives.length > 0 && view === "tree" && (
         <div className="tree">
-          {data.objectives.map((objective) => (
+          {shown.map((objective) => (
             <ObjectiveNode
               objective={objective}
               open={openObjectives.has(objective.id)}

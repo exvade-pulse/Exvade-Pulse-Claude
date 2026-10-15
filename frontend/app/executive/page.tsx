@@ -17,6 +17,7 @@ import { Nav } from "../components/Nav";
 import { ChatGptReviewPanel } from "../components/ChatGptReviewPanel";
 import { ContradictionCard, DecisionCard, QuestionCard, TaskRow, WorkstreamCard } from "../components/ReviewCards";
 import { TaskDisposition } from "../components/TaskDisposition";
+import { WorkByOutcome } from "../components/WorkByOutcome";
 import { ChangeList, DateTypeTag, decisionHref, ItemList, PriorityCard, shortDate } from "../components/Dashboard";
 import { formatDueDate } from "../../lib/dates";
 
@@ -180,6 +181,13 @@ export default function ExecutivePage() {
               </div>
             </details>
           )}
+
+          <h2 className="section-title">Work by outcome</h2>
+          <p className="rc-meta">
+            Every open task under its outcome, in the order set on the Overview: blocked first, then yours, then waiting on someone, then
+            the rest of the team&rsquo;s.
+          </p>
+          <WorkByOutcome groups={dash.workByOutcome} />
 
           <div className="dash-columns">
             <section className="card dash-panel" aria-label="What changed">

@@ -2006,3 +2006,46 @@ summary:focus-visible {
   --text-md: 16px;
   --text-lg: 18px;
 }
+
+/* Overview deadlines strip */
+.xo-deadlines { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.xo-deadlines li { display: grid; grid-template-columns: 130px 1fr; gap: var(--space-3); font-size: var(--text-sm); border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
+.xo-deadlines li:last-child { border-bottom: none; padding-bottom: 0; }
+.xo-deadlines a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.xo-dl-when { font-variant-numeric: tabular-nums; display: grid; }
+.xo-dl-away { color: var(--text-muted); font-size: var(--text-xs); }
+.xo-overdue .xo-dl-away { color: var(--attention); font-weight: 700; }
+.xo-page > .xo-card { margin-bottom: var(--space-5); }
+@media (max-width: 640px) { .xo-deadlines li { grid-template-columns: 1fr; gap: 0; } }
+
+/* Operating Detail: work by outcome */
+.wbo { display: grid; gap: var(--space-3); margin-bottom: var(--space-5); }
+.wbo-outcome > summary { cursor: pointer; }
+.wbo-name { font-weight: 700; }
+.wbo-buckets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-3); }
+.wbo-bucket-title { font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 0 0 var(--space-2); }
+.wbo-blocked .wbo-bucket-title { color: var(--attention); }
+.wbo-mine .wbo-bucket-title { color: var(--accent); }
+.wbo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.wbo-list li { display: grid; gap: 2px; border-bottom: 1px solid var(--border); padding-bottom: var(--space-2); }
+.wbo-list li:last-child { border-bottom: none; }
+.wbo-title { font-weight: 600; color: var(--text); text-decoration: none; }
+.wbo-title:hover { text-decoration: underline; }
+.wbo-meta { font-size: var(--text-sm); color: var(--text-secondary); overflow-wrap: anywhere; }
+.wbo-unset { color: var(--text-muted); font-style: italic; }
+.wbo-stale { color: var(--caution); }
+@media (max-width: 820px) { .wbo-buckets { grid-template-columns: 1fr; } }
+
+/* Company Map: compact table and outcome filter */
+.map-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); margin-bottom: var(--space-4); }
+.map-filter { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); flex: 1 1 240px; min-width: 0; max-width: 480px; }
+.map-filter select { width: 100%; min-width: 0; }
+.map-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.map-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.map-table th, .map-table td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.map-table th { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); background: var(--bg); position: sticky; top: 0; }
+.map-table td:first-child { min-width: 260px; }
+.map-table a { color: var(--accent); text-decoration: none; }
+.map-table a:hover { text-decoration: underline; }
+.map-table-date { white-space: nowrap; color: var(--text-muted); }
+.decision-permalink { font-size: var(--text-xs); color: var(--accent); margin-left: var(--space-2); }

@@ -86,6 +86,35 @@ export interface DashboardDeadline {
   owner: string | null;
 }
 
+// One open task as Operating Detail lists it under its outcome.
+export interface WorkRow {
+  id: string;
+  title: string;
+  project: string;
+  status: string;
+  owner: string | null;
+  nextAction: string | null;
+  nextActionStale: boolean;
+  // Who or what it's waiting on, when recorded.
+  waitingOn: string | null;
+  dueDate: string | null;
+  dueDateType: "confirmed" | "planned" | "estimated" | null;
+  dueLabel: string | null;
+}
+
+// Open work under one outcome, split so the reader can see what's theirs,
+// what the team is doing, what's waiting on someone else and what's stuck.
+// Each task appears once: blocked, else waiting, else mine, else team.
+export interface OutcomeWork {
+  objective: string;
+  objectiveOrder: number | null;
+  mine: WorkRow[];
+  team: WorkRow[];
+  waiting: WorkRow[];
+  blocked: WorkRow[];
+  total: number;
+}
+
 export interface Dashboard {
   since: string;
   // No open strategic questions: priorities can't be ranked yet, and the
@@ -100,6 +129,9 @@ export interface Dashboard {
   needsMe: DashboardItem[];
   upcomingDeadlines: DashboardDeadline[];
   waiting: DashboardItem[];
+  // Every open task, grouped by outcome in the leadership-set order;
+  // Unsorted last.
+  workByOutcome: OutcomeWork[];
 }
 
 // "Sean Meehan" / sean@exvadebio.com -> ["sean", "meehan"]. An admin also
@@ -471,8 +503,46 @@ export async function buildDashboard(
       })),
   ];
 
+  // Work by outcome.
+  const groups = new Map<string, OutcomeWork>();
+  for (const project of data.inventory) {
+    const group = groups.get(project.objective) ?? { objective: project.objective, objectiveOrder: project.objectiveOrder, mine: [], team: [], waiting: [], blocked: [], total: 0 };
+    for (const t of project.tasks) {
+      const waitingOn = t.waitingFor ?? (t.waitingOn.length ? t.waitingOn.join("; ") : null);
+      const row: WorkRow = {
+        id: t.id,
+        title: t.title,
+        project: t.project,
+        status: t.status,
+        owner: t.owner,
+        nextAction: t.nextAction,
+        nextActionStale: t.nextActionStale,
+        waitingOn,
+        dueDate: t.dueDate,
+        dueDateType: t.dueDateType,
+        dueLabel: t.dueLabel,
+      };
+      if (t.status === "blocked") group.blocked.push(row);
+      else if (t.status === "waiting" || waitingOn) group.waiting.push(row);
+      else if (isMine(t.owner, tokens)) group.mine.push(row);
+      else group.team.push(row);
+      group.total++;
+    }
+    groups.set(project.objective, group);
+  }
+  const isTriageOutcome = (g: OutcomeWork) => /^unsorted\b/i.test(g.objective);
+  const workByOutcome = [...groups.values()]
+    .filter((g) => g.total > 0)
+    .sort(
+      (a, b) =>
+        Number(isTriageOutcome(a)) - Number(isTriageOutcome(b)) ||
+        (a.objectiveOrder ?? Number.MAX_SAFE_INTEGER) - (b.objectiveOrder ?? Number.MAX_SAFE_INTEGER) ||
+        a.objective.localeCompare(b.objective),
+    );
+
   return {
     since: since.toISOString(),
+    workByOutcome,
     strategySetupIncomplete: priorities.length === 0,
     priorities,
     unlinkedWorkstreams,

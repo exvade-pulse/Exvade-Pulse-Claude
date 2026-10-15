@@ -409,6 +409,10 @@ export default function DecisionsPage() {
                 <span className="updated-line" title={new Date(d.updatedAt).toLocaleString()}>
                   Updated {formatUpdated(d.updatedAt)}
                 </span>
+                {" "}
+                <a className="decision-permalink" href={`#decision-${d.id}`} onClick={() => setFocusId(d.id)} title="A link straight to this decision; copy it from the address bar">
+                  Link to this decision
+                </a>
               </div>
               <div className="card-badges">
                 <VisibilityControl

@@ -11,7 +11,7 @@ import { outcomeHref } from "./Parts";
 // Now/Next/Later and List views carry the same information as text; phones
 // get the list.
 
-type View = "quarters" | "nnl" | "list";
+type View = "quarters" | "year" | "nnl" | "list";
 const MS_PER_DAY = 86400000;
 const VIEW_KEY = "pulse.roadmapView";
 
@@ -21,9 +21,9 @@ function quarterStart(d: Date) {
   return Date.UTC(d.getUTCFullYear(), Math.floor(d.getUTCMonth() / 3) * 3, 1);
 }
 
-function quarters(now: Date) {
+function quarters(now: Date, count: number) {
   const first = new Date(quarterStart(now));
-  return Array.from({ length: 4 }, (_, i) => {
+  return Array.from({ length: count }, (_, i) => {
     const start = Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + i * 3, 1);
     const d = new Date(start);
     return { start, label: `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}` };
@@ -80,7 +80,7 @@ export function StrategicRoadmap({ outcomes, scheduled, unscheduled, asOf }: { o
   useEffect(() => {
     try {
       const saved = localStorage.getItem(VIEW_KEY);
-      if (saved === "quarters" || saved === "nnl" || saved === "list") setView(saved);
+      if (saved === "quarters" || saved === "year" || saved === "nnl" || saved === "list") setView(saved);
     } catch {
       /* storage unavailable: keep the default */
     }
@@ -95,17 +95,19 @@ export function StrategicRoadmap({ outcomes, scheduled, unscheduled, asOf }: { o
   }
 
   const now = new Date(asOf);
-  const qs = quarters(now);
+  const span = view === "year" ? 4 : 2;
+  const qs = quarters(now, span);
+  const nnlQs = quarters(now, 4);
   const start = qs[0].start;
-  const end = Date.UTC(new Date(start).getUTCFullYear(), new Date(start).getUTCMonth() + 12, 1);
+  const end = Date.UTC(new Date(start).getUTCFullYear(), new Date(start).getUTCMonth() + 3 * span, 1);
   const pct = (t: number) => Math.min(100, Math.max(0, ((t - start) / (end - start)) * 100));
   const todayPct = pct(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const byOutcome = new Map(outcomes.map((o) => [o.id, o]));
   const inWindow = scheduled.filter((m) => m.date && utc(m.date) < end && (utc(m.date) >= start || m.state === "planned"));
   const beyond = scheduled.filter((m) => m.date && utc(m.date) >= end);
 
-  const nextQuarterStart = qs[1].start;
-  const afterNext = qs[2].start;
+  const nextQuarterStart = nnlQs[1].start;
+  const afterNext = nnlQs[2].start;
   const planned = scheduled.filter((m) => m.state === "planned");
   const nnl = {
     Now: planned.filter((m) => utc(m.date!) < nextQuarterStart),
@@ -122,7 +124,8 @@ export function StrategicRoadmap({ outcomes, scheduled, unscheduled, asOf }: { o
         <div className="xo-toggle" role="group" aria-label="Roadmap view">
           {(
             [
-              ["quarters", "Quarters"],
+              ["quarters", "Next 2 quarters"],
+              ["year", "12 months"],
               ["nnl", "Now / Next / Later"],
               ["list", "List"],
             ] as const
@@ -134,12 +137,12 @@ export function StrategicRoadmap({ outcomes, scheduled, unscheduled, asOf }: { o
         </div>
       </div>
 
-      {view === "quarters" && (
+      {(view === "quarters" || view === "year") && (
         <>
-          <div className="xo-rm" role="img" aria-label={`Roadmap, ${qs[0].label} to ${qs[3].label}. ${inWindow.map(describe).join(". ") || "No dated milestones."}`}>
+          <div className="xo-rm" role="img" aria-label={`Roadmap, ${qs[0].label} to ${qs[qs.length - 1].label}. ${inWindow.map(describe).join(". ") || "No dated milestones."}`}>
             <div className="xo-rm-head">
               <span />
-              <div className="xo-rm-qs">
+              <div className="xo-rm-qs" style={{ gridTemplateColumns: `repeat(${span}, 1fr)` }}>
                 {qs.map((q) => (
                   <span key={q.label}>{q.label}</span>
                 ))}
@@ -150,7 +153,7 @@ export function StrategicRoadmap({ outcomes, scheduled, unscheduled, asOf }: { o
                 <Link className="xo-rm-name" href={outcomeHref(o.id)}>
                   {o.title}
                 </Link>
-                <div className="xo-rm-track">
+                <div className="xo-rm-track" style={{ backgroundSize: `${100 / span}% 100%` }}>
                   <span className="xo-rm-today" style={{ left: `${todayPct}%` }} />
                   {inWindow
                     .filter((m) => m.objectiveId === o.id)
