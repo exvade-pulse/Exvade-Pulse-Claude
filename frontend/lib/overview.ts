@@ -31,6 +31,7 @@ export interface Outcome {
 export interface AttentionItem {
   kind: "decision" | "blocker" | "deterioration" | "assessment_outdated" | "milestone_soon";
   tier: number;
+  why: string;
   title: string;
   detail: string;
   objectiveId: string | null;

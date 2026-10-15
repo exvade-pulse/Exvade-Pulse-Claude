@@ -73,14 +73,19 @@ export function OutcomeCard({ outcome: o }: { outcome: Outcome }) {
         <dd>
           {next ? (
             <>
-              {next.title} · {formatDay(next.date)} <span className="xo-conf">({next.confidence})</span>
+              {next.title} · {formatDay(next.date)}{" "}
+              {next.daysAway !== null && next.daysAway < 0 ? (
+                <span className="xo-warn-inline">(passed; outcome unverified)</span>
+              ) : (
+                <span className="xo-conf">({next.confidence})</span>
+              )}
             </>
           ) : (
             <span className="xo-missing">Timing not confirmed{o.undatedMilestones ? ` (${plural(o.undatedMilestones, "undated milestone")})` : ""}</span>
           )}
         </dd>
         <dt>Owner</dt>
-        <dd>{o.owner ?? <span className="xo-missing">Not assigned</span>}</dd>
+        <dd>{o.owner ?? <span className="xo-missing">Not set</span>}</dd>
         <dt>Reviewed</dt>
         <dd>{o.assessedAt ? `${formatDay(o.assessedAt.slice(0, 10))}${o.assessedBy ? ` by ${o.assessedBy}` : ""}` : "Never"}</dd>
       </dl>
@@ -133,6 +138,7 @@ export function AttentionList({ items, total }: { items: AttentionItem[]; total:
                   item.detail
                 )}
               </span>
+              <span className="xo-why-ranked">Why it&apos;s here: {item.why}</span>
             </li>
           ))}
         </ol>

@@ -677,6 +677,22 @@ export async function approveSuggestion(db: Database, params: ApplyParams) {
             `Cannot create a new ${targetType}: missing required field(s) ${missing.join(", ")}`,
           );
         }
+        // A task with the same name already live in the same project is a
+        // repeat (e.g. two identical suggestions both approved), not new work.
+        if (targetType === "task" && typeof fields.title === "string") {
+          const [same] = await tx
+            .select({ id: tasks.id })
+            .from(tasks)
+            .where(
+              and(
+                eq(tasks.organizationId, params.organizationId),
+                eq(tasks.projectId, fields.projectId as string),
+                sql`lower(trim(${tasks.title})) = lower(trim(${fields.title}))`,
+                sql`${tasks.status} <> 'superseded'`,
+              ),
+            );
+          if (same) throw new SuggestionApplyError(`That project already has a task called "${fields.title}". Reject this card, or edit it to update that task.`);
+        }
 
         const insertValues: Record<string, unknown> = { ...fields, organizationId: params.organizationId };
         if (evidencePatch) {

@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+
+// Finished or replaced work: shown only under "completed and history".
+const FINISHED = new Set(["completed", "resolved", "cancelled", "superseded"]);
 import {
   API_URL,
   fetchCurrentUser,
@@ -39,6 +42,8 @@ export default function UnsortedPage() {
   const [retriaging, setRetriaging] = useState(false);
   const [retriageResult, setRetriageResult] = useState<RetriageResult | null>(null);
   const [retriageError, setRetriageError] = useState<string | null>(null);
+  // Finished work stays out of the way unless asked for.
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     fetchCurrentUser().then(setUser);
@@ -92,6 +97,10 @@ export default function UnsortedPage() {
     );
   }
 
+  const isHistory = (status: string) => FINISHED.has(status);
+  const active = (data?.tasks ?? []).filter((t) => !isHistory(t.status));
+  const history = (data?.tasks ?? []).filter((t) => isHistory(t.status));
+
   return (
     <main className="page">
       <Nav user={user} />
@@ -128,18 +137,35 @@ export default function UnsortedPage() {
       {loadError && <div className="error-banner">{loadError}</div>}
 
       {data && !data.project && !loadError && <p className="empty-state">No Unsorted project exists yet.</p>}
-      {data && data.project && data.tasks.length === 0 && !loadError && (
-        <p className="empty-state">Nothing sitting in Unsorted right now.</p>
+      {data && data.project && active.length === 0 && !loadError && (
+        <p className="empty-state">No active work sitting in Unsorted right now.</p>
       )}
 
-      {data && data.tasks.length > 0 && (
+      {active.length > 0 && (
         <div className="tree">
           <div className="tree-children" style={{ marginLeft: 0 }}>
-            {data.tasks.map((task) => (
+            {active.map((task) => (
               <UnsortedTaskRow task={task} key={task.id} />
             ))}
           </div>
         </div>
+      )}
+
+      {history.length > 0 && (
+        <section className="unsorted-history">
+          <button type="button" className="link-btn-plain" aria-expanded={showHistory} onClick={() => setShowHistory((v) => !v)}>
+            {showHistory ? "Hide" : "Show"} completed and history ({history.length})
+          </button>
+          {showHistory && (
+            <div className="tree">
+              <div className="tree-children" style={{ marginLeft: 0 }}>
+                {history.map((task) => (
+                  <UnsortedTaskRow task={task} key={task.id} />
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
       )}
     </main>
   );

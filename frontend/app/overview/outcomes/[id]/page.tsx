@@ -197,7 +197,7 @@ function Summary({ detail, reload }: { detail: OutcomeDetail; reload: () => Prom
       <section className="xo-card">
         <h2 className="xo-label">Why it matters</h2>
         {o.rationale ? <p>{o.rationale}</p> : <p className="xo-empty">Not written yet.</p>}
-        <p className="xo-meta">Owner: {o.owner ?? "not assigned"}</p>
+        <p className="xo-meta">Owner: {o.owner ?? "not set"}</p>
         <OutcomeFields detail={detail} reload={reload} />
       </section>
       <section className="xo-card">
@@ -381,6 +381,12 @@ function LinkPicker({ detail, milestone, reload }: { detail: OutcomeDetail; mile
 
 const STATE_LABEL = { planned: "Planned", achieved: "Achieved", missed: "Missed", dropped: "Dropped" } as const;
 
+// Still planned, but its current date has gone by without an outcome recorded.
+function passedUnverified(m: MilestoneDetail) {
+  const date = m.forecastDate ?? m.baselineDate;
+  return m.state === "planned" && !!date && Date.parse(date) < Date.now() - 86400000;
+}
+
 function MilestoneCard({ detail, m, reload, isAdmin }: { detail: OutcomeDetail; m: MilestoneDetail; reload: () => Promise<void>; isAdmin: boolean }) {
   const [editing, setEditing] = useState(false);
   const { busy, error, run } = useAction(reload);
@@ -396,9 +402,9 @@ function MilestoneCard({ detail, m, reload, isAdmin }: { detail: OutcomeDetail; 
     <article className={`xo-card xo-ms xo-ms-${m.state}`}>
       <div className="xo-row-between">
         <h3 className="xo-outcome-title">{m.title}</h3>
-        <span className="xo-chip">
-          {STATE_LABEL[m.state]}
-          {m.state === "planned" ? ` · ${m.confidence}` : ""}
+        <span className={`xo-chip${passedUnverified(m) ? " xo-flag" : ""}`}>
+          {passedUnverified(m) ? "Date passed · outcome unverified" : STATE_LABEL[m.state]}
+          {m.state === "planned" && !passedUnverified(m) ? ` · ${m.confidence}` : ""}
         </span>
       </div>
       {m.successCriteria && <p className="xo-why">Done when: {m.successCriteria}</p>}
@@ -417,7 +423,7 @@ function MilestoneCard({ detail, m, reload, isAdmin }: { detail: OutcomeDetail; 
           </>
         )}
         <dt>Owner</dt>
-        <dd>{m.owner ?? <span className="xo-missing">not assigned</span>}</dd>
+        <dd>{m.owner ?? <span className="xo-missing">not set</span>}</dd>
       </dl>
       <p className="xo-label xo-label-sm">Depends on</p>
       {m.links.length === 0 ? (
@@ -724,7 +730,7 @@ function RiskCard({ detail, r, reload }: { detail: OutcomeDetail; r: RiskDetail;
         <dt>Affects</dt>
         <dd>{milestone?.title ?? "No specific milestone"}</dd>
         <dt>Owner</dt>
-        <dd>{r.owner ?? <span className="xo-missing">not assigned</span>}</dd>
+        <dd>{r.owner ?? <span className="xo-missing">not set</span>}</dd>
         <dt>Next review</dt>
         <dd>{formatDay(day(r.nextReviewAt)) || "—"}</dd>
       </dl>
@@ -871,7 +877,7 @@ export default function OutcomePage() {
             <div>
               <h1 className="xo-h1">{detail.objective.title}</h1>
               <p className="xo-sub">
-                <HealthBadge health={detail.objective.health} /> · Owner: {detail.objective.owner ?? "not assigned"}
+                <HealthBadge health={detail.objective.health} /> · Owner: {detail.objective.owner ?? "not set"}
               </p>
             </div>
           </header>

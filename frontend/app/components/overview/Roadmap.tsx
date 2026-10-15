@@ -44,9 +44,15 @@ const STATE_TEXT: Record<string, string> = {
   unconfirmed: "Unconfirmed",
 };
 
+// Planned, with its date already gone and no outcome recorded.
+function unverified(m: RoadmapMilestone) {
+  const now = new Date();
+  return m.state === "planned" && !!m.date && utc(m.date) < Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+}
+
 function describe(m: RoadmapMilestone) {
   const slip = m.slipDays && m.slipDays > 0 ? `, ${m.slipDays} days later than the baseline ${formatDay(m.baselineDate)}` : "";
-  return `${m.title}: ${formatDay(m.date)} (${STATE_TEXT[marker(m)].toLowerCase()}${slip})`;
+  return `${m.title}: ${formatDay(m.date)} (${unverified(m) ? "date passed, outcome unverified" : STATE_TEXT[marker(m)].toLowerCase()}${slip})`;
 }
 
 function MilestoneList({ milestones, outcomes }: { milestones: RoadmapMilestone[]; outcomes: Map<string, Outcome> }) {
@@ -59,7 +65,7 @@ function MilestoneList({ milestones, outcomes }: { milestones: RoadmapMilestone[
           <span>
             <Link href={`${outcomeHref(m.objectiveId)}#milestones`}>{m.title}</Link>
             <span className="xo-attn-detail">
-              {outcomes.get(m.objectiveId)?.title} · {STATE_TEXT[marker(m)]}
+              {outcomes.get(m.objectiveId)?.title} · {unverified(m) ? "Date passed, outcome unverified" : STATE_TEXT[marker(m)]}
               {m.slipDays && m.slipDays > 0 ? ` · slipped ${m.slipDays} days` : ""}
             </span>
           </span>
@@ -156,7 +162,7 @@ export function StrategicRoadmap({ outcomes, scheduled, unscheduled, asOf }: { o
                           {base !== null && <span className="xo-rm-slip" style={{ left: `${base}%`, width: `${Math.max(0, at - base)}%` }} />}
                           <Link
                             href={`${outcomeHref(o.id)}#milestones`}
-                            className={`xo-dia xo-dia-${marker(m)}`}
+                            className={`xo-dia xo-dia-${marker(m)}${unverified(m) ? " xo-dia-unverified" : ""}`}
                             style={{ left: `${at}%` }}
                             title={describe(m)}
                             aria-label={describe(m)}
@@ -183,6 +189,9 @@ export function StrategicRoadmap({ outcomes, scheduled, unscheduled, asOf }: { o
             </span>
             <span>
               <i className="xo-dia-key xo-dia-missed" /> Missed
+            </span>
+            <span>
+              <i className="xo-dia-key xo-dia-unverified" /> Date passed, outcome unverified
             </span>
             <span>│ Today</span>
             <span>┄ Moved from baseline</span>

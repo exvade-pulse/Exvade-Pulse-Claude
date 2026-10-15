@@ -142,6 +142,8 @@ export type AttentionKind = "decision" | "blocker" | "deterioration" | "assessme
 export interface AttentionItem {
   kind: AttentionKind;
   tier: number;
+  // Why it's on the list, in plain words (the rule that put it there).
+  why: string;
   title: string;
   detail: string;
   objectiveId: string | null;
@@ -241,7 +243,7 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
     const signals: string[] = [];
     for (const m of dated) {
       const away = daysAway(milestoneDate(m))!;
-      if (away < 0) signals.push(`Milestone "${m.title}" is past its date and not marked achieved`);
+      if (away < 0) signals.push(`Milestone "${m.title}" passed its date with the outcome unverified`);
       else if (away <= BLOCKER_WINDOW_DAYS && blockersByMilestone.has(m.id)) signals.push(`Milestone "${m.title}" depends on blocked work`);
       if (m.forecastDate && m.baselineDate && dayIndex(m.forecastDate) > dayIndex(m.baselineDate)) {
         signals.push(`Milestone "${m.title}" has slipped ${dayIndex(m.forecastDate) - dayIndex(m.baselineDate)} days past its baseline`);
@@ -281,6 +283,7 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
     items.push({
       kind: "decision",
       tier: 1,
+      why: "A leadership decision due within 30 days, or overdue",
       title: d.title,
       detail: away < 0 ? `Overdue by ${-away} day${away === -1 ? "" : "s"}` : away === 0 ? "Needed today" : `Needed in ${away} day${away === 1 ? "" : "s"}`,
       objectiveId: d.objectiveId,
@@ -301,6 +304,7 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
       items.push({
         kind: "blocker",
         tier: 2,
+        why: "Blocked work holding up a milestone due within 90 days",
         title: `Blocked: ${b.taskTitle}`,
         detail: `Holds up "${m.title}"${b.waitingFor ? ` · waiting on ${b.waitingFor}` : ""}${b.owner ? ` · ${b.owner}` : ""}`,
         objectiveId: m.objectiveId,
@@ -319,6 +323,7 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
       items.push({
         kind: "deterioration",
         tier: 3,
+        why: "Outcome health got worse since the last published review",
         title: `${o.title} is now ${HEALTH_LABEL[o.health].toLowerCase()}`,
         detail: `Was ${HEALTH_LABEL[was].toLowerCase()} at the last review${o.healthRationale ? ` · ${o.healthRationale}` : ""}`,
         objectiveId: o.id,
@@ -333,6 +338,7 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
     items.push({
       kind: "assessment_outdated",
       tier: 4,
+      why: "Pulse's own records contradict an \"on track\" assessment",
       title: `${o.title}: "on track" may be out of date`,
       detail: o.signals[0],
       objectiveId: o.id,
@@ -347,8 +353,9 @@ export function computeOverview(input: OverviewInput, now = new Date()): Executi
     items.push({
       kind: "milestone_soon",
       tier: 5,
+      why: "A milestone due within 30 days, or past its date without an outcome recorded",
       title: m.title,
-      detail: away < 0 ? `Was due ${-away} day${away === -1 ? "" : "s"} ago; not marked achieved` : `Due in ${away} day${away === 1 ? "" : "s"} (${m.confidence})`,
+      detail: away < 0 ? `Was due ${-away} day${away === -1 ? "" : "s"} ago; outcome unverified (record achieved, missed or a new forecast)` : `Due in ${away} day${away === 1 ? "" : "s"} (${m.confidence})`,
       objectiveId: m.objectiveId,
       date: isoDay(milestoneDate(m)),
       daysAway: away,

@@ -6,6 +6,7 @@ import {
   decisions,
   decisionStatusEnum,
   LIVE_DECISION_STATUSES,
+  objectives,
   tasks,
   UNDECIDED_DECISION_STATUSES,
   visibilityEnum,
@@ -89,11 +90,16 @@ export async function decisionRoutes(app: FastifyInstance) {
         relatedTaskStatus: tasks.status,
         supersededById: decisions.supersededById,
         sourceId: decisions.sourceId,
+        recommendation: decisions.recommendation,
+        impactOfDelay: decisions.impactOfDelay,
+        objectiveId: decisions.objectiveId,
+        outcomeTitle: objectives.title,
         createdAt: decisions.createdAt,
         updatedAt: decisions.updatedAt,
       })
       .from(decisions)
       .leftJoin(tasks, eq(tasks.id, decisions.relatedTaskId))
+      .leftJoin(objectives, eq(objectives.id, decisions.objectiveId))
       .where(
         and(
           eq(decisions.organizationId, organizationId),

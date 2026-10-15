@@ -169,7 +169,8 @@ export default function ExecutivePage() {
                 <span className="dash-section-title">Active work not under any priority</span>
                 <span className="muted">
                   {" "}
-                  · {dash.unlinkedWorkstreams.length} workstream{dash.unlinkedWorkstreams.length === 1 ? "" : "s"}, busiest first. Not ranked by importance.
+                  · {dash.unlinkedWorkstreams.length} workstream{dash.unlinkedWorkstreams.length === 1 ? "" : "s"}, in outcome order (set on
+                  the Overview), then blocked work first. Strategic questions aren&rsquo;t set up, so this is not a ranking of importance.
                 </span>
               </summary>
               <div className="priority-grid">

@@ -10,6 +10,7 @@ import { createReviewLink } from "../reports/reviewLinks.js";
 import { markReviewed, sinceLastReview } from "../reports/reviewChanges.js";
 import { syncDeadlineItems } from "../reports/deadlineItems.js";
 import { buildDashboard } from "../reports/dashboard.js";
+import { buildExport, tasksCsv } from "../reports/export.js";
 
 const WEEK_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -197,6 +198,21 @@ export async function reportRoutes(app: FastifyInstance) {
     const data = await buildExecutiveReviewData(organizationId, role);
     const reviewedAt = await markReviewed(db, organizationId, userId, data);
     reply.code(201).send({ lastReviewedAt: reviewedAt });
+  });
+
+  // Admin-only: every working record with ids and full status history,
+  // for reconciling Pulse against an outside review. ?format=tasks.csv
+  // gives just the tasks as a spreadsheet; the default is the full JSON.
+  app.get<{ Querystring: { format?: string } }>("/api/export", { preHandler: requireAdmin }, async (request, reply) => {
+    const data = await buildExport(db, request.user!.organizationId);
+    const day = data.exportedAt.slice(0, 10);
+    if (request.query.format === "tasks.csv") {
+      reply.header("Content-Type", "text/csv; charset=utf-8").header("Content-Disposition", `attachment; filename="pulse-tasks-${day}.csv"`);
+      // The byte-order mark makes Excel read the file as UTF-8.
+      return reply.send("\uFEFF" + tasksCsv(data.tasks));
+    }
+    reply.header("Content-Disposition", `attachment; filename="pulse-export-${day}.json"`);
+    return reply.send(data);
   });
 
   // Admin-only: a link shows the whole org (every visibility level) to

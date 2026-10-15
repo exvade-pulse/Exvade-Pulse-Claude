@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database, DbOrTx } from "../db/client.js";
 import {
   auditLog,
@@ -85,6 +85,16 @@ async function liveObjective(tx: DbOrTx, organizationId: string, id: unknown) {
   return row;
 }
 
+// One milestone or risk per name per outcome: a second "create" with the
+// same name (two pastes approved, a double-click) is refused, not added.
+async function assertNewName(tx: DbOrTx, table: typeof milestones | typeof risks, objectiveId: string, title: string, what: string) {
+  const [same] = await tx
+    .select({ id: table.id })
+    .from(table)
+    .where(and(eq(table.objectiveId, objectiveId), sql`lower(trim(${table.title})) = lower(trim(${title}))`));
+  if (same) throw new OverviewError(`This outcome already has a ${what} called "${title}". Edit that one instead.`);
+}
+
 async function audit(tx: DbOrTx, a: Actor, action: string, entityType: string, entityId: string, details: unknown) {
   await tx.insert(auditLog).values({ organizationId: a.organizationId, actorId: a.actorId, action, entityType, entityId, details });
 }
@@ -124,6 +134,7 @@ export async function createMilestone(db: DbOrTx, a: Actor, body: Record<string,
   };
   return db.transaction(async (tx) => {
     const objective = await liveObjective(tx, a.organizationId, body.objectiveId);
+    await assertNewName(tx, milestones, objective.id, values.title, "milestone");
     const [row] = await tx
       .insert(milestones)
       .values({ ...defined(values), title: values.title, organizationId: a.organizationId, objectiveId: objective.id })
@@ -230,6 +241,7 @@ export async function createRisk(db: DbOrTx, a: Actor, body: Record<string, unkn
   const fields = riskFields(body);
   return db.transaction(async (tx) => {
     const objective = await liveObjective(tx, a.organizationId, body.objectiveId);
+    await assertNewName(tx, risks, objective.id, title, "risk");
     const milestoneId = await milestoneOf(tx, a.organizationId, objective.id, body.milestoneId);
     const values = defined({ ...fields, milestoneId });
     const [row] = await tx.insert(risks).values({ ...values, title, organizationId: a.organizationId, objectiveId: objective.id }).returning();

@@ -49,6 +49,7 @@ const GROUPS: Array<{ label: string; items: Item[] }> = [
       { href: "/context", label: "Context" },
       { href: "/users", label: "Users", adminOnly: true },
       { href: "/integrations", label: "Integrations", adminOnly: true },
+      { href: "/export", label: "Export", adminOnly: true },
       { href: "/guide", label: "Guide" },
     ],
   },

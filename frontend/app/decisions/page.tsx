@@ -54,6 +54,8 @@ function formatUpdated(iso: string): string {
 export default function DecisionsPage() {
   const [user, setUser] = useState<SessionUser | null | "loading">("loading");
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  // Distinguishes "still loading" from "there are none".
+  const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -86,7 +88,10 @@ export default function DecisionsPage() {
   useEffect(() => {
     if (user && user !== "loading") {
       fetchOpenDecisions()
-        .then(setDecisions)
+        .then((list) => {
+          setDecisions(list);
+          setLoaded(true);
+        })
         .catch((err) => setLoadError(err.message));
     }
   }, [user]);
@@ -372,7 +377,8 @@ export default function DecisionsPage() {
         </form>
       )}
 
-      {decisions.length === 0 && !loadError && <p className="empty-state">No open or in-progress decisions.</p>}
+      {!loaded && !loadError && <p className="muted">Loading decisions&hellip;</p>}
+      {loaded && decisions.length === 0 && <p className="empty-state">No open or in-progress decisions.</p>}
 
       {decisions.map((d) => {
         const overdue = isOverdue(d.dueDate);
@@ -384,10 +390,24 @@ export default function DecisionsPage() {
             <div className="card-top">
               <div>
                 <p className="card-title">{d.title}</p>
-                <span className="muted">Decider: {d.decider}</span>
+                <dl className="decision-facts">
+                  <dt>Recommendation</dt>
+                  <dd>{d.recommendation ?? <span className="not-set">not set</span>}</dd>
+                  <dt>Decider</dt>
+                  <dd>{d.decider}</dd>
+                  <dt>If delayed</dt>
+                  <dd>{d.impactOfDelay ?? <span className="not-set">not set</span>}</dd>
+                  <dt>Decide by</dt>
+                  <dd>{d.dueDate ? formatDueDate(d.dueDate) : <span className="not-set">not set</span>}</dd>
+                  {d.outcomeTitle && (
+                    <>
+                      <dt>Outcome</dt>
+                      <dd>{d.outcomeTitle}</dd>
+                    </>
+                  )}
+                </dl>
                 <span className="updated-line" title={new Date(d.updatedAt).toLocaleString()}>
-                  {" "}
-                  &middot; Updated {formatUpdated(d.updatedAt)}
+                  Updated {formatUpdated(d.updatedAt)}
                 </span>
               </div>
               <div className="card-badges">
@@ -397,16 +417,16 @@ export default function DecisionsPage() {
                   onChange={(next) => handleVisibilityChange(d.id, next)}
                 />
                 {STATUS_CHIP[d.status] && <span className="chip">{STATUS_CHIP[d.status]}</span>}
-                {d.dueDate && isUndecided(d) && overdue ? (
+                {d.dueDate && isUndecided(d) && overdue && (
                   <span className="chip chip-attention" title={`Was due ${formatDueDate(d.dueDate)}`}>
                     Deadline passed
                   </span>
-                ) : (
-                  d.dueDate && <span className="muted">Due {formatDueDate(d.dueDate)}</span>
                 )}
               </div>
             </div>
 
+            <details className="decision-background" open={focusId === d.id}>
+              <summary>Background, context and history</summary>
             {d.stakeholders.length > 0 && (
               <div className="chip-row">
                 {d.stakeholders.map((s) => (
@@ -443,6 +463,7 @@ export default function DecisionsPage() {
             {d.relatedTaskTitle && <p className="decision-meta">Related task: {d.relatedTaskTitle}</p>}
 
             {d.sourceId && <SourceToggle sourceId={d.sourceId} />}
+            </details>
 
             {isResolving ? (
               <div className="edit-form">

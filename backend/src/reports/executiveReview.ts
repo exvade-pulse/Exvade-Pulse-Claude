@@ -106,6 +106,8 @@ export interface ReviewDecision {
   questions: string[];
 }
 
+const WORKSTREAM_STATE_RANK: Record<"needs attention" | "waiting" | "on track", number> = { "needs attention": 0, waiting: 1, "on track": 2 };
+
 // One workstream (project) rolled up to a single line, so the review shows
 // "Bench testing protocol — needs attention" rather than every task at the
 // same level. Its tasks stay available behind an expander.
@@ -113,6 +115,8 @@ export interface ReviewWorkstream {
   project: string;
   objective: string;
   objectivePriority: string;
+  // The outcome's position in the leadership-set order (null = not set).
+  objectiveOrder: number | null;
   state: "needs attention" | "waiting" | "on track";
   counts: { blocked: number; needsAttention: number; waiting: number; active: number };
   topScore: number;
@@ -197,6 +201,7 @@ export interface ReviewContradiction {
 export interface ReviewInventoryProject {
   objective: string;
   objectivePriority: string;
+  objectiveOrder: number | null;
   initiative: string;
   project: string;
   tasks: ReviewTask[];
@@ -455,6 +460,7 @@ export async function buildExecutiveReviewData(
           inventory.push({
             objective: objective.title,
             objectivePriority: objective.priority,
+            objectiveOrder: objective.displayOrder ?? null,
             initiative: initiative.title,
             project: project.title,
             tasks: projectTasks.sort((a, b) => b.attentionScore - a.attentionScore || a.title.localeCompare(b.title)),
@@ -722,6 +728,7 @@ export async function buildExecutiveReviewData(
         project: group.project,
         objective: group.objective,
         objectivePriority: group.objectivePriority,
+        objectiveOrder: group.objectiveOrder,
         state,
         counts,
         topScore: Math.max(0, ...live.map((t) => t.attentionScore)),
@@ -730,7 +737,15 @@ export async function buildExecutiveReviewData(
       };
     })
     .filter((w) => w.tasks.length > 0)
-    .sort((a, b) => b.topScore - a.topScore || a.project.localeCompare(b.project));
+    // The leadership-set outcome order, then how stuck the work is, then
+    // name. Never by how many tasks or messages a workstream has: busy is
+    // not the same as important.
+    .sort(
+      (a, b) =>
+        (a.objectiveOrder ?? Number.MAX_SAFE_INTEGER) - (b.objectiveOrder ?? Number.MAX_SAFE_INTEGER) ||
+        WORKSTREAM_STATE_RANK[a.state] - WORKSTREAM_STATE_RANK[b.state] ||
+        a.project.localeCompare(b.project),
+    );
 
   // "What should I focus on next?" -- the most consequential items from
   // every section, ranked. Past-deadline decisions and conflicts first: the

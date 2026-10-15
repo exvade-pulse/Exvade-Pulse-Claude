@@ -339,6 +339,11 @@ export type DecisionStatus = "open" | "pending_info" | "decided" | "action_in_pr
 export interface Decision {
   id: string;
   title: string;
+  // Executive Overview fields (set on the outcome page or by paste).
+  recommendation?: string | null;
+  impactOfDelay?: string | null;
+  objectiveId?: string | null;
+  outcomeTitle?: string | null;
   whyItMatters: string | null;
   relevantContext: string | null;
   suggestedNextStep: string | null;

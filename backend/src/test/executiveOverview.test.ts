@@ -116,7 +116,7 @@ describe("computeOverview", () => {
 
     const all = computeOverview(input, NOW);
     expect(all.outcomes[0]).toMatchObject({ assessmentMayBeOutdated: true });
-    expect(all.outcomes[0].signals[0]).toContain("past its date");
+    expect(all.outcomes[0].signals[0]).toContain("passed its date with the outcome unverified");
     expect(all.outcomes[1].nextMilestone).toMatchObject({ id: "m-soon", daysAway: 10, confidence: "committed" });
     expect(all.changes).toEqual(
       expect.arrayContaining([

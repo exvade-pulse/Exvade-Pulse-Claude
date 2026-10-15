@@ -62,9 +62,9 @@ function confidenceTier(confidence: number): "high" | "medium" | "low" {
 function ConfidenceBadge({ confidence }: { confidence: number }) {
   const tier = confidenceTier(confidence);
   return (
-    <div className={`confidence-badge confidence-${tier}`} title="How sure the model is about this suggestion">
+    <div className={`confidence-badge confidence-${tier}`} title="How sure the AI is that it read the source correctly. This is not project progress or a measure of the work itself.">
       <span className="confidence-value">{Math.round(confidence * 100)}%</span>
-      <span className="confidence-caption">confidence</span>
+      <span className="confidence-caption">extraction confidence</span>
     </div>
   );
 }

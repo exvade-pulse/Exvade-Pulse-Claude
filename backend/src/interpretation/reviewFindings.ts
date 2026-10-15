@@ -25,6 +25,7 @@ import {
 import { ALLOWED_FIELDS, REQUIRED_CREATE_FIELDS, type NewParent, type SuggestionTargetType } from "../suggestions/apply.js";
 import type { QuestionProposal } from "../questions/manage.js";
 import { getClaudeClient, type ClaudeClient } from "./claudeClient.js";
+import { normalizeTitle } from "../reconcile/ledger.js";
 
 // "Paste review findings": a long reviewer document (e.g. a ChatGPT audit)
 // turned into individual proposals in Review. Only specific data
@@ -78,6 +79,27 @@ interface IndexRecord {
   // proposed values that are already what's recorded.
   current?: Record<string, unknown>;
 }
+
+// Compares a proposed value with a stored one: dates by calendar day,
+// text ignoring surrounding spaces, everything else as text.
+function sameValue(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? (/^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : v.trim()) : String(v));
+  return norm(a) === norm(b);
+}
+
+// Drops proposed values that are already what's recorded.
+function onlyChanges(fields: Record<string, unknown>, current: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).filter(([k, v]) => k === "newParent" || !(k in current) || !sameValue(v, current[k])));
+}
+
+// Where a new record of each type sits, for finding one that already exists.
+const CREATE_PARENT_FIELD: Partial<Record<RecordType, string>> = {
+  task: "projectId",
+  project: "initiativeId",
+  initiative: "objectiveId",
+  milestone: "objectiveId",
+  risk: "objectiveId",
+};
 
 function currentValues(row: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v instanceof Date ? v.toISOString().slice(0, 10) : v]));
@@ -551,8 +573,7 @@ export async function proposeFromFindings(
       // A value that's already recorded isn't a change (e.g. the template
       // pasted back with only some lines edited).
       if (fields && target.current) {
-        const norm = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? (/^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : v.trim()) : String(v));
-        for (const [k, v] of Object.entries(fields)) if (k !== "newParent" && k in target.current && norm(v) === norm(target.current[k])) delete fields[k];
+        fields = onlyChanges(fields, target.current);
         // A new reason with the same rating is still a fresh assessment.
         if (target.type === "objective" && "healthRationale" in fields && !("health" in fields)) fields.health = target.current.health;
         if (Object.keys(fields).length === 0) continue;
@@ -584,6 +605,28 @@ export async function proposeFromFindings(
       if (!fields || missing.length > 0) {
         const title = typeof c.fields?.title === "string" ? `New ${c.targetType} "${c.fields.title}"` : undefined;
         unresolved.push({ text: title ?? c.reasoning, reason: `Missing or unrecognised ${missing.join(", ") || "fields"} (e.g. the place it should go doesn't exist).` });
+        continue;
+      }
+      // Something with this name already in the same place is updated, not
+      // created again -- e.g. the same paste applied twice.
+      const parentKey = CREATE_PARENT_FIELD[c.targetType];
+      const existing =
+        typeof fields.title === "string"
+          ? ctx.records.find(
+              (r) =>
+                r.type === c.targetType &&
+                normalizeTitle(r.title) === normalizeTitle(fields.title as string) &&
+                (!parentKey || r.parentId === fields[parentKey]),
+            )
+          : undefined;
+      if (existing) {
+        if (updated.has(existing.id)) continue;
+        const { title: _title, ...rest } = fields;
+        const changes = existing.current ? onlyChanges(rest, existing.current) : rest;
+        if (parentKey) delete changes[parentKey];
+        if (Object.keys(changes).length === 0) continue;
+        updated.add(existing.id);
+        proposals.push({ kind: "update", targetType: existing.type, targetId: existing.id, fields: changes, ...meta });
         continue;
       }
       proposals.push({ kind: "create", targetType: c.targetType, fields, ...meta });

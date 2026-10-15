@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, count, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, count, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { requireAdmin, requireAuth } from "../auth/middleware.js";
 import { db } from "../db/client.js";
 import {
@@ -45,11 +45,13 @@ export async function loadCompanyMapTree(organizationId: string, role: UserRole)
         status: objectives.status,
         priority: objectives.priority,
         owner: objectives.owner,
+        displayOrder: objectives.displayOrder,
         updatedAt: objectives.updatedAt,
       })
       .from(objectives)
       .where(and(eq(objectives.organizationId, organizationId), ne(objectives.status, "superseded")))
-      .orderBy(objectives.title),
+      // The leadership-set outcome order first (unordered ones after), then by name.
+      .orderBy(sql`${objectives.displayOrder} asc nulls last`, objectives.title),
     db
       .select({
         id: initiatives.id,

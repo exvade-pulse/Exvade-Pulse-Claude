@@ -94,6 +94,45 @@ describe("Pasting Executive Overview updates into Review", () => {
     expect(d).toMatchObject({ objectiveId: f.objective.id, recommendation: "Duke", impactOfDelay: "Slips a quarter" });
   });
 
+  it("pasting the same new milestone, risk or task twice never creates a second one", async () => {
+    const f = await createFixtureOrg(db, { domain: "paste-twice.test" });
+    const changes = [
+      { action: "create", targetType: "milestone", fields: { objectiveId: f.objective.id, title: "Needle size chosen", forecastDate: "2026-12-01", confidence: "forecast" }, reasoning: "new", confidence: 0.9 },
+      { action: "create", targetType: "risk", fields: { objectiveId: f.objective.id, title: "Single supplier", impact: "Delays verification" }, reasoning: "new", confidence: 0.9 },
+      { action: "create", targetType: "task", fields: { projectId: f.project.id, title: "Confirm Norfolk 18G result" }, reasoning: "new", confidence: 0.9 },
+    ];
+    const first = await runFindings(f, "First paste.", changes);
+    expect(first.proposals).toBe(3);
+    // Approving two identical pending cards: the second is refused, not added.
+    await runFindings(f, "Same paste again before approving.", changes);
+    const pending = await db.select().from(suggestions).where(eq(suggestions.organizationId, f.org.id));
+    expect(pending).toHaveLength(6);
+    const results = [];
+    for (const r of pending) {
+      results.push(
+        await approveSuggestion(db, { organizationId: f.org.id, suggestionId: r.id, reviewerId: f.user.id, reviewerRole: "admin" }).then(
+          () => "approved",
+          (err) => (err instanceof SuggestionApplyError ? "refused" : "crashed"),
+        ),
+      );
+    }
+    expect(results.filter((x) => x === "approved")).toHaveLength(3);
+    expect(results.filter((x) => x === "refused")).toHaveLength(3);
+
+    // Once they exist, the same paste proposes nothing new; a changed date becomes an update.
+    const again = await runFindings(f, "Third paste.", [
+      ...changes,
+      { action: "create", targetType: "milestone", fields: { objectiveId: f.objective.id, title: "needle size chosen ", forecastDate: "2027-01-15" }, reasoning: "moved", confidence: 0.9 },
+    ]);
+    expect(again.proposals).toBe(1);
+    // (The three refused cards stay pending for someone to reject.)
+    const update = (await db.select().from(suggestions).where(eq(suggestions.status, "pending"))).find((s) => s.targetId !== null)!;
+    expect(update).toMatchObject({ targetType: "milestone", proposedDiff: { forecastDate: "2027-01-15" } });
+    expect(update.targetId).not.toBeNull();
+    expect(await db.select().from(milestones).where(eq(milestones.objectiveId, f.objective.id))).toHaveLength(1);
+    expect(await db.select().from(risks).where(eq(risks.objectiveId, f.objective.id))).toHaveLength(1);
+  });
+
   it("only an admin's approval can move a committed baseline", async () => {
     const f = await createFixtureOrg(db, { domain: "paste-baseline.test" });
     const [m] = await db
