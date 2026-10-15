@@ -251,7 +251,9 @@ const KIND_LABEL: Record<Deadline["kind"], string> = { decision: "Decision", mil
 
 // The next few weeks at a glance, overdue first. A date's firmness is
 // always shown: a forecast is not a commitment.
-export function DeadlinesStrip({ overview }: { overview: ExecutiveOverview }) {
+export function DeadlinesStrip({ overview: full }: { overview: ExecutiveOverview }) {
+  // Tolerates a server that hasn't been updated yet (no deadlines sent).
+  const overview = { ...full, deadlines: full.deadlines ?? [], deadlineTotal: full.deadlineTotal ?? 0 };
   const outcomes = new Map(overview.outcomes.map((o) => [o.id, o.title]));
   return (
     <section className="xo-card" aria-labelledby="xo-deadlines">

@@ -187,7 +187,7 @@ export default function ExecutivePage() {
             Every open task under its outcome, in the order set on the Overview: blocked first, then yours, then waiting on someone, then
             the rest of the team&rsquo;s.
           </p>
-          <WorkByOutcome groups={dash.workByOutcome} />
+          <WorkByOutcome groups={dash.workByOutcome ?? []} />
 
           <div className="dash-columns">
             <section className="card dash-panel" aria-label="What changed">
